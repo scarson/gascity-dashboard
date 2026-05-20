@@ -1,0 +1,10 @@
+node_modules
+dist
+*.log
+.env
+.env.local
+.DS_Store
+
+# Local dev-tooling for the redesign (Playwright snap harness).
+scripts/node_modules
+

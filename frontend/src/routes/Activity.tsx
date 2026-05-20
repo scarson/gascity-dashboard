@@ -1,0 +1,243 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { DeployRecord, GitCommit, GitView } from 'gas-city-dashboard-shared';
+import { api } from '../api/client';
+import { Button } from '../components/Button';
+import { PageHeader } from '../components/PageHeader';
+import { StatusBadge, type StatusTone } from '../components/StatusBadge';
+import { Table, type TableColumn } from '../components/Table';
+
+const VIEW_OPTIONS: ReadonlyArray<{ value: GitView; label: string }> = [
+  { value: 'recent-main', label: 'Recent · main' },
+  { value: 'recent-all', label: 'Recent · all' },
+  { value: 'today', label: 'Last 24h' },
+  { value: 'this-week', label: 'Last 7d' },
+];
+
+export function ActivityPage() {
+  const [view, setView] = useState<GitView>('recent-main');
+  const [commits, setCommits] = useState<GitCommit[]>([]);
+  const [deploys, setDeploys] = useState<DeployRecord[]>([]);
+  const [deployFailedMarker, setDeployFailedMarker] = useState(false);
+  const [deploySource, setDeploySource] = useState<string | null>(null);
+  const [loadingCommits, setLoadingCommits] = useState(false);
+  const [loadingDeploys, setLoadingDeploys] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refreshCommits = useCallback(async () => {
+    setLoadingCommits(true);
+    try {
+      const data = await api.listCommits(view);
+      setCommits(data.items);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'commits failed');
+    } finally {
+      setLoadingCommits(false);
+    }
+  }, [view]);
+
+  const refreshDeploys = useCallback(async () => {
+    setLoadingDeploys(true);
+    try {
+      const data = await api.listBuilds();
+      setDeploys(data.items);
+      setDeployFailedMarker(data.failed_marker);
+      setDeploySource(data.source);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'builds failed');
+    } finally {
+      setLoadingDeploys(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshCommits();
+  }, [refreshCommits]);
+
+  useEffect(() => {
+    void refreshDeploys();
+  }, [refreshDeploys]);
+
+  const commitColumns = useMemo<ReadonlyArray<TableColumn<GitCommit>>>(() => [
+    {
+      key: 'sha',
+      label: 'SHA',
+      render: (r) => <span className="text-fg-muted tnum">{r.short_sha}</span>,
+      className: 'w-24',
+    },
+    {
+      key: 'subject',
+      label: 'Subject',
+      sortable: true,
+      sortValue: (r) => r.subject,
+      render: (r) => (
+        <div className="min-w-0">
+          <p className="text-fg truncate">{r.subject}</p>
+          {r.refs && (
+            <p className="text-label uppercase tracking-wider text-accent mt-1 truncate">
+              {r.refs}
+            </p>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'author',
+      label: 'Author',
+      sortable: true,
+      sortValue: (r) => r.author,
+      render: (r) => <span className="text-fg-muted">{r.author}</span>,
+      className: 'w-40',
+    },
+    {
+      key: 'date',
+      label: 'When',
+      sortable: true,
+      sortValue: (r) => r.date,
+      render: (r) => <span className="tnum text-fg-muted">{formatRelative(r.date)}</span>,
+      className: 'w-20',
+      align: 'right',
+    },
+  ], []);
+
+  const deployColumns = useMemo<ReadonlyArray<TableColumn<DeployRecord>>>(() => [
+    {
+      key: 'at',
+      label: 'When',
+      sortable: true,
+      sortValue: (r) => r.at,
+      render: (r) => <span className="tnum text-fg-muted">{formatRelative(r.at)}</span>,
+      className: 'w-24',
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (r) => <StatusBadge tone={deployTone(r.status)} label={r.status} />,
+      className: 'w-32',
+    },
+    {
+      key: 'detail',
+      label: 'Detail',
+      render: (r) => (
+        <pre className="text-body text-fg-muted whitespace-pre-wrap break-all">
+          {r.detail}
+        </pre>
+      ),
+    },
+  ], []);
+
+  const synopsis = useMemo(() => buildSynopsis(commits, deploys), [commits, deploys]);
+
+  return (
+    <section>
+      <PageHeader
+        title="Activity"
+        synopsis={synopsis}
+        meta={
+          error ? (
+            <span className="normal-case text-body text-accent" role="alert">
+              {error}
+            </span>
+          ) : undefined
+        }
+      />
+
+      <section className="mb-12">
+        <header className="flex items-baseline justify-between gap-4 mb-4 pb-2 border-b border-rule flex-wrap">
+          <div className="flex items-baseline gap-4 flex-wrap">
+            <h2 className="text-headline font-semibold text-fg">Commits</h2>
+            <div className="flex items-baseline gap-4">
+              {VIEW_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setView(opt.value)}
+                  className={`text-label uppercase tracking-wider transition-colors duration-150 ease-out-quart focus-mark rounded-sm ${
+                    view === opt.value
+                      ? 'text-fg font-medium'
+                      : 'text-fg-muted hover:text-fg'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Button size="sm" onClick={() => void refreshCommits()} disabled={loadingCommits}>
+            {loadingCommits ? 'Loading' : 'Refresh'}
+          </Button>
+        </header>
+        <Table
+          columns={commitColumns}
+          rows={commits}
+          rowKey={(r) => r.sha}
+          empty="No commits in this view."
+          initialSort={{ key: 'date', dir: 'desc' }}
+        />
+      </section>
+
+      <section>
+        <header className="flex items-baseline justify-between gap-4 mb-4 pb-2 border-b border-rule flex-wrap">
+          <div className="flex items-baseline gap-4 flex-wrap">
+            <h2 className="text-headline font-semibold text-fg">Dev-deploy</h2>
+            {deployFailedMarker && <StatusBadge tone="stuck" label="failed marker present" />}
+            {deploySource && (
+              <span className="text-label uppercase tracking-wider text-fg-faint truncate">
+                {deploySource}
+              </span>
+            )}
+          </div>
+          <Button size="sm" onClick={() => void refreshDeploys()} disabled={loadingDeploys}>
+            {loadingDeploys ? 'Loading' : 'Refresh'}
+          </Button>
+        </header>
+        <Table
+          columns={deployColumns}
+          rows={deploys}
+          rowKey={(r) => `${r.at}-${r.detail.slice(0, 24)}`}
+          empty="No deploy log entries."
+          initialSort={{ key: 'at', dir: 'desc' }}
+        />
+      </section>
+    </section>
+  );
+}
+
+function deployTone(status: string): StatusTone {
+  switch (status) {
+    case 'ok':
+      return 'ok';
+    case 'failed':
+      return 'stuck';
+    case 'in-progress':
+      return 'warn';
+    default:
+      return 'neutral';
+  }
+}
+
+function buildSynopsis(commits: ReadonlyArray<GitCommit>, deploys: ReadonlyArray<DeployRecord>): string {
+  const parts: string[] = [];
+  const latestCommit = commits[0];
+  if (latestCommit) {
+    parts.push(`${commits.length} commits in view, latest ${formatRelative(latestCommit.date)}`);
+  } else {
+    parts.push('No commits in view');
+  }
+  const latestDeploy = deploys[0];
+  if (latestDeploy) {
+    parts.push(`last deploy ${formatRelative(latestDeploy.at)} (${latestDeploy.status})`);
+  }
+  return parts.join('; ') + '.';
+}
+
+function formatRelative(iso: string): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return '·';
+  const diffSec = Math.max(0, Math.round((Date.now() - ms) / 1_000));
+  if (diffSec < 60) return `${diffSec}s`;
+  if (diffSec < 3600) return `${Math.round(diffSec / 60)}m`;
+  if (diffSec < 86_400) return `${Math.round(diffSec / 3600)}h`;
+  return `${Math.round(diffSec / 86_400)}d`;
+}

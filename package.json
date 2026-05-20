@@ -1,0 +1,32 @@
+{
+  "name": "gas-city-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Editorial-typographic ambient dashboard for a single Gas City operator.",
+  "workspaces": [
+    "shared",
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "build:shared": "npm --workspace shared run build",
+    "build:backend": "npm --workspace backend run build",
+    "build:frontend": "npm --workspace frontend run build",
+    "build": "npm run build:shared && npm run build:backend && npm run build:frontend",
+    "dev:backend": "npm --workspace backend run dev",
+    "dev:frontend": "npm --workspace frontend run dev",
+    "start": "node backend/dist/server.js",
+    "typecheck": "npm --workspace shared run typecheck && npm --workspace backend run typecheck && npm --workspace frontend run typecheck"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT",
+  "author": "Charlie Coutts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Wldc4rd/citadel.git"
+  },
+  "homepage": "https://github.com/Wldc4rd/citadel",
+  "bugs": "https://github.com/Wldc4rd/citadel/issues"
+}

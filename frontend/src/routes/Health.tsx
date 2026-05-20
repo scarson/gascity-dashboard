@@ -1,0 +1,272 @@
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import type { DoltNomsTrend, SystemHealth } from 'gas-city-dashboard-shared';
+import { api } from '../api/client';
+import { Button } from '../components/Button';
+import { PageHeader } from '../components/PageHeader';
+import { StatusBadge, type StatusTone } from '../components/StatusBadge';
+
+export function HealthPage() {
+  const [health, setHealth] = useState<SystemHealth | null>(null);
+  const [trend, setTrend] = useState<DoltNomsTrend | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [h, t] = await Promise.all([api.systemHealth(), api.doltTrend()]);
+      setHealth(h);
+      setTrend(t);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'health failed');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const tick = setInterval(() => {
+      if (!document.hidden) void refresh();
+    }, 30_000);
+    return () => clearInterval(tick);
+  }, [refresh]);
+
+  return (
+    <section>
+      <PageHeader
+        title="Health"
+        synopsis={health ? buildSynopsis(health) : 'Reading state from the supervisor.'}
+        meta={
+          <>
+            {error && (
+              <span className="normal-case text-body text-accent" role="alert">
+                {error}
+              </span>
+            )}
+            <Button size="sm" onClick={() => void refresh()} disabled={loading}>
+              {loading ? 'Refreshing' : 'Refresh'}
+            </Button>
+          </>
+        }
+      />
+
+      {health ? (
+        <div className="space-y-12">
+          <Section title="Supervisor" status={supervisorStatus(health)}>
+            {health.supervisor ? (
+              <KvList>
+                <Kv label="City" value={health.supervisor.city} />
+                <Kv label="Version" value={health.supervisor.version} />
+                <Kv label="Uptime" value={formatDuration(health.supervisor.uptime_sec)} />
+                <Kv label="Status" value={health.supervisor.status} />
+              </KvList>
+            ) : (
+              <p className="text-body text-accent">
+                Supervisor not reachable. The dashboard shell stays up; live data is stale.
+              </p>
+            )}
+          </Section>
+
+          <Section
+            title="Host"
+            status={hostStatus(health)}
+          >
+            <KvList>
+              <Kv label="CPUs" value={health.host.cpu_count.toString()} />
+              <Kv
+                label="Load (1m, 5m, 15m)"
+                value={`${health.host.load_avg_1.toFixed(2)}, ${health.host.load_avg_5.toFixed(2)}, ${health.host.load_avg_15.toFixed(2)}`}
+                tone={health.host.load_avg_1 > health.host.cpu_count ? 'warn' : undefined}
+              />
+              <Kv
+                label="Memory free"
+                value={`${formatBytes(health.host.free_mem_bytes)} of ${formatBytes(health.host.total_mem_bytes)}`}
+                tone={
+                  health.host.free_mem_bytes / health.host.total_mem_bytes < 0.1
+                    ? 'warn'
+                    : undefined
+                }
+              />
+              <Kv label="Host uptime" value={formatDuration(health.host.uptime_sec)} />
+            </KvList>
+          </Section>
+
+          <Section title="Admin process">
+            <KvList>
+              <Kv label="PID" value={health.admin.pid.toString()} />
+              <Kv label="Uptime" value={formatDuration(health.admin.uptime_sec)} />
+              <Kv label="RSS" value={formatBytes(health.admin.rss_bytes)} />
+              <Kv label="Heap used" value={formatBytes(health.admin.heap_used_bytes)} />
+              <Kv label="Node" value={health.admin.node_version} />
+            </KvList>
+          </Section>
+
+          <Section
+            title="Dolt-noms · 24 h"
+            meta={trend && trend.samples.length > 0 ? `${trend.samples.length} samples` : undefined}
+          >
+            {trend === null ? (
+              <p className="text-body text-fg-muted italic">Loading.</p>
+            ) : !trend.available ? (
+              <p className="text-body text-fg-muted italic">
+                Metric source not yet wired. The ring buffer is running; samples will appear once <code className="text-fg">sampleDoltNomsSize()</code> lands.
+              </p>
+            ) : trend.samples.length === 0 ? (
+              <p className="text-body text-fg-muted italic">
+                No samples yet. Backend just started; next sample in ten minutes or less.
+              </p>
+            ) : (
+              <Sparkline samples={trend.samples} />
+            )}
+          </Section>
+        </div>
+      ) : (
+        <p className="text-body text-fg-muted italic">Loading.</p>
+      )}
+    </section>
+  );
+}
+
+function Section({
+  title,
+  status,
+  meta,
+  children,
+}: {
+  title: string;
+  status?: { tone: StatusTone; label: string };
+  meta?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section>
+      <header className="flex items-baseline justify-between gap-4 mb-4 pb-2 border-b border-rule">
+        <h2 className="text-headline font-semibold text-fg">{title}</h2>
+        <div className="flex items-baseline gap-4">
+          {meta && (
+            <span className="text-label uppercase tracking-wider text-fg-muted">{meta}</span>
+          )}
+          {status && <StatusBadge tone={status.tone} label={status.label} />}
+        </div>
+      </header>
+      {children}
+    </section>
+  );
+}
+
+function KvList({ children }: { children: ReactNode }) {
+  // Two-column typeset list. Label left, value right, hairlines
+  // between rows. Tabular numerals for value alignment.
+  return (
+    <dl className="grid grid-cols-[max-content_1fr] gap-x-8 gap-y-3 max-w-prose">
+      {children}
+    </dl>
+  );
+}
+
+function Kv({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: 'warn' | 'stuck';
+}) {
+  const valueColor =
+    tone === 'warn' ? 'text-warn' : tone === 'stuck' ? 'text-accent' : 'text-fg';
+  return (
+    <>
+      <dt className="text-body text-fg-muted">{label}</dt>
+      <dd className={`text-body tnum font-medium ${valueColor}`}>{value}</dd>
+    </>
+  );
+}
+
+function Sparkline({ samples }: { samples: { ts: string; bytes: number }[] }) {
+  if (samples.length === 0) return null;
+  const max = Math.max(...samples.map((s) => s.bytes));
+  const min = Math.min(...samples.map((s) => s.bytes));
+  const range = max - min || 1;
+  const width = 600;
+  const height = 60;
+  const stepX = samples.length > 1 ? width / (samples.length - 1) : width;
+  const points = samples
+    .map((s, i) => {
+      const x = i * stepX;
+      const y = height - ((s.bytes - min) / range) * height;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  return (
+    <div className="space-y-3 max-w-prose">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        className="w-full h-16"
+        aria-label="24 hour dolt-noms size trend"
+      >
+        <polyline
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1"
+          className="text-accent"
+          points={points}
+        />
+      </svg>
+      <div className="flex items-baseline justify-between text-label uppercase tracking-wider text-fg-muted tnum">
+        <span>min {formatBytes(min)}</span>
+        <span>max {formatBytes(max)}</span>
+      </div>
+    </div>
+  );
+}
+
+function buildSynopsis(h: SystemHealth): string {
+  const parts: string[] = [];
+  if (h.supervisor) {
+    const verb = h.supervisor.status === 'ok' ? 'healthy' : h.supervisor.status;
+    parts.push(`Supervisor ${verb} on ${h.supervisor.city}, uptime ${formatDuration(h.supervisor.uptime_sec)}.`);
+  } else {
+    parts.push('Supervisor unreachable.');
+  }
+  const usedPct = Math.round(
+    100 * (1 - h.host.free_mem_bytes / h.host.total_mem_bytes),
+  );
+  parts.push(
+    `Memory at ${usedPct}%; ${h.host.cpu_count} CPUs averaging ${h.host.load_avg_1.toFixed(2)} load.`,
+  );
+  return parts.join(' ');
+}
+
+function supervisorStatus(h: SystemHealth): { tone: StatusTone; label: string } {
+  if (!h.supervisor) return { tone: 'stuck', label: 'offline' };
+  if (h.supervisor.status === 'ok') return { tone: 'ok', label: 'healthy' };
+  return { tone: 'warn', label: h.supervisor.status };
+}
+
+function hostStatus(h: SystemHealth): { tone: StatusTone; label: string } | undefined {
+  const memPct = h.host.free_mem_bytes / h.host.total_mem_bytes;
+  if (memPct < 0.05) return { tone: 'stuck', label: 'memory critical' };
+  if (memPct < 0.10) return { tone: 'warn', label: 'memory low' };
+  if (h.host.load_avg_1 > h.host.cpu_count * 1.5) return { tone: 'warn', label: 'load high' };
+  return undefined;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function formatDuration(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m`;
+  if (sec < 86_400) return `${Math.round(sec / 3600)}h`;
+  const days = Math.floor(sec / 86_400);
+  const hours = Math.round((sec % 86_400) / 3600);
+  return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+}
