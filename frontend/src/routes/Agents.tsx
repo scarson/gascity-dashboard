@@ -364,8 +364,10 @@ function SseIndicator({ state }: { state: 'connecting' | 'open' | 'closed' }) {
 
 // Single source of truth for state → tone mapping. Aligned with how
 // the gc supervisor emits session states. Unknown states default to
-// neutral so we don't lie about them.
-function stateTone(state: string): StatusTone {
+// neutral so we don't lie about them. 'detached' is explicit (not a
+// silent default) so reviewers see the intent — it's paused-alive,
+// same palette as idle/asleep but tracked distinctly in the synopsis.
+export function stateTone(state: string): StatusTone {
   switch (state) {
     case 'active':
     case 'running':
@@ -379,6 +381,7 @@ function stateTone(state: string): StatusTone {
     case 'errored':
     case 'stuck':
       return 'stuck';
+    case 'detached':
     case 'asleep':
     case 'idle':
     case 'creating':
@@ -387,21 +390,49 @@ function stateTone(state: string): StatusTone {
   }
 }
 
-function buildSynopsis(rows: ReadonlyArray<GcSession>): string {
+// Buckets a raw state into the synopsis category. Distinct from
+// stateTone because 'detached' and 'idle' share a tone (neutral) but
+// the header text breaks them out — surfaced in gascity-dashboard-x4k.
+type SynopsisBucket = 'active' | 'idle' | 'detached' | 'rate-limited' | 'stuck';
+
+function stateBucket(state: string): SynopsisBucket {
+  switch (state) {
+    case 'active':
+    case 'running':
+      return 'active';
+    case 'detached':
+      return 'detached';
+    case 'rate-limited':
+    case 'rate_limited':
+    case 'waiting':
+      return 'rate-limited';
+    case 'failed':
+    case 'closed':
+    case 'errored':
+    case 'stuck':
+      return 'stuck';
+    default:
+      return 'idle';
+  }
+}
+
+export function buildSynopsis(rows: ReadonlyArray<GcSession>): string {
   if (rows.length === 0) return 'No sessions running.';
-  const counts = new Map<StatusTone, number>();
+  const counts = new Map<SynopsisBucket, number>();
   for (const r of rows) {
-    const t = stateTone(r.state);
-    counts.set(t, (counts.get(t) ?? 0) + 1);
+    const b = stateBucket(r.state);
+    counts.set(b, (counts.get(b) ?? 0) + 1);
   }
   const parts: string[] = [];
-  const ok = counts.get('ok') ?? 0;
-  const warn = counts.get('warn') ?? 0;
+  const active = counts.get('active') ?? 0;
+  const idle = counts.get('idle') ?? 0;
+  const detached = counts.get('detached') ?? 0;
+  const rateLimited = counts.get('rate-limited') ?? 0;
   const stuck = counts.get('stuck') ?? 0;
-  const neutral = counts.get('neutral') ?? 0;
-  if (ok > 0) parts.push(`${ok} active`);
-  if (neutral > 0) parts.push(`${neutral} idle`);
-  if (warn > 0) parts.push(`${warn} rate-limited`);
+  if (active > 0) parts.push(`${active} active`);
+  if (idle > 0) parts.push(`${idle} idle`);
+  if (detached > 0) parts.push(`${detached} detached`);
+  if (rateLimited > 0) parts.push(`${rateLimited} rate-limited`);
   if (stuck > 0) parts.push(`${stuck} stuck`);
   return parts.join(', ') + '.';
 }

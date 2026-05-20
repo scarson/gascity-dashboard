@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GcSession } from 'gas-city-dashboard-shared';
-import { SESSION_CHIPS } from './Agents';
+import { SESSION_CHIPS, buildSynopsis, stateTone } from './Agents';
 
 // Every named value in GcSessionState (shared/src/index.ts) must match
 // at least one chip. Otherwise, sessions in that state vanish silently
@@ -51,5 +51,38 @@ describe('SESSION_CHIPS', () => {
       (chip) => chip.id,
     );
     expect(matchingIds).toEqual(['detached']);
+  });
+});
+
+describe('stateTone', () => {
+  it('classifies detached sessions explicitly (not via default fallthrough)', () => {
+    // Detached is paused-alive — same neutral palette as idle/asleep, but the
+    // case is explicit so a reviewer sees the intent rather than a silent
+    // default. See gascity-dashboard-x4k for context.
+    expect(stateTone('detached')).toBe('neutral');
+  });
+});
+
+describe('buildSynopsis', () => {
+  it('reports detached sessions as a distinct count, not bucketed under idle', () => {
+    const rows: GcSession[] = [
+      mkSession('active'),
+      mkSession('asleep'),
+      mkSession('asleep'),
+      mkSession('detached'),
+    ];
+    const synopsis = buildSynopsis(rows);
+    expect(synopsis).toContain('1 active');
+    expect(synopsis).toContain('2 idle');
+    expect(synopsis).toContain('1 detached');
+  });
+
+  it('omits detached from the synopsis when there are no detached sessions', () => {
+    const rows: GcSession[] = [mkSession('active'), mkSession('asleep')];
+    expect(buildSynopsis(rows)).not.toContain('detached');
+  });
+
+  it('returns the empty-state sentence when no rows', () => {
+    expect(buildSynopsis([])).toBe('No sessions running.');
   });
 });
