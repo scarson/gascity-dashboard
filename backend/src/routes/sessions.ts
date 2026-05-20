@@ -4,7 +4,11 @@ import { GcClient } from '../gc-client.js';
 import { sanitiseTerminalOutput } from '../exec.js';
 import { recordAudit } from '../audit.js';
 
-const SESSION_ID_RE = /^(td|th)-[a-z0-9]{3,12}$/;
+// gc supervisor session IDs are gc-<digits> (gc-229461 etc.). The
+// td-/th- prefixes are legacy session shapes kept for backward
+// compatibility. This anchored, bounded-length regex remains the SSRF
+// gate before any upstream call (security_researcher td-wisp-eb0pn).
+const SESSION_ID_RE = /^(gc|td|th)-[a-z0-9]{1,16}$/;
 const PER_TURN_CAP = 16 * 1024;
 const TOTAL_CAP = 256 * 1024;
 
