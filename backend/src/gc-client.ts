@@ -145,7 +145,12 @@ export class GcClient {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) {
-      throw new Error(`gc supervisor returned ${res.status} for ${url}`);
+      // gascity-dashboard-ais: route handlers forward this message verbatim
+      // into the 502 details.message field, so the message must not include
+      // the supervisor URL (port + city name = topology leak to the browser).
+      // The status code is enough — the route already labels the failure with
+      // its own error string and kind:'upstream'.
+      throw new Error(`gc supervisor returned ${res.status}`);
     }
     return (await res.json()) as T;
   }
