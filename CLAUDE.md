@@ -97,49 +97,35 @@ docs/{ARCHITECTURE, SECURITY, EXTENDING}.md
 - Adding a new route or backend endpoint? `docs/EXTENDING.md`.
 
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
-## Beads Issue Tracker
+## Issue tracker
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
-
-### Quick Reference
+This project uses **bd (beads)** with a standalone embedded-dolt store at `.beads/`. The store is isolated from the gc supervisor; beads here are **not** visible in the running dashboard's `/api/beads` view.
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
+bd list                              # show all open beads
+bd ready                             # show beads ready to claim (no open deps)
+bd show <id>                         # view detail
+bd update <id> --claim               # claim it
+bd close <id> --reason "what shipped" # close it
+bd create "title" --type bug --priority 2 --description "..."
 ```
 
-### Rules
+`bd prime` (run automatically on `SessionStart` via `.claude/settings.json`) loads full bd workflow context. `bd remember "fact"` records persistent knowledge in the store.
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+### Task tracking discipline
 
-## Session Completion
+- **`bd`** is for project-scoped work items: feature requests, bug reports, follow-up commitments, anything that should survive past this session.
+- **In-session TaskCreate** is fine for tracking the steps of a single task you're currently doing — the Claude Code task list is ephemeral and scoped to the conversation.
+- Avoid markdown TODO scattered through files; everything that's not "doing right now" goes through `bd`.
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+## Session end
 
-**MANDATORY WORKFLOW:**
+When wrapping up a session:
 
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   bd dolt push
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+1. **File follow-ups.** Anything you noticed but didn't finish goes into a bead via `bd create`.
+2. **Run quality gates** if code changed — `npm --workspace frontend run typecheck`, `npm --workspace backend run typecheck`, and a `node scripts/snap.mjs` pass for any view you touched.
+3. **Update bead status.** Close what's done, set `--status=in_progress` on what's claimed but ongoing.
+4. **Commit locally.** This is a standalone repo with no remote at present, so the bar is "commit, don't strand work in the working tree." `git status` should be clean before you stop.
+5. **Hand off.** If the next session is a fresh Claude, leave a `bd remember` note or a short paragraph in your reply describing where things stand.
 
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
-<!-- END BEADS INTEGRATION -->
+If a GitHub remote is added later, that's when the bd-default `git push` / `bd dolt push` workflow becomes relevant. Until then, local commits are the contract.
