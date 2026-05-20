@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { GcMailItem, GcSession } from 'gas-city-dashboard-shared';
 import { api, ApiClientError } from '../api/client';
+import { useCachedData } from '../hooks/useCachedData';
 import { Button } from '../components/Button';
 import { FilterChips } from '../components/FilterChips';
 import { GroupedTable } from '../components/GroupedTable';
@@ -39,9 +40,17 @@ type MailBox = 'inbox' | 'sent';
 export function MailPage() {
   const { viewingAs, setAlias, resetToOperator } = useViewingAs();
   const [box, setBox] = useState<MailBox>('inbox');
-  const [items, setItems] = useState<GcMailItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const { data: mailData, loading, error: mailError, refresh } = useCachedData(
+    `mail:${box}:${viewingAs.alias}`,
+    () => api.listMail(box, viewingAs.alias),
+  );
+  const items = mailData?.items ?? [];
   const [error, setError] = useState<string | null>(null);
+  // Surface fetch errors from the cached hook through the same state
+  // local handlers use, so the existing error banner keeps working.
+  useEffect(() => {
+    if (mailError) setError(mailError);
+  }, [mailError]);
   const [agentOptions, setAgentOptions] = useState<string[]>([OPERATOR_ALIAS]);
 
   const [threadFor, setThreadFor] = useState<GcMailItem | null>(null);
@@ -49,23 +58,6 @@ export function MailPage() {
   const [threadLoading, setThreadLoading] = useState(false);
 
   const [composing, setComposing] = useState(false);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.listMail(box, viewingAs.alias);
-      setItems(data.items);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'failed to load');
-    } finally {
-      setLoading(false);
-    }
-  }, [box, viewingAs.alias]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
 
   // Pull the agent list from /api/sessions once so the identity dropdown
   // shows real aliases rather than a free-form input.

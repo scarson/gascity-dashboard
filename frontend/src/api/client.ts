@@ -28,7 +28,7 @@ function readCsrfCookie(): string | null {
   return decodeURIComponent(match.slice(COOKIE_NAME.length + 1));
 }
 
-async function request<T>(
+async function performRequest<T>(
   method: 'GET' | 'POST',
   url: string,
   body?: object,
@@ -57,6 +57,34 @@ async function request<T>(
     throw new ApiClientError(res.status, payload?.error ?? res.statusText, payload?.kind);
   }
   return (await res.json()) as T;
+}
+
+// In dev, `tsx watch` restarts the backend on every source edit, which
+// rotates the in-process CSRF bootToken. The browser's cookie stays
+// stale until the next GET response refreshes it, so the first
+// mutation after a restart 403s with kind:'csrf'. Self-heal by doing a
+// one-shot GET /api/csrf (which sets a fresh cookie) and replaying the
+// original request exactly once. Only retries on the precise
+// csrf-token mismatch — no other error class triggers a replay.
+async function request<T>(
+  method: 'GET' | 'POST',
+  url: string,
+  body?: object,
+): Promise<T> {
+  try {
+    return await performRequest<T>(method, url, body);
+  } catch (err) {
+    if (
+      err instanceof ApiClientError &&
+      err.status === 403 &&
+      err.kind === 'csrf' &&
+      method !== 'GET'
+    ) {
+      await fetch('/api/csrf', { credentials: 'same-origin' });
+      return await performRequest<T>(method, url, body);
+    }
+    throw err;
+  }
 }
 
 export class ApiClientError extends Error {

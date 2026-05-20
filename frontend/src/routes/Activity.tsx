@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { DeployRecord, GitCommit, GitView } from 'gas-city-dashboard-shared';
 import { api } from '../api/client';
 import { Button } from '../components/Button';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge, type StatusTone } from '../components/StatusBadge';
 import { Table, type TableColumn } from '../components/Table';
+import { useCachedData } from '../hooks/useCachedData';
 
 const VIEW_OPTIONS: ReadonlyArray<{ value: GitView; label: string }> = [
   { value: 'recent-main', label: 'Recent · main' },
@@ -15,49 +16,27 @@ const VIEW_OPTIONS: ReadonlyArray<{ value: GitView; label: string }> = [
 
 export function ActivityPage() {
   const [view, setView] = useState<GitView>('recent-main');
-  const [commits, setCommits] = useState<GitCommit[]>([]);
-  const [deploys, setDeploys] = useState<DeployRecord[]>([]);
-  const [deployFailedMarker, setDeployFailedMarker] = useState(false);
-  const [deploySource, setDeploySource] = useState<string | null>(null);
-  const [loadingCommits, setLoadingCommits] = useState(false);
-  const [loadingDeploys, setLoadingDeploys] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const refreshCommits = useCallback(async () => {
-    setLoadingCommits(true);
-    try {
-      const data = await api.listCommits(view);
-      setCommits(data.items);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'commits failed');
-    } finally {
-      setLoadingCommits(false);
-    }
-  }, [view]);
+  const {
+    data: commitsData,
+    loading: loadingCommits,
+    error: commitsError,
+    refresh: refreshCommits,
+  } = useCachedData(`commits:${view}`, () => api.listCommits(view));
+  const {
+    data: deploysData,
+    loading: loadingDeploys,
+    error: deploysError,
+    refresh: refreshDeploys,
+  } = useCachedData('builds', () => api.listBuilds());
 
-  const refreshDeploys = useCallback(async () => {
-    setLoadingDeploys(true);
-    try {
-      const data = await api.listBuilds();
-      setDeploys(data.items);
-      setDeployFailedMarker(data.failed_marker);
-      setDeploySource(data.source);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'builds failed');
-    } finally {
-      setLoadingDeploys(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshCommits();
-  }, [refreshCommits]);
-
-  useEffect(() => {
-    void refreshDeploys();
-  }, [refreshDeploys]);
+  const commits = commitsData?.items ?? [];
+  const deploys = deploysData?.items ?? [];
+  const deployFailedMarker = deploysData?.failed_marker ?? false;
+  const deploySource = deploysData?.source ?? null;
+  // Surface whichever fetch most recently errored. Either-or is fine —
+  // the operator reads one banner at the top of the page.
+  const error = commitsError ?? deploysError ?? null;
 
   const commitColumns = useMemo<ReadonlyArray<TableColumn<GitCommit>>>(() => [
     {

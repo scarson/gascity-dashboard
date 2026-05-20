@@ -1,32 +1,34 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import type { DoltNomsTrend, SystemHealth } from 'gas-city-dashboard-shared';
 import { api } from '../api/client';
 import { Button } from '../components/Button';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge, type StatusTone } from '../components/StatusBadge';
+import { useCachedData } from '../hooks/useCachedData';
+
+// Health page fetches the two slow paths in parallel through the
+// stale-while-revalidate cache so re-entering this view (or polling
+// every 30s) doesn't blank the page first.
+async function fetchHealthBundle(): Promise<{
+  health: SystemHealth;
+  trend: DoltNomsTrend;
+}> {
+  const [health, trend] = await Promise.all([
+    api.systemHealth(),
+    api.doltTrend(),
+  ]);
+  return { health, trend };
+}
 
 export function HealthPage() {
-  const [health, setHealth] = useState<SystemHealth | null>(null);
-  const [trend, setTrend] = useState<DoltNomsTrend | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [h, t] = await Promise.all([api.systemHealth(), api.doltTrend()]);
-      setHealth(h);
-      setTrend(t);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'health failed');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const { data, loading, error, refresh } = useCachedData(
+    'health',
+    fetchHealthBundle,
+  );
+  const health = data?.health ?? null;
+  const trend = data?.trend ?? null;
 
   useEffect(() => {
-    void refresh();
     const tick = setInterval(() => {
       if (!document.hidden) void refresh();
     }, 30_000);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { GcBead } from 'gas-city-dashboard-shared';
 import { api, ApiClientError } from '../api/client';
 import { Button } from '../components/Button';
@@ -9,6 +9,7 @@ import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge, type StatusTone } from '../components/StatusBadge';
 import { type TableColumn } from '../components/Table';
+import { useCachedData } from '../hooks/useCachedData';
 import { useGcEventRefresh } from '../hooks/useGcEvents';
 import { useListFilters, type FilterChip } from '../hooks/useListFilters';
 import { beadProject } from '../hooks/projectOf';
@@ -29,37 +30,22 @@ const BEAD_SEARCH_FIELDS = (b: GcBead): ReadonlyArray<string | undefined> => [
 ];
 
 export function BeadsPage() {
-  const [rows, setRows] = useState<GcBead[]>([]);
-  const [totalShown, setTotalShown] = useState(0);
-  const [upstreamTotal, setUpstreamTotal] = useState<number | undefined>(undefined);
-  const [upstreamFetched, setUpstreamFetched] = useState<number | undefined>(undefined);
-  const [fetchLimit, setFetchLimit] = useState<number | undefined>(undefined);
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { data, loading, error, refresh } = useCachedData(
+    showAll ? 'beads:all' : 'beads:open',
+    () => api.listBeads(showAll),
+  );
+  const rows = data?.items ?? [];
+  const totalShown = data?.total ?? 0;
+  const upstreamTotal = data?.upstream_total;
+  const upstreamFetched = data?.upstream_fetched;
+  const fetchLimit = data?.fetch_limit;
 
   const [closing, setClosing] = useState<GcBead | null>(null);
   const [closeReason, setCloseReason] = useState('');
   const [actionInFlight, setActionInFlight] = useState<{ id: string; action: string } | null>(null);
   const [actionResult, setActionResult] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.listBeads(showAll);
-      setRows(data.items);
-      setTotalShown(data.total);
-      setUpstreamTotal(data.upstream_total);
-      setUpstreamFetched(data.upstream_fetched);
-      setFetchLimit(data.fetch_limit);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'failed to load');
-    } finally {
-      setLoading(false);
-    }
-  }, [showAll]);
 
   const filteredRows = useMemo(() => {
     if (labelFilter === null) return rows;
@@ -73,10 +59,6 @@ export function BeadsPage() {
     searchOf: BEAD_SEARCH_FIELDS,
     chips: BEAD_CHIPS,
   });
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
 
   useGcEventRefresh(['bead.'], () => void refresh());
 

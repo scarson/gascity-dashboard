@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AnsiUp } from 'ansi_up';
-import type { GcSession, TranscriptResult, TranscriptTurn } from 'gas-city-dashboard-shared';
+import { Link } from 'react-router-dom';
+import type { GcSession, TranscriptResult } from 'gas-city-dashboard-shared';
 import { effectiveContextPct } from 'gas-city-dashboard-shared';
 import { api, ApiClientError } from '../api/client';
 import { Button } from '../components/Button';
@@ -9,9 +9,11 @@ import { GroupedTable } from '../components/GroupedTable';
 import { ListSearchBar } from '../components/ListSearchBar';
 import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
+import { SessionPeekContent, formatPeekChars } from '../components/SessionPeek';
 import { SortToggle } from '../components/SortToggle';
 import { StatusBadge, type StatusTone } from '../components/StatusBadge';
 import { type TableColumn } from '../components/Table';
+import { useCachedData } from '../hooks/useCachedData';
 import { useGcEventRefresh } from '../hooks/useGcEvents';
 import { useListFilters, type FilterChip, type SortMode } from '../hooks/useListFilters';
 import {
@@ -19,6 +21,7 @@ import {
   isPerRigDispatcher,
   sessionProject,
 } from '../hooks/projectOf';
+import { sessionSlug } from '../hooks/sessionSlug';
 
 const PINNED_PROJECTS = [ORCHESTRATION_PROJECT];
 const NON_COLLAPSIBLE_PROJECTS = new Set([ORCHESTRATION_PROJECT]);
@@ -82,36 +85,18 @@ const SESSION_SEARCH_FIELDS = (s: GcSession): ReadonlyArray<string | undefined> 
   s.model,
 ];
 
-const PROMPT_INJECTION_NOTICE =
-  'Content is agent-generated and may contain misleading instructions.';
-
 export function AgentsPage() {
-  const [rows, setRows] = useState<GcSession[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { data, loading, error, refresh } = useCachedData(
+    'sessions',
+    () => api.listSessions(),
+  );
+  const rows = data?.items ?? [];
   const [now, setNow] = useState(() => Date.now());
 
   const [peekFor, setPeekFor] = useState<GcSession | null>(null);
   const [peekResult, setPeekResult] = useState<TranscriptResult | null>(null);
   const [peekLoading, setPeekLoading] = useState(false);
   const [peekError, setPeekError] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const { items } = await api.listSessions();
-      setRows(items);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'failed to load');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
 
   useEffect(() => {
     const tick = setInterval(() => {
@@ -172,15 +157,18 @@ export function AgentsPage() {
         // orchestration is handled separately by the Orchestration
         // pinned group).
         const dispatcher = isPerRigDispatcher(r);
+        const label = r.alias ?? r.title ?? r.id;
         return (
           <div className="min-w-0">
-            <div
-              className={`text-fg truncate ${
+            <Link
+              to={`/agents/${encodeURIComponent(sessionSlug(r))}`}
+              className={`block text-fg truncate hover:text-accent focus-mark ${
                 dispatcher ? 'font-normal italic' : 'font-medium'
               }`}
+              title={`Open drilldown for ${label}`}
             >
-              {r.alias ?? r.title ?? r.id}
-            </div>
+              {label}
+            </Link>
             <div className="text-label uppercase tracking-wider text-fg-faint mt-1 truncate">
               {r.template ?? r.provider ?? ''}
             </div>
@@ -342,7 +330,7 @@ export function AgentsPage() {
         title={peekFor ? `${peekFor.alias ?? peekFor.title ?? peekFor.id}` : 'Transcript'}
         caption={
           peekResult
-            ? `${peekResult.turns.length} turn(s), ${formatChars(peekResult.total_chars)}, captured ${formatRelative(peekResult.captured_at, Date.now())}`
+            ? `${peekResult.turns.length} turn(s), ${formatPeekChars(peekResult.total_chars)}, captured ${formatRelative(peekResult.captured_at, Date.now())}`
             : "One-shot snapshot from the supervisor's transcript API."
         }
         widthClass="max-w-5xl"
@@ -357,93 +345,13 @@ export function AgentsPage() {
           </Button>
         }
       >
-        <PeekContent
+        <SessionPeekContent
           loading={peekLoading}
           error={peekError}
           result={peekResult}
         />
       </Modal>
     </section>
-  );
-}
-
-function PeekContent({
-  loading,
-  error,
-  result,
-}: {
-  loading: boolean;
-  error: string | null;
-  result: TranscriptResult | null;
-}) {
-  if (loading) {
-    return <p className="text-fg-muted italic">Fetching transcript.</p>;
-  }
-  if (error) {
-    return (
-      <p className="text-accent" role="alert">
-        {error}
-      </p>
-    );
-  }
-  if (!result) return null;
-  if (result.turns.length === 0) {
-    return <p className="text-fg-muted italic">No turns in this session yet.</p>;
-  }
-
-  return (
-    <div className="space-y-6">
-      <p className="text-label uppercase tracking-wider text-warn border-l-0 pl-0">
-        ▲ {PROMPT_INJECTION_NOTICE}
-      </p>
-      <ol className="space-y-5">
-        {result.turns.map((turn, idx) => (
-          <TurnBlock key={idx} turn={turn} index={idx} />
-        ))}
-      </ol>
-      {result.truncated && (
-        <p className="text-label uppercase tracking-wider text-fg-faint italic">
-          Some turns truncated at the per-turn or total cap. Run <code className="text-fg-muted">gc session peek</code> in a terminal for the full transcript.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function TurnBlock({ turn, index }: { turn: TranscriptTurn; index: number }) {
-  const html = useMemo(() => {
-    const renderer = new AnsiUp();
-    renderer.use_classes = true;
-    return renderer.ansi_to_html(turn.text);
-  }, [turn.text]);
-
-  return (
-    <li>
-      <header className="flex items-baseline justify-between gap-3 pb-2 border-b border-rule mb-2">
-        <span className="text-label uppercase tracking-wider text-fg-faint tnum">
-          #{(index + 1).toString().padStart(2, '0')}
-        </span>
-        <RoleLabel role={turn.role} />
-      </header>
-      <pre
-        className="text-body whitespace-pre-wrap leading-relaxed overflow-x-auto text-fg"
-        // eslint-disable-next-line react/no-danger -- html is ansi_up output of server-sanitised text; see SECURITY.md
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-    </li>
-  );
-}
-
-function RoleLabel({ role }: { role: string }) {
-  // Role gets typesetting weight, not chrome. Different roles read
-  // differently because of the word + tone, not because of pill shape.
-  const tone = roleTone(role);
-  return (
-    <span
-      className={`text-label uppercase tracking-wider font-medium ${tone}`}
-    >
-      {role.replace(/_/g, ' ')}
-    </span>
   );
 }
 
@@ -479,22 +387,6 @@ function stateTone(state: string): StatusTone {
   }
 }
 
-function roleTone(role: string): string {
-  switch (role) {
-    case 'assistant':
-      return 'text-accent';
-    case 'user':
-      return 'text-fg';
-    case 'system':
-      return 'text-warn';
-    case 'tool_use':
-    case 'tool_result':
-      return 'text-fg-muted';
-    default:
-      return 'text-fg-faint';
-  }
-}
-
 function buildSynopsis(rows: ReadonlyArray<GcSession>): string {
   if (rows.length === 0) return 'No sessions running.';
   const counts = new Map<StatusTone, number>();
@@ -512,12 +404,6 @@ function buildSynopsis(rows: ReadonlyArray<GcSession>): string {
   if (warn > 0) parts.push(`${warn} rate-limited`);
   if (stuck > 0) parts.push(`${stuck} stuck`);
   return parts.join(', ') + '.';
-}
-
-function formatChars(n: number): string {
-  if (n < 1024) return `${n} chars`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatRelative(iso: string | undefined, now: number): string {
