@@ -211,6 +211,39 @@ describe('GcClient request coalescing', () => {
     assert.equal(fake.hits, 1);
   });
 
+  test('non-ok upstream error message does not leak supervisor URL or topology', async () => {
+    // gascity-dashboard-ais: routes forward fetchOnce's thrown
+    // err.message verbatim into details.message of 502 responses. The
+    // upstream URL exposes the supervisor port and city name, which is
+    // topology leakage to the browser. The status code alone is enough
+    // context; the route already discriminates with kind:'upstream'.
+    fake.setHandler((_req, res) => {
+      res.statusCode = 503;
+      res.end('upstream down');
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'secret-city',
+      defaultTimeoutMs: 5_000,
+    });
+    let err: unknown;
+    try {
+      await gc.listSessions();
+    } catch (e) {
+      err = e;
+    }
+    assert.ok(err instanceof Error, 'expected an Error rejection');
+    const msg = (err as Error).message;
+    // Positive: status is preserved for operator-facing debugging.
+    assert.match(msg, /503/);
+    assert.match(msg, /gc supervisor returned/);
+    // Negative: nothing identifying the supervisor topology leaks.
+    assert.doesNotMatch(msg, /http:\/\//, `message leaked URL scheme: ${msg}`);
+    assert.doesNotMatch(msg, /127\.0\.0\.1/, `message leaked loopback address: ${msg}`);
+    assert.doesNotMatch(msg, /\/city\//, `message leaked city path: ${msg}`);
+    assert.doesNotMatch(msg, /secret-city/, `message leaked city name: ${msg}`);
+  });
+
   test('releases coalesced slot after settle so the next call hits upstream', async () => {
     fake.setHandler((_req, res) => {
       res.statusCode = 200;
