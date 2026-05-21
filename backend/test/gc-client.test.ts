@@ -211,6 +211,32 @@ describe('GcClient request coalescing', () => {
     assert.equal(fake.hits, 1);
   });
 
+  test('releases coalesced slot after settle so the next call hits upstream', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ items: [] }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await gc.listSessions();
+    await gc.listSessions();
+    assert.equal(fake.hits, 2);
+  });
+});
+
+describe('GcClient error handling', () => {
+  let fake: Fake;
+  beforeEach(async () => {
+    fake = await startFake();
+  });
+  afterEach(async () => {
+    await fake.close();
+  });
+
   test('non-ok upstream error message does not leak supervisor URL or topology', async () => {
     // gascity-dashboard-ais: routes forward fetchOnce's thrown
     // err.message verbatim into details.message of 502 responses. The
@@ -242,21 +268,5 @@ describe('GcClient request coalescing', () => {
     assert.doesNotMatch(msg, /127\.0\.0\.1/, `message leaked loopback address: ${msg}`);
     assert.doesNotMatch(msg, /\/city\//, `message leaked city path: ${msg}`);
     assert.doesNotMatch(msg, /secret-city/, `message leaked city name: ${msg}`);
-  });
-
-  test('releases coalesced slot after settle so the next call hits upstream', async () => {
-    fake.setHandler((_req, res) => {
-      res.statusCode = 200;
-      res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: [] }));
-    });
-    const gc = new GcClient({
-      baseUrl: fake.baseUrl,
-      cityName: 'test',
-      defaultTimeoutMs: 5_000,
-    });
-    await gc.listSessions();
-    await gc.listSessions();
-    assert.equal(fake.hits, 2);
   });
 });

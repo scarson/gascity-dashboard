@@ -61,6 +61,16 @@ describe('stateTone', () => {
     // default. See gascity-dashboard-x4k for context.
     expect(stateTone('detached')).toBe('neutral');
   });
+
+  it('falls through to neutral for unknown states', () => {
+    // GcSessionState widens to `string` for forward-compat. Any state gc
+    // emits that the dashboard hasn't seen yet must land on neutral via the
+    // default branch — not crash, not lie with a tone we picked at random.
+    // Paired with the detached test above so a future change that
+    // accidentally drops the explicit detached case would still be caught
+    // (this test would not — that one would).
+    expect(stateTone('this-state-does-not-exist')).toBe('neutral');
+  });
 });
 
 describe('buildSynopsis', () => {

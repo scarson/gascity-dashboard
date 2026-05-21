@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { GcSession, TranscriptResult } from 'gas-city-dashboard-shared';
+import type { GcSession, GcSessionState, TranscriptResult } from 'gas-city-dashboard-shared';
 import { effectiveContextPct } from 'gas-city-dashboard-shared';
 import { api, ApiClientError } from '../api/client';
 import { Button } from '../components/Button';
@@ -368,7 +368,7 @@ function SseIndicator({ state }: { state: 'connecting' | 'open' | 'closed' }) {
 // neutral so we don't lie about them. 'detached' is explicit (not a
 // silent default) so reviewers see the intent — it's paused-alive,
 // same palette as idle/asleep but tracked distinctly in the synopsis.
-export function stateTone(state: string): StatusTone {
+export function stateTone(state: GcSessionState): StatusTone {
   switch (state) {
     case 'active':
     case 'running':
@@ -394,9 +394,9 @@ export function stateTone(state: string): StatusTone {
 // Buckets a raw state into the synopsis category. Distinct from
 // stateTone because 'detached' and 'idle' share a tone (neutral) but
 // the header text breaks them out — surfaced in gascity-dashboard-x4k.
-type SynopsisBucket = 'active' | 'idle' | 'detached' | 'rate-limited' | 'stuck';
+export type SynopsisBucket = 'active' | 'idle' | 'detached' | 'rate-limited' | 'stuck';
 
-function stateBucket(state: string): SynopsisBucket {
+function stateBucket(state: GcSessionState): SynopsisBucket {
   switch (state) {
     case 'active':
     case 'running':
