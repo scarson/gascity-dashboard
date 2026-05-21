@@ -52,6 +52,21 @@ describe('SESSION_CHIPS', () => {
     );
     expect(matchingIds).toEqual(['detached']);
   });
+
+  it('a detached session that is still running matches BOTH the running and detached chips', () => {
+    // gc can report a session as state='detached' (tmux disconnected) while
+    // its underlying process is still running. The running chip keys on
+    // s.running===true; the detached chip keys on s.state==='detached'. A
+    // detached-but-running session must surface under both filters so an
+    // operator scanning for 'what is alive right now' doesn't lose it just
+    // because the tmux attachment is gone. See gascity-dashboard-bi9.
+    const detachedAndRunning: GcSession = { ...mkSession('detached'), running: true };
+    const matchingIds = SESSION_CHIPS.filter((chip) => chip.match(detachedAndRunning)).map(
+      (chip) => chip.id,
+    );
+    expect(matchingIds).toContain('running');
+    expect(matchingIds).toContain('detached');
+  });
 });
 
 describe('stateTone', () => {
