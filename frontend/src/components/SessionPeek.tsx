@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { AnsiUp } from 'ansi_up';
 import type { TranscriptResult, TranscriptTurn } from 'gas-city-dashboard-shared';
-import { formatRelative } from '../hooks/time';
+import { formatClockTime, formatRelative } from '../hooks/time';
 
 // Render layer for a session's transcript snapshot. Used by:
 //   - Agents page peek modal (one-shot fetch)
@@ -115,15 +115,18 @@ function TurnBlock({
 
   return (
     <li>
-      <header className="flex items-baseline justify-between gap-3 pb-2 border-b border-rule mb-2">
+      <header className="flex items-start justify-between gap-3 pb-2 border-b border-rule mb-2">
         <span className="text-label uppercase tracking-wider text-fg-faint tnum">
           #{(index + 1).toString().padStart(2, '0')}
         </span>
-        <div className="flex items-baseline gap-3">
-          <span
-            className="text-label uppercase tracking-wider text-fg-faint tnum"
-            title={timestamp ?? undefined}
-          >
+        <div
+          className="flex flex-col items-end leading-tight"
+          title={timestamp ?? undefined}
+        >
+          <span className="text-body text-fg tnum">
+            {formatClockTime(timestamp)}
+          </span>
+          <span className="text-label uppercase tracking-wider text-fg-faint tnum">
             {formatRelative(timestamp, now)}
           </span>
           <RoleLabel role={turn.role} />

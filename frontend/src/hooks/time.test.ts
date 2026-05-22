@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatRelative } from './time';
+import { formatClockTime, formatRelative } from './time';
 
 const NOW = Date.parse('2026-05-20T12:00:00.000Z');
 
@@ -65,5 +65,67 @@ describe('formatRelative', () => {
 
   it('accepts a number (epoch ms)', () => {
     expect(formatRelative(NOW - 10_000, NOW)).toBe('10s');
+  });
+});
+
+describe('formatClockTime', () => {
+  it('returns the interpunct sentinel for undefined input', () => {
+    expect(formatClockTime(undefined)).toBe('·');
+  });
+
+  it('returns the interpunct sentinel for null input', () => {
+    expect(formatClockTime(null)).toBe('·');
+  });
+
+  it('returns the interpunct sentinel for an unparseable string', () => {
+    expect(formatClockTime('not-a-date')).toBe('·');
+    expect(formatClockTime('')).toBe('·');
+  });
+
+  it('returns a zero-padded HH:MM:SS string for a parseable ISO', () => {
+    // The render uses the host's local TZ. Pin the assertion by computing
+    // the expected output from the same Date so the test is portable.
+    const iso = '2026-05-20T12:34:56Z';
+    const d = new Date(iso);
+    const expected = [d.getHours(), d.getMinutes(), d.getSeconds()]
+      .map((n) => String(n).padStart(2, '0'))
+      .join(':');
+    expect(formatClockTime(iso)).toBe(expected);
+  });
+
+  it('preserves seconds precision (no rounding to minute)', () => {
+    const iso = '2026-05-20T01:02:03Z';
+    const d = new Date(iso);
+    const result = formatClockTime(iso);
+    // Last segment must be the seconds, zero-padded.
+    expect(result.endsWith(':' + String(d.getSeconds()).padStart(2, '0'))).toBe(
+      true,
+    );
+  });
+
+  it('accepts a Date instance', () => {
+    const d = new Date('2026-05-20T05:06:07Z');
+    const expected = [d.getHours(), d.getMinutes(), d.getSeconds()]
+      .map((n) => String(n).padStart(2, '0'))
+      .join(':');
+    expect(formatClockTime(d)).toBe(expected);
+  });
+
+  it('accepts an epoch ms number', () => {
+    const ms = Date.parse('2026-05-20T05:06:07Z');
+    const d = new Date(ms);
+    const expected = [d.getHours(), d.getMinutes(), d.getSeconds()]
+      .map((n) => String(n).padStart(2, '0'))
+      .join(':');
+    expect(formatClockTime(ms)).toBe(expected);
+  });
+
+  it('always emits a fixed HH:MM:SS shape regardless of host TZ', () => {
+    // Separate shape contract from the local-time pin: if the function
+    // ever started emitting `H:MM:SS`, `HH:MM`, or a locale-formatted
+    // string ('5:06:07 AM'), the parity tests above would still pass
+    // (assertions derive from the same Date). This shape guard catches
+    // any drift away from the documented contract.
+    expect(formatClockTime('2026-05-20T05:06:07Z')).toMatch(/^\d{2}:\d{2}:\d{2}$/);
   });
 });

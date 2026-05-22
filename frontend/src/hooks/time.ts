@@ -15,13 +15,25 @@
  *   'Nh'   — rounded diff in [1h, 24h)
  *   'Nd'   — rounded diff ≥ 24h
  */
+/**
+ * Resolve a string|number|Date into epoch milliseconds. Callers must
+ * pre-filter null/undefined/'' — this helper assumes a real value.
+ */
+function toEpochMs(ts: string | number | Date): number {
+  return ts instanceof Date
+    ? ts.getTime()
+    : typeof ts === 'number'
+    ? ts
+    : Date.parse(ts);
+}
+
 export function formatRelative(
   ts: string | number | Date | undefined | null,
   now: number,
 ): string {
   if (ts === undefined || ts === null || ts === '') return '·';
 
-  const ms = ts instanceof Date ? ts.getTime() : typeof ts === 'number' ? ts : Date.parse(ts);
+  const ms = toEpochMs(ts);
   if (!Number.isFinite(ms)) return '·';
 
   const diffSec = Math.max(0, Math.round((now - ms) / 1_000));
@@ -30,4 +42,28 @@ export function formatRelative(
   if (diffSec < 3_600) return `${Math.round(diffSec / 60)}m`;
   if (diffSec < 86_400) return `${Math.round(diffSec / 3_600)}h`;
   return `${Math.round(diffSec / 86_400)}d`;
+}
+
+/**
+ * Render a timestamp as a 24-hour `HH:MM:SS` local clock string. Returns
+ * the `·` interpunct sentinel for missing or unparseable input (matches
+ * the `formatRelative` sentinel convention; see DESIGN.md).
+ *
+ * Seconds precision is intentional: the SessionPeek modal sequences turns
+ * within a single session, where two consecutive assistant messages can
+ * land in the same minute and a minute-precision rendering would hide that.
+ */
+export function formatClockTime(
+  ts: string | number | Date | undefined | null,
+): string {
+  if (ts === undefined || ts === null || ts === '') return '·';
+
+  const ms = toEpochMs(ts);
+  if (!Number.isFinite(ms)) return '·';
+
+  const d = new Date(ms);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
 }
