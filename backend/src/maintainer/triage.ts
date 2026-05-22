@@ -9,6 +9,7 @@ import type {
 import { execGhIssueList, execGhPrList, ExecError } from '../exec.js';
 import { classifyItem } from './classifier.js';
 import { computeContributorStats } from './contributor.js';
+import { buildClusters, inheritIssueFiles } from './blast-radius.js';
 
 // Compose a MaintainerTriage envelope from raw `gh` output.
 //
@@ -47,6 +48,12 @@ interface GhIssue {
   url: string;
 }
 
+interface GhPrFile {
+  path?: string;
+  additions?: number;
+  deletions?: number;
+}
+
 interface GhPr {
   number: number;
   title: string;
@@ -61,6 +68,7 @@ interface GhPr {
   reviewDecision?: string;
   isDraft?: boolean;
   state?: string;
+  files?: GhPrFile[];
 }
 
 export async function fetchTriage(repo: string): Promise<MaintainerTriage> {
@@ -113,6 +121,12 @@ export async function fetchTriage(repo: string): Promise<MaintainerTriage> {
     const stat = contributorStats.get(item.author.login);
     if (stat !== undefined) item.author = stat;
   }
+
+  // Blast-radius enrichment (gascity-dashboard-gtr). PRs already carry
+  // blast_files from `gh pr list --json files`; issues with linked
+  // open PRs in this envelope inherit those files so the issue joins
+  // the same cluster as its fix-candidate.
+  inheritIssueFiles([...issueItems, ...prItems]);
 
   // Reverse map: every issue gets the PR numbers that fix it (derived
   // from each PR's already-populated linked_numbers, which mapPr filled
@@ -208,7 +222,7 @@ function mapPr(pr: GhPr): TriageItem {
     tier: null,
     triage_score: null,
     cluster_id: null,
-    blast_files: [],
+    blast_files: extractFiles(pr.files),
     lines_changed: adds + dels,
     weak_ties: [],
     linked_numbers: extractLinkedIssueNumbers(pr.body),
@@ -222,6 +236,13 @@ function extractLabels(labels: GhLabel[] | undefined): string[] {
   return labels
     .map((l) => l.name)
     .filter((n): n is string => typeof n === 'string' && n.length > 0);
+}
+
+function extractFiles(files: GhPrFile[] | undefined): string[] {
+  if (!files) return [];
+  return files
+    .map((f) => f.path)
+    .filter((p): p is string => typeof p === 'string' && p.length > 0);
 }
 
 function derivePrStatus(pr: GhPr): TriageItemStatus {
@@ -307,11 +328,16 @@ function composeEnvelope(repo: string, items: TriageItem[]): MaintainerTriage {
     list.sort((a, b) => (b.triage_score ?? 0) - (a.triage_score ?? 0));
   }
 
-  const tiers: TriageTierSection[] = [
-    { tier: 'regression_breaking', clusters: [], unclustered: byTier.get('regression_breaking') ?? [] },
-    { tier: 'regression', clusters: [], unclustered: byTier.get('regression') ?? [] },
-    { tier: 'stability', clusters: [], unclustered: byTier.get('stability') ?? [] },
-  ];
+  // Build file-overlap clusters within each tier (gascity-dashboard-gtr).
+  // Items sharing files form clusters; items with no co-touchers stay
+  // unclustered. Each item appears in at most one cluster.
+  const tiers: TriageTierSection[] = (
+    ['regression_breaking', 'regression', 'stability'] as const
+  ).map((tier) => {
+    const tierItems = byTier.get(tier) ?? [];
+    const { clusters, unclustered } = buildClusters(tierItems);
+    return { tier, clusters, unclustered };
+  });
 
   // computed_at marks the snapshot moment. Set once a classifier (or
   // any future enrichment pass) has run. Until enrichment beads gtr,

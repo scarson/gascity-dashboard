@@ -444,7 +444,7 @@ const GH_ISSUE_FIELDS = 'number,title,createdAt,updatedAt,author,labels,url';
 // 262-issue payload only fits the 2MB MAX_BYTES_LARGE cap because we
 // don't carry them.
 const GH_PR_FIELDS =
-  'number,title,createdAt,updatedAt,author,labels,url,body,additions,deletions,reviewDecision,isDraft,state';
+  'number,title,createdAt,updatedAt,author,labels,url,body,additions,deletions,reviewDecision,isDraft,state,files';
 
 /**
  * `gh issue list --repo <repo> --state open --json <fields> --limit <n>`
