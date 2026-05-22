@@ -11,6 +11,7 @@ import type {
   SystemHealth,
   DoltNomsTrend,
   KanbanResponse,
+  MaintainerTriage,
   ApiError,
 } from 'gas-city-dashboard-shared';
 
@@ -163,5 +164,11 @@ export const api = {
   },
   kanban(): Promise<KanbanResponse> {
     return request('GET', '/api/admin/kanban');
+  },
+  maintainerTriage(): Promise<MaintainerTriage> {
+    return request('GET', '/api/maintainer/triage');
+  },
+  maintainerRefresh(): Promise<MaintainerTriage> {
+    return request('POST', '/api/maintainer/refresh', {});
   },
 };

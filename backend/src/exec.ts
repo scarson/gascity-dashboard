@@ -13,6 +13,11 @@ import { spawn } from 'node:child_process';
 //   - Bead-id / agent-alias param schemas enforced.
 
 const MAX_BYTES = 100 * 1024;
+// Larger ceiling for calls whose payload size is server-controlled (e.g.
+// `gh ... --json <enumerated fields> --limit <N>`). Still capped — a
+// 2MB hard ceiling prevents a runaway from filling memory while leaving
+// generous headroom for repos with hundreds of long-labeled items.
+const MAX_BYTES_LARGE = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_CONCURRENT = 4;
 
@@ -28,11 +33,19 @@ function cleanEnv(): NodeJS.ProcessEnv {
   // install moves it.
   const path =
     process.env.ADMIN_PATH ?? `${home}/.local/bin:/usr/local/bin:/usr/bin:/bin`;
-  return {
+  const env: NodeJS.ProcessEnv = {
     PATH: path,
     HOME: home,
     LANG: 'C.UTF-8',
   };
+  // gh CLI's active auth method on this host is GITHUB_TOKEN (per `gh
+  // auth status`). Pass it through so execGhIssueList / execGhPrList
+  // can talk to api.github.com under the clean-env discipline. Still an
+  // allowlist — every other env var is dropped.
+  if (process.env.GITHUB_TOKEN !== undefined) {
+    env.GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+  }
+  return env;
 }
 
 let runningCount = 0;
@@ -73,7 +86,12 @@ export class ExecError extends Error {
   }
 }
 
-function runExec(cmd: string, args: string[], timeoutMs: number): Promise<ExecResult> {
+function runExec(
+  cmd: string,
+  args: string[],
+  timeoutMs: number,
+  maxBytes: number = MAX_BYTES,
+): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     let stdout = '';
@@ -90,8 +108,8 @@ function runExec(cmd: string, args: string[], timeoutMs: number): Promise<ExecRe
     });
 
     child.stdout?.on('data', (chunk: Buffer) => {
-      if (stdout.length + chunk.length > MAX_BYTES) {
-        const remaining = Math.max(0, MAX_BYTES - stdout.length);
+      if (stdout.length + chunk.length > maxBytes) {
+        const remaining = Math.max(0, maxBytes - stdout.length);
         stdout += chunk.toString('utf-8', 0, remaining);
         truncated = true;
         child.kill('SIGTERM');
@@ -395,6 +413,106 @@ export async function execBdListClosed(
         '--json',
       ],
       15_000,
+    );
+  } finally {
+    releaseSlot();
+  }
+}
+
+// ── Maintainer triage: gh CLI wrappers ───────────────────────────────
+//
+// gascity-dashboard-361. Pulls open issues + PRs from a GitHub repo
+// through the `gh` CLI. The repo is server-config-bound (not a request
+// parameter) and validated against a tight pattern; gh's --json
+// argument is hardcoded server-side so the operator can't expand the
+// field set from the browser. 30s timeout because gh hits api.github.com
+// across the public internet; cap stays at 100KB but a busy repo with
+// 100+ open items can crowd that — see notes on --limit.
+
+const GH_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+// `body` is deliberately omitted from the ingest json: a single repo with
+// 500 long-body items easily blows past runExec's 100KB MAX_BYTES cap,
+// and bead 361 doesn't render bodies anyway. Enrichment beads (gtr's
+// blast-radius LLM extraction, 98h's embeddings) fetch bodies on demand
+// for the subset of items they need to classify, via separate gh calls.
+const GH_ISSUE_FIELDS = 'number,title,createdAt,updatedAt,author,labels,url';
+// Note: `closingIssuesReferences` is a newer gh field not present in the
+// 2.45 host build. PR -> issue linkage gets derived in a follow-up bead
+// by parsing PR bodies for "Fixes #N" / "Closes #N" or via a separate
+// gh api graphql call. For 361, every PR ships with linked_numbers=[].
+const GH_PR_FIELDS =
+  'number,title,createdAt,updatedAt,author,labels,url,additions,deletions,reviewDecision,isDraft,state';
+
+/**
+ * `gh issue list --repo <repo> --state open --json <fields> --limit <n>`
+ * Returns the raw JSON array as stdout. Caller parses + maps.
+ */
+export async function execGhIssueList(
+  repo: string,
+  limit: number,
+): Promise<ExecResult> {
+  if (!GH_REPO_RE.test(repo)) {
+    throw new ExecError('invalid repo (expected owner/name)', 'validation');
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+    throw new ExecError('invalid limit (1..1000)', 'validation');
+  }
+  await acquireSlot();
+  try {
+    return await runExec(
+      'gh',
+      [
+        'issue',
+        'list',
+        '--repo',
+        repo,
+        '--state',
+        'open',
+        '--json',
+        GH_ISSUE_FIELDS,
+        '--limit',
+        String(limit),
+      ],
+      30_000,
+      MAX_BYTES_LARGE,
+    );
+  } finally {
+    releaseSlot();
+  }
+}
+
+/**
+ * `gh pr list --repo <repo> --state open --json <fields> --limit <n>`
+ */
+export async function execGhPrList(
+  repo: string,
+  limit: number,
+): Promise<ExecResult> {
+  if (!GH_REPO_RE.test(repo)) {
+    throw new ExecError('invalid repo (expected owner/name)', 'validation');
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+    throw new ExecError('invalid limit (1..1000)', 'validation');
+  }
+  await acquireSlot();
+  try {
+    return await runExec(
+      'gh',
+      [
+        'pr',
+        'list',
+        '--repo',
+        repo,
+        '--state',
+        'open',
+        '--json',
+        GH_PR_FIELDS,
+        '--limit',
+        String(limit),
+      ],
+      30_000,
+      MAX_BYTES_LARGE,
     );
   } finally {
     releaseSlot();

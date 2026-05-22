@@ -28,6 +28,21 @@ export interface AdminConfig {
   frontendDistPath: string;
   /** Kill-switch: set to '1' to refuse to start. */
   disabled: boolean;
+  /**
+   * Repo (owner/name) the maintainer triage view fetches issues + PRs from.
+   * Env: MAINTAINER_REPO. Default: gastownhall/gascity. v0 single-repo;
+   * a future bead can promote this to a CSV list when the maintainer
+   * tracks multiple forks.
+   */
+  maintainerRepo: string;
+  /**
+   * Absolute path to the maintainer enrichment cache file. Env:
+   * MAINTAINER_CACHE_PATH. Default: $HOME/.gascity-dashboard/maintainer-cache.json.
+   * The dashboard atomically writes the cache after each refresh; reads
+   * are best-effort (missing file → empty state, parse error → empty
+   * state with a warning logged).
+   */
+  maintainerCachePath: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdminConfig {
@@ -51,5 +66,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdminConfig {
       env.ADMIN_AUDIT_LOG_PATH ?? process.env.HOME ? `${process.env.HOME}/.gc/events.jsonl` : '.gc/events.jsonl',
     frontendDistPath: env.ADMIN_FRONTEND_DIST ?? '../frontend/dist',
     disabled: env.ADMIN_DASHBOARD_DISABLED === '1',
+    maintainerRepo: env.MAINTAINER_REPO ?? 'gastownhall/gascity',
+    maintainerCachePath:
+      env.MAINTAINER_CACHE_PATH ??
+      (env.HOME
+        ? `${env.HOME}/.gascity-dashboard/maintainer-cache.json`
+        : '.gascity-dashboard/maintainer-cache.json'),
   };
 }

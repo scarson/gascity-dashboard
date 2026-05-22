@@ -1,3 +1,4 @@
+import { useCallback, useState } from 'react';
 import type {
   ContributorStat,
   ContributorTier,
@@ -8,33 +9,85 @@ import type {
   TriageTier,
   TriageTierSection,
 } from 'gas-city-dashboard-shared';
+import { api } from '../api/client';
+import { setCached } from '../api/cache';
+import { Button } from '../components/Button';
 import { PageHeader } from '../components/PageHeader';
+import { useCachedData } from '../hooks/useCachedData';
 
 // Triage route — read-only maintainer surface for gastownhall/gascity.
-// This bead (gascity-dashboard-hq2) ships the editorial-typographic
-// shell only: tier headings, cluster sub-headings, row layout, the
-// One Mark accent, the contributor byline. Live data wiring lands in
-// gascity-dashboard-361 (gh ingest); enrichment in 7ts/gtr/alh/98h.
+// Shell + tokens from gascity-dashboard-hq2; live data from
+// gascity-dashboard-361 (gh ingest + JSON cache). Enrichment lands in
+// 7ts (priority tiers), gtr (file clusters + blast radius), alh
+// (contributor trust + ratios), and 98h (semantic weak ties).
+
+const CACHE_KEY = 'maintainer-triage';
 
 export function MaintainerPage() {
-  const data = MOCK_TRIAGE;
+  const { data, loading, error, refresh } = useCachedData<MaintainerTriage>(
+    CACHE_KEY,
+    () => api.maintainerTriage(),
+  );
+
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+
+  // POST /maintainer/refresh runs the full gh fetch on the host and
+  // rewrites the JSON cache. This is the dev-time path; the nightly
+  // worker (bead ar9) will replace the manual button as the primary
+  // cache writer.
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      const fresh = await api.maintainerRefresh();
+      setCached(CACHE_KEY, fresh);
+      await refresh();
+    } catch (err) {
+      setRefreshError(err instanceof Error ? err.message : 'refresh failed');
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refresh]);
+
   return (
     <section>
       <PageHeader
         title="Triage"
-        synopsis={buildSynopsis(data)}
+        synopsis={data ? buildSynopsis(data) : 'Reading triage from cache.'}
         meta={
-          <span className="text-fg-muted tnum">{formatDate(new Date())}</span>
+          <>
+            {(error || refreshError) && (
+              <span className="normal-case text-body text-accent" role="alert">
+                {refreshError ?? error}
+              </span>
+            )}
+            <Button size="sm" onClick={() => void handleRefresh()} disabled={refreshing}>
+              {refreshing ? 'Refreshing' : 'Refresh from gh'}
+            </Button>
+            <span className="text-fg-muted tnum normal-case tracking-normal">
+              {formatDate(new Date())}
+            </span>
+          </>
         }
       />
 
-      <div className="space-y-14">
-        {data.tiers.map((tier) => (
-          <TierSection key={tier.tier} section={tier} />
-        ))}
-      </div>
-
-      <Footer computedAt={data.computed_at} />
+      {data ? (
+        <>
+          <div className="space-y-14">
+            {data.tiers.map((tier) => (
+              <TierSection key={tier.tier} section={tier} />
+            ))}
+          </div>
+          <Footer computedAt={data.computed_at} />
+        </>
+      ) : loading ? (
+        <p className="text-body text-fg-muted italic">Loading.</p>
+      ) : (
+        <p className="text-body text-fg-faint italic">
+          No triage cache yet. Click <span className="text-fg">Refresh from gh</span> to fetch.
+        </p>
+      )}
     </section>
   );
 }
@@ -72,7 +125,7 @@ function TierSection({ section }: { section: TriageTierSection }) {
           {section.unclustered.length > 0 && (
             <div className="space-y-2">
               <div className="text-title font-medium text-fg-muted">
-                Unclustered
+                {section.clusters.length > 0 ? 'Unclustered' : 'Awaiting cluster enrichment'}
               </div>
               <div>
                 {section.unclustered.map((item) => (
@@ -221,7 +274,7 @@ function ContributorByline({ author }: { author: ContributorStat }) {
   return (
     <span title={ratesTitle} className="whitespace-nowrap">
       {author.login}{' '}
-      <span className={tierClass(author.tier)}>{tierLabel2(author.tier)}</span>
+      <span className={tierClass(author.tier)}>{tierWord(author.tier)}</span>
     </span>
   );
 }
@@ -253,7 +306,7 @@ function tierLabel(tier: TriageTier): string {
   return 'Stability';
 }
 
-function tierLabel2(tier: ContributorTier): string {
+function tierWord(tier: ContributorTier): string {
   if (tier === 'spam_risk') return 'spam risk';
   return tier;
 }
@@ -281,7 +334,10 @@ function buildSynopsis(data: MaintainerTriage): string {
   if (breakingCount > 0) {
     return `${breakingCount} item${breakingCount === 1 ? '' : 's'} in regression+breaking. ${data.totals.issues_open} issues, ${data.totals.prs_open} PRs open across ${data.repo}.`;
   }
-  return `Nothing breaking. ${data.totals.issues_open} issues, ${data.totals.prs_open} PRs open across ${data.repo}.`;
+  if (data.totals.issues_open + data.totals.prs_open === 0) {
+    return `Quiet across ${data.repo}.`;
+  }
+  return `${data.totals.issues_open} issues, ${data.totals.prs_open} PRs open across ${data.repo}. Awaiting tier classification.`;
 }
 
 function formatDate(d: Date): string {
@@ -312,196 +368,3 @@ function formatAge(iso: string): string {
   if (hours < 48) return `${hours}h`;
   return `${Math.round(hours / 24)}d`;
 }
-
-// ── scaffold mock data (gascity-dashboard-361 replaces with api.maintainerTriage()) ─
-
-const NOW = Date.now();
-function isoMinusHours(h: number): string {
-  return new Date(NOW - h * 3_600_000).toISOString();
-}
-
-function makeAuthor(
-  login: string,
-  tier: ContributorTier,
-  rates: { issuesAccepted: number; issuesOpened: number; prsMerged: number; prsOpened: number } | null,
-): ContributorStat {
-  return {
-    login,
-    tier,
-    issues_accepted: rates?.issuesAccepted ?? null,
-    issues_opened: rates?.issuesOpened ?? null,
-    prs_merged: rates?.prsMerged ?? null,
-    prs_opened: rates?.prsOpened ?? null,
-    computed_at: rates ? isoMinusHours(20) : null,
-  };
-}
-
-const ALICE = makeAuthor('alice', 'trusted', { issuesAccepted: 5, issuesOpened: 7, prsMerged: 12, prsOpened: 13 });
-const BOB = makeAuthor('bob', 'new', { issuesAccepted: 2, issuesOpened: 14, prsMerged: 0, prsOpened: 0 });
-const CAROL = makeAuthor('carol', 'core', { issuesAccepted: 12, issuesOpened: 12, prsMerged: 8, prsOpened: 8 });
-const DAVE = makeAuthor('dave', 'new', { issuesAccepted: 0, issuesOpened: 3, prsMerged: 0, prsOpened: 0 });
-const EVE = makeAuthor('eve', 'regular', { issuesAccepted: 1, issuesOpened: 1, prsMerged: 0, prsOpened: 0 });
-
-const MOCK_TRIAGE: MaintainerTriage = {
-  computed_at: isoMinusHours(19),
-  repo: 'gastownhall/gascity',
-  totals: { issues_open: 41, prs_open: 8 },
-  tiers: [
-    {
-      tier: 'regression_breaking',
-      clusters: [
-        {
-          cluster_id: 'exec-server',
-          files: ['internal/exec/exec.go', 'internal/server/server.go'],
-          lines_pending: 142,
-          items: [
-            {
-              kind: 'issue', number: 1247,
-              title: 'exec hangs after SIGHUP during reload',
-              status: 'open', author: ALICE,
-              created_at: isoMinusHours(3), updated_at: isoMinusHours(2),
-              tier: 'regression_breaking', cluster_id: 'exec-server',
-              blast_files: ['internal/exec/exec.go'],
-              lines_changed: null,
-              weak_ties: [{ label: 'signal-handling', count: 4 }],
-              linked_numbers: [523],
-              html_url: 'https://github.com/gastownhall/gascity/issues/1247',
-              is_marked: true,
-            },
-            {
-              kind: 'issue', number: 1198,
-              title: 'panic on reload during exec',
-              status: 'open', author: BOB,
-              created_at: isoMinusHours(170), updated_at: isoMinusHours(144),
-              tier: 'regression_breaking', cluster_id: 'exec-server',
-              blast_files: ['internal/exec/exec.go'],
-              lines_changed: null,
-              weak_ties: [],
-              linked_numbers: [],
-              html_url: 'https://github.com/gastownhall/gascity/issues/1198',
-              is_marked: false,
-            },
-            {
-              kind: 'pr', number: 523,
-              title: 'exec: drain channel before SIGHUP rebind',
-              status: 'needs_review', author: ALICE,
-              created_at: isoMinusHours(8), updated_at: isoMinusHours(2),
-              tier: 'regression_breaking', cluster_id: 'exec-server',
-              blast_files: ['internal/exec/exec.go', 'internal/server/server.go'],
-              lines_changed: 95,
-              weak_ties: [],
-              linked_numbers: [1247],
-              html_url: 'https://github.com/gastownhall/gascity/pull/523',
-              is_marked: false,
-            },
-            {
-              kind: 'issue', number: 1142,
-              title: 'batch slots dropped during scheduler reload',
-              status: 'open', author: ALICE,
-              created_at: isoMinusHours(36), updated_at: isoMinusHours(28),
-              tier: 'regression_breaking', cluster_id: 'exec-server',
-              blast_files: ['internal/server/server.go'],
-              lines_changed: null,
-              weak_ties: [{ label: 'scheduler', count: 3 }],
-              linked_numbers: [519],
-              html_url: 'https://github.com/gastownhall/gascity/issues/1142',
-              is_marked: false,
-            },
-            {
-              kind: 'pr', number: 519,
-              title: 'server: preserve in-flight batch slots across reload',
-              status: 'draft', author: ALICE,
-              created_at: isoMinusHours(24), updated_at: isoMinusHours(24),
-              tier: 'regression_breaking', cluster_id: 'exec-server',
-              blast_files: ['internal/server/server.go'],
-              lines_changed: 47,
-              weak_ties: [],
-              linked_numbers: [1142],
-              html_url: 'https://github.com/gastownhall/gascity/pull/519',
-              is_marked: false,
-            },
-          ],
-        },
-        {
-          cluster_id: 'scheduler',
-          files: ['internal/scheduler/scheduler.go'],
-          lines_pending: 47,
-          items: [
-            {
-              kind: 'issue', number: 1201,
-              title: 'weekend batch scheduler delay',
-              status: 'open', author: CAROL,
-              created_at: isoMinusHours(5), updated_at: isoMinusHours(4),
-              tier: 'regression_breaking', cluster_id: 'scheduler',
-              blast_files: ['internal/scheduler/scheduler.go'],
-              lines_changed: null,
-              weak_ties: [{ label: 'cron-windows', count: 2 }],
-              linked_numbers: [517],
-              html_url: 'https://github.com/gastownhall/gascity/issues/1201',
-              is_marked: false,
-            },
-            {
-              kind: 'pr', number: 517,
-              title: 'scheduler: respect operator timezone for weekend windows',
-              status: 'approved', author: CAROL,
-              created_at: isoMinusHours(18), updated_at: isoMinusHours(4),
-              tier: 'regression_breaking', cluster_id: 'scheduler',
-              blast_files: ['internal/scheduler/scheduler.go'],
-              lines_changed: 47,
-              weak_ties: [],
-              linked_numbers: [1201],
-              html_url: 'https://github.com/gastownhall/gascity/pull/517',
-              is_marked: false,
-            },
-          ],
-        },
-      ],
-      unclustered: [],
-    },
-    {
-      tier: 'regression',
-      clusters: [
-        {
-          cluster_id: 'config-parser',
-          files: ['internal/config/parser.ts'],
-          lines_pending: 0,
-          items: [
-            {
-              kind: 'issue', number: 1187,
-              title: 'env override precedence wrong',
-              status: 'open', author: DAVE,
-              created_at: isoMinusHours(52), updated_at: isoMinusHours(48),
-              tier: 'regression', cluster_id: 'config-parser',
-              blast_files: ['internal/config/parser.ts'],
-              lines_changed: null,
-              weak_ties: [{ label: 'docs/config', count: 3 }],
-              linked_numbers: [],
-              html_url: 'https://github.com/gastownhall/gascity/issues/1187',
-              is_marked: false,
-            },
-          ],
-        },
-      ],
-      unclustered: [
-        {
-          kind: 'issue', number: 1156,
-          title: 'docs typo in README',
-          status: 'open', author: EVE,
-          created_at: isoMinusHours(30), updated_at: isoMinusHours(28),
-          tier: 'regression', cluster_id: null,
-          blast_files: ['README.md'],
-          lines_changed: null,
-          weak_ties: [],
-          linked_numbers: [],
-          html_url: 'https://github.com/gastownhall/gascity/issues/1156',
-          is_marked: false,
-        },
-      ],
-    },
-    {
-      tier: 'stability',
-      clusters: [],
-      unclustered: [],
-    },
-  ],
-};

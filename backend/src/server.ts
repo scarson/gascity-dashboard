@@ -22,6 +22,7 @@ import { healthRouter } from './routes/health.js';
 import { doltRouter, startDoltNomsSampler } from './routes/dolt.js';
 import { adminRouter } from './routes/admin.js';
 import { eventsRouter } from './routes/events.js';
+import { maintainerRouter } from './routes/maintainer.js';
 import { setAuditLogPath } from './audit.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -81,6 +82,14 @@ function main(): void {
   writeRouter.use('/dolt-noms', doltRouter());
   // Kanban view (gascity-dashboard-dh6) — admin-surface read-only.
   writeRouter.use('/admin', adminRouter(gc, config.cityPath));
+  // Maintainer triage (gascity-dashboard-hq2 + 361 onward).
+  writeRouter.use(
+    '/maintainer',
+    maintainerRouter({
+      repo: config.maintainerRepo,
+      cachePath: config.maintainerCachePath,
+    }),
+  );
 
   app.use('/api', writeRouter);
 
