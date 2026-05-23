@@ -62,6 +62,15 @@ export interface AdminConfig {
    * dashboard. The exec wrapper re-validates target at request time.
    */
   maintainerSlingTarget: string;
+  /**
+   * Per-process kill-switch for snapshot fixture mode. When true, bead-3's
+   * cache wiring should pass useFixture=true into each SourceCache so the
+   * dashboard stays renderable when supervisor / upstream services fail.
+   * Env: SNAPSHOT_USE_FIXTURES (set to '1' to enable). Default: false.
+   * SourceCache's per-cache useFixture flag is still required — this config
+   * gate is the global opt-in, not a substitute.
+   */
+  useFixtures: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdminConfig {
@@ -96,6 +105,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdminConfig {
       6 * 60 * 60 * 1_000,
     ),
     maintainerSlingTarget: parseSlingTarget(env.MAINTAINER_SLING_TARGET, 'mayor'),
+    useFixtures: env.SNAPSHOT_USE_FIXTURES === '1',
   };
 }
 
