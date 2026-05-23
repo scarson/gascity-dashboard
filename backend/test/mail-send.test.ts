@@ -154,8 +154,8 @@ describe('POST /api/mail-send', { concurrency: false }, () => {
     // The mail-send wire signature has no slot for `from`/`viewing_as` — by
     // design (security_researcher td-wisp-eb0pn). Make that explicit here so
     // a future refactor adding the parameter is loud.
-    assert.equal(parsed.viewing_as, undefined, 'audit row leaked viewing_as');
-    assert.equal(parsed.from, undefined, 'audit row leaked from');
+    assert.ok(!('viewing_as' in parsed), 'audit row leaked viewing_as');
+    assert.ok(!('from' in parsed), 'audit row leaked from');
   });
 
   test('invalid to-alias returns 400 before reaching exec', async () => {

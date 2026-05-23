@@ -464,7 +464,7 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     assert.equal(row.type, 'dashboard.sling');
     assert.equal(row.endpoint, 'POST /api/maintainer/sling');
     assert.equal(row.actor, 'stephanie');
-    assert.equal(row.exit_code, undefined);
+    assert.ok(!('exit_code' in row));
     const parsed = row.parsed_args as Record<string, string>;
     assert.equal(parsed.error_kind, 'validation');
     assert.equal(parsed.kind, 'pr');
