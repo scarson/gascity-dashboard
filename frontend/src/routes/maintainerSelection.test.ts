@@ -254,4 +254,69 @@ describe('dispatchSlings', () => {
     expect(summary.failed).toBe(0);
     expect(called).toBe(0);
   });
+
+  it('caps simultaneous sends at 8 even for a 20-item batch', async () => {
+    // Hygiene: backend exec semaphore serialises 'gc sling' to 4 at a time,
+    // but HTTP requests still queue at the backend before hitting the
+    // semaphore. Cap the fan-out at the source so a 20+ selection doesn't
+    // stampede the express handler. 8 leaves headroom over the backend
+    // MAX_CONCURRENT=4 while staying under typical browser conn limits.
+    const reqs: SlingRequest[] = Array.from({ length: 20 }, (_, i) => ({
+      kind: 'pr',
+      number: i + 1,
+      html_url: `https://github.com/o/r/pull/${i + 1}`,
+      intent: 'triage',
+    }));
+    let inFlight = 0;
+    let peak = 0;
+    const releases: Array<() => void> = [];
+    const send = async (_r: SlingRequest) => {
+      inFlight += 1;
+      if (inFlight > peak) peak = inFlight;
+      await new Promise<void>((r) => releases.push(r));
+      inFlight -= 1;
+      return { ok: true };
+    };
+    const promise = dispatchSlings(reqs, send);
+    // Drain microtasks until the first chunk has all started. We expect
+    // the implementation to schedule at most CAP sends before awaiting.
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect(peak).toBeLessThanOrEqual(8);
+    expect(peak).toBeGreaterThan(0);
+    // Now release every gated send in batches so the loop completes.
+    while (releases.length > 0) {
+      const pending = releases.splice(0, releases.length);
+      for (const r of pending) r();
+      // Yield so the next chunk can begin and register its sends.
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    }
+    const summary = await promise;
+    expect(summary.outcomes).toHaveLength(20);
+    expect(summary.succeeded).toBe(20);
+    expect(summary.failed).toBe(0);
+    // Order preserved: outcomes[i].request.number === i+1.
+    summary.outcomes.forEach((o, i) => {
+      expect(o.request.number).toBe(i + 1);
+    });
+  });
+
+  it('isolates failures across chunks: one rejecting send does not block others in a 20-item batch', async () => {
+    const reqs: SlingRequest[] = Array.from({ length: 20 }, (_, i) => ({
+      kind: 'pr',
+      number: i + 1,
+      html_url: `https://github.com/o/r/pull/${i + 1}`,
+      intent: 'triage',
+    }));
+    const send = async (r: SlingRequest) => {
+      if (r.number === 12) throw new Error('boom');
+      return { ok: true };
+    };
+    const summary = await dispatchSlings(reqs, send);
+    expect(summary.outcomes).toHaveLength(20);
+    expect(summary.succeeded).toBe(19);
+    expect(summary.failed).toBe(1);
+    const failed = summary.outcomes.find((o) => !o.ok);
+    expect(failed?.request.number).toBe(12);
+    expect(failed?.error).toBe('boom');
+  });
 });

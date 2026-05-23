@@ -106,10 +106,23 @@ export interface SlingSummary {
 }
 
 /**
- * Fan out one POST per request in parallel via Promise.allSettled so a
- * single 4xx/5xx doesn't block the rest of the batch. Returns a structured
- * summary the UI can use to decide whether to clear the selection or
- * leave the failed subset selected for retry.
+ * Cap on simultaneous in-flight sends inside dispatchSlings. The backend
+ * exec semaphore already serialises 'gc sling' subprocesses (MAX_CONCURRENT=4),
+ * but HTTP requests queue at the express handler before hitting that
+ * semaphore. 8 leaves headroom over the backend cap while staying under
+ * typical browser per-host connection limits, so a 20+ item bulk-triage
+ * selection batches cleanly rather than stampeding.
+ */
+const MAX_CONCURRENT_SLINGS = 8;
+
+/**
+ * Fan out one POST per request via Promise.allSettled so a single 4xx/5xx
+ * doesn't block the rest of the batch. Concurrency is capped at
+ * MAX_CONCURRENT_SLINGS by processing requests in fixed-size chunks; each
+ * chunk's results are concatenated in input order so outcomes[i] always
+ * maps to requests[i]. Returns a structured summary the UI can use to
+ * decide whether to clear the selection or leave the failed subset
+ * selected for retry.
  *
  * The send fn is injected so vitest can stub without mocking the global
  * fetch — same DI shape as backend execGcSling.
@@ -118,21 +131,27 @@ export async function dispatchSlings(
   requests: ReadonlyArray<SlingRequest>,
   send: (req: SlingRequest) => Promise<unknown>,
 ): Promise<SlingSummary> {
-  const settled = await Promise.allSettled(requests.map((r) => send(r)));
-  const outcomes: SlingOutcome[] = settled.map((result, i) => {
-    const request = requests[i]!;
-    if (result.status === 'fulfilled') {
-      return { request, ok: true };
+  const outcomes: SlingOutcome[] = [];
+  for (let i = 0; i < requests.length; i += MAX_CONCURRENT_SLINGS) {
+    const chunk = requests.slice(i, i + MAX_CONCURRENT_SLINGS);
+    const settled = await Promise.allSettled(chunk.map((r) => send(r)));
+    for (let j = 0; j < settled.length; j += 1) {
+      const result = settled[j]!;
+      const request = chunk[j]!;
+      if (result.status === 'fulfilled') {
+        outcomes.push({ request, ok: true });
+        continue;
+      }
+      const reason = result.reason as unknown;
+      const error =
+        reason instanceof Error
+          ? reason.message
+          : typeof reason === 'string'
+            ? reason
+            : 'sling failed';
+      outcomes.push({ request, ok: false, error });
     }
-    const reason = result.reason as unknown;
-    const error =
-      reason instanceof Error
-        ? reason.message
-        : typeof reason === 'string'
-          ? reason
-          : 'sling failed';
-    return { request, ok: false, error };
-  });
+  }
   const succeeded = outcomes.filter((o) => o.ok).length;
   return { outcomes, succeeded, failed: outcomes.length - succeeded };
 }
