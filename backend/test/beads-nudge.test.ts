@@ -143,7 +143,7 @@ describe('POST /api/beads/:id/{claim,close,nudge}', { concurrency: false }, () =
     assert.equal(typeof row.duration_ms, 'number');
     const parsed = row.parsed_args as Record<string, string>;
     assert.equal(parsed.bead_id, 'td-wisp-abc123');
-    assert.equal(parsed.reason, undefined);
+    assert.ok(!('reason' in parsed));
   });
 
   test('happy path: claim dispatches via DI stub', async () => {
