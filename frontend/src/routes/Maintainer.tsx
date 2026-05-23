@@ -568,7 +568,14 @@ function SelectCheckbox({
   return (
     <input
       type="checkbox"
-      className="h-3.5 w-3.5 translate-y-[2px] cursor-pointer accent-accent focus-mark"
+      // accent-fg (warm-neutral foreground), not accent-accent (maroon).
+      // The ● mark in the next column is the persistent triage signal and
+      // is allowed to remain maroon when item.is_marked is true; the
+      // checkbox is the selection signal and must read as neutral so the
+      // One Mark Rule (DESIGN.md) isn't violated by two maroon affordances
+      // on the same row. fg resolves to L=18% (light) / 92% (dark), which
+      // gives a high-contrast checked state in both themes.
+      className="h-3.5 w-3.5 translate-y-[2px] cursor-pointer accent-fg focus-mark"
       checked={checked}
       onChange={() => onToggleSelect({ kind: item.kind, number: item.number })}
       aria-label={`select ${item.kind} #${item.number} for bulk triage`}
