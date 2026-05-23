@@ -36,6 +36,7 @@ interface AppHandle {
 interface BuildOpts {
   sling?: SlingStub;
   slingTarget?: string;
+  triageTarget?: string;
 }
 
 async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
@@ -64,6 +65,7 @@ async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
       repo: 'gastownhall/gascity',
       cachePath: path.join(tmpDir, 'cache.json'),
       slingTarget: opts.slingTarget ?? 'mayor',
+      triageTarget: opts.triageTarget,
       execGcSling: sling,
     }),
   );
@@ -215,6 +217,64 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     });
     assert.equal(res.status, 200);
     assert.equal(h.calls[0]!.target, 'project-lead');
+  });
+
+  test('intent=triage with no explicit target uses triageTarget over slingTarget', async () => {
+    // gascity-dashboard-0nn: bulk-sling action bar fans out a batch of
+    // intent='triage' requests. The route picks the triage target so the
+    // frontend doesn't have to know about chief-of-staff vs mayor.
+    h = await buildApp({ slingTarget: 'mayor', triageTarget: 'chief-of-staff' });
+    const res = await postJson(`${h.url}/api/maintainer/sling`, {
+      kind: 'pr',
+      number: 1,
+      html_url: 'https://github.com/gastownhall/gascity/pull/1',
+      intent: 'triage',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(h.calls[0]!.target, 'chief-of-staff');
+  });
+
+  test('intent=review with triageTarget set still uses slingTarget', async () => {
+    // The triage override is intent-scoped; review/draft must stay on the
+    // generic sling target.
+    h = await buildApp({ slingTarget: 'mayor', triageTarget: 'chief-of-staff' });
+    const res = await postJson(`${h.url}/api/maintainer/sling`, {
+      kind: 'pr',
+      number: 1,
+      html_url: 'https://github.com/gastownhall/gascity/pull/1',
+      intent: 'review',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(h.calls[0]!.target, 'mayor');
+  });
+
+  test('intent=triage with explicit target still wins over triageTarget', async () => {
+    // Explicit body.target always trumps any config default, including
+    // the intent-aware one.
+    h = await buildApp({ slingTarget: 'mayor', triageTarget: 'chief-of-staff' });
+    const res = await postJson(`${h.url}/api/maintainer/sling`, {
+      kind: 'pr',
+      number: 1,
+      html_url: 'https://github.com/gastownhall/gascity/pull/1',
+      intent: 'triage',
+      target: 'project-lead',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(h.calls[0]!.target, 'project-lead');
+  });
+
+  test('intent=triage falls back to slingTarget when triageTarget option is unset', async () => {
+    // Backward-compat: a caller that doesn't pass triageTarget keeps the
+    // pre-0nn behaviour of single-target dispatch.
+    h = await buildApp({ slingTarget: 'mayor' });
+    const res = await postJson(`${h.url}/api/maintainer/sling`, {
+      kind: 'pr',
+      number: 1,
+      html_url: 'https://github.com/gastownhall/gascity/pull/1',
+      intent: 'triage',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(h.calls[0]!.target, 'mayor');
   });
 
   test('invalid intent returns 400', async () => {
@@ -378,6 +438,21 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     assert.equal(res.body.kind, 'validation');
     // Came from exec, not from body validation — wrapper recorded the call.
     assert.equal(h.calls.length, 1);
+
+    // gascity-dashboard-ur0: thrown ExecError still emits an audit row
+    // so the forensic record is symmetric across success / non-zero / throw.
+    const rows = await readAudit(h.auditPath);
+    assert.equal(rows.length, 1);
+    const row = rows[0]!;
+    assert.equal(row.type, 'dashboard.sling');
+    assert.equal(row.endpoint, 'POST /api/maintainer/sling');
+    assert.equal(row.actor, 'stephanie');
+    assert.equal(row.exit_code, undefined);
+    const parsed = row.parsed_args as Record<string, string>;
+    assert.equal(parsed.error_kind, 'validation');
+    assert.equal(parsed.kind, 'pr');
+    assert.equal(parsed.intent, 'review');
+    assert.equal(parsed.target, 'mayor');
   });
 
   test('ExecError timeout surfaces as 504', async () => {
@@ -395,6 +470,16 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     assert.equal(res.status, 504);
     assert.equal(res.body.kind, 'timeout');
     assert.equal(h.calls.length, 1);
+
+    // gascity-dashboard-ur0: timeouts are operationally significant — must
+    // leave an audit trail so the operator can diagnose silent-failure
+    // patterns from events.jsonl alone.
+    const rows = await readAudit(h.auditPath);
+    assert.equal(rows.length, 1);
+    const row = rows[0]!;
+    assert.equal(row.type, 'dashboard.sling');
+    const parsed = row.parsed_args as Record<string, string>;
+    assert.equal(parsed.error_kind, 'timeout');
   });
 
   test('ExecError spawn surfaces as 502', async () => {
@@ -412,6 +497,60 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     assert.equal(res.status, 502);
     assert.equal(res.body.kind, 'spawn');
     assert.equal(h.calls.length, 1);
+
+    // gascity-dashboard-ur0.
+    const rows = await readAudit(h.auditPath);
+    assert.equal(rows.length, 1);
+    const parsed = rows[0]!.parsed_args as Record<string, string>;
+    assert.equal(parsed.error_kind, 'spawn');
+  });
+
+  test('non-ExecError throw (unknown) still audits with error_kind=unknown', async () => {
+    // gascity-dashboard-ur0: cover the catch-all branch — any unexpected
+    // throw from execGcSling should still leave a forensic row, mirroring
+    // the agents.ts (GET /api/agents/:alias/prime) precedent.
+    h = await buildApp({
+      sling: async () => {
+        throw new Error('boom');
+      },
+    });
+    const res = await postJson(`${h.url}/api/maintainer/sling`, {
+      kind: 'pr',
+      number: 1,
+      html_url: 'https://github.com/gastownhall/gascity/pull/1',
+      intent: 'review',
+    });
+    assert.equal(res.status, 500);
+    assert.equal(res.body.kind, 'internal');
+
+    const rows = await readAudit(h.auditPath);
+    assert.equal(rows.length, 1);
+    const row = rows[0]!;
+    assert.equal(row.type, 'dashboard.sling');
+    const parsed = row.parsed_args as Record<string, string>;
+    assert.equal(parsed.error_kind, 'unknown');
+    assert.equal(parsed.target, 'mayor');
+  });
+
+  test('extracts modern supervisor bead-id (gascity-dashboard-*) from stdout', async () => {
+    h = await buildApp({
+      sling: async () => ({
+        exitCode: 0,
+        stdout: 'created bead gascity-dashboard-xyz9\n',
+        stderr: '',
+        truncated: false,
+        durationMs: 10,
+      }),
+    });
+    const res = await postJson(`${h.url}/api/maintainer/sling`, {
+      kind: 'pr',
+      number: 1,
+      html_url: 'https://github.com/gastownhall/gascity/pull/1',
+      intent: 'review',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.bead_id, 'gascity-dashboard-xyz9');
   });
 
   test('stdout without bead-id still returns 200 with bead_id omitted', async () => {

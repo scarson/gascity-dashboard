@@ -17,7 +17,10 @@ import { addSseClient, notifyRefresh, removeSseClient } from '../maintainer/sse.
 const GH_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 const GH_URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/(issues|pull)\/\d+$/;
 const MAX_URL_LEN = 2_048;
-const BEAD_ID_RE = /\b(td-wisp-[a-z0-9]{3,12})\b/;
+// gc sling emits "created bead <id>" on success. The id alphabet matches
+// the supervisor's full id space (see lib/beadId.ts) — older fixtures used
+// td-wisp-* but modern dispatches return gascity-dashboard-*, agent-*, etc.
+const BEAD_ID_RE = /created bead ([A-Za-z0-9][A-Za-z0-9_.-]{0,63})/;
 
 type SlingIntent = 'review' | 'draft' | 'triage';
 type SlingKind = 'pr' | 'issue';
@@ -32,6 +35,13 @@ interface MaintainerRouterOptions {
   /** Default `gc sling` target when the request omits one. From config. */
   slingTarget: string;
   /**
+   * Override `gc sling` target when intent='triage' and the request
+   * omits an explicit target. Defaults to slingTarget when unset so a
+   * caller that doesn't pass this option keeps the original
+   * single-target behaviour. From config.maintainerTriageTarget.
+   */
+  triageTarget?: string;
+  /**
    * Injected `gc sling` runner. Defaults to the real exec wrapper; tests
    * pass a stub. This DI is the new pattern for write-exec routers
    * (mailSendRouter is a candidate for the same retrofit later).
@@ -43,6 +53,7 @@ export function maintainerRouter({
   repo,
   cachePath,
   slingTarget,
+  triageTarget,
   execGcSling = defaultExecGcSling,
 }: MaintainerRouterOptions): Router {
   const router = Router();
@@ -167,7 +178,12 @@ export function maintainerRouter({
       res.status(400).json({ error: 'kind/html_url mismatch', kind: 'validation' });
       return;
     }
-    let target = slingTarget;
+    // Intent-aware default target: 'triage' routes to chief-of-staff
+    // (config.maintainerTriageTarget) by default so the bulk-sling action
+    // bar can fan out without each request needing to know the operator's
+    // routing preference. review/draft keep the generic sling target.
+    let target =
+      body.intent === 'triage' && triageTarget !== undefined ? triageTarget : slingTarget;
     if (body.target !== undefined) {
       if (typeof body.target !== 'string' || !AGENT_ALIAS_RE.test(body.target)) {
         res.status(400).json({ error: 'invalid target alias', kind: 'validation' });
@@ -203,6 +219,26 @@ export function maintainerRouter({
       const idMatch = BEAD_ID_RE.exec(result.stdout);
       res.json({ ok: true, bead_id: idMatch?.[1] });
     } catch (err) {
+      // gascity-dashboard-ur0: thrown errors must also leave an audit row.
+      // Timeouts in particular are operationally significant — the
+      // success-path + non-zero-exit branches already audit, so failing
+      // to audit throws would create an asymmetric forensic record where
+      // the most-interesting failure mode (the supervisor hung) is the
+      // one that leaves no trace in events.jsonl. Mirrors the pattern in
+      // routes/agents.ts (GET /api/agents/:alias/prime).
+      const errorKind = err instanceof ExecError ? err.kind : 'unknown';
+      void recordAudit({
+        type: 'dashboard.sling',
+        endpoint: 'POST /api/maintainer/sling',
+        parsed_args: {
+          kind: body.kind,
+          number: String(body.number),
+          intent: body.intent,
+          target,
+          text_len: String(beadText.length),
+          error_kind: errorKind,
+        },
+      });
       if (err instanceof ExecError) {
         const status =
           err.kind === 'validation' ? 400 : err.kind === 'timeout' ? 504 : 502;
