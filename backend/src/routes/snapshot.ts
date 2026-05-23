@@ -14,6 +14,12 @@ export function snapshotRouter(service: SnapshotService): Router {
   const router = Router();
 
   router.get('/', async (_req, res) => {
+    // Intentionally no recordAudit() here: /api/snapshot is the ambient-polling
+    // surface for the dashboard. Auditing every poll would flood events.jsonl
+    // with no operator-meaningful signal — the audit log exists to capture
+    // operator-driven actions, not background telemetry reads. State-changing
+    // routes (POST /refresh below, and the per-resource write endpoints)
+    // still audit.
     try {
       const snapshot = await service.getSnapshot();
       res.json(snapshot);
