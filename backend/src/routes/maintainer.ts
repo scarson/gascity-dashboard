@@ -42,11 +42,23 @@ interface MaintainerRouterOptions {
    */
   triageTarget?: string;
   /**
+   * Absolute path to the Gas City root. Threaded as `--city=<path>` to
+   * `gc sling` so the subprocess finds city.toml without walking up from
+   * the dashboard's own cwd. Optional: when unset, gc falls back to its
+   * cwd-walk discovery, which fails in this dashboard's deployment.
+   * From config.cityPath.
+   */
+  cityPath?: string;
+  /**
    * Injected `gc sling` runner. Defaults to the real exec wrapper; tests
    * pass a stub. This DI is the new pattern for write-exec routers
    * (mailSendRouter is a candidate for the same retrofit later).
    */
-  execGcSling?: (target: string, beadText: string) => Promise<ExecResult>;
+  execGcSling?: (
+    target: string,
+    beadText: string,
+    cityPath?: string,
+  ) => Promise<ExecResult>;
 }
 
 export function maintainerRouter({
@@ -54,6 +66,7 @@ export function maintainerRouter({
   cachePath,
   slingTarget,
   triageTarget,
+  cityPath,
   execGcSling = defaultExecGcSling,
 }: MaintainerRouterOptions): Router {
   const router = Router();
@@ -194,7 +207,7 @@ export function maintainerRouter({
 
     const beadText = composeBeadText(body.intent, body.html_url);
     try {
-      const result = await execGcSling(target, beadText);
+      const result = await execGcSling(target, beadText, cityPath);
       void recordAudit({
         type: 'dashboard.sling',
         endpoint: 'POST /api/maintainer/sling',

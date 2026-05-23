@@ -19,11 +19,16 @@ import { setAuditLogPath } from '../src/audit.js';
 // tests can stub without module mocking; audit assertions hit a tmp file
 // via setAuditLogPath.
 
-type SlingStub = (target: string, beadText: string) => Promise<ExecResult>;
+type SlingStub = (
+  target: string,
+  beadText: string,
+  cityPath?: string,
+) => Promise<ExecResult>;
 
 interface StubCall {
   target: string;
   beadText: string;
+  cityPath?: string;
 }
 
 interface AppHandle {
@@ -37,6 +42,7 @@ interface BuildOpts {
   sling?: SlingStub;
   slingTarget?: string;
   triageTarget?: string;
+  cityPath?: string;
 }
 
 async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
@@ -52,9 +58,9 @@ async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
     truncated: false,
     durationMs: 42,
   });
-  const sling: SlingStub = async (target, beadText) => {
-    calls.push({ target, beadText });
-    return (opts.sling ?? defaultStub)(target, beadText);
+  const sling: SlingStub = async (target, beadText, cityPath) => {
+    calls.push({ target, beadText, cityPath });
+    return (opts.sling ?? defaultStub)(target, beadText, cityPath);
   };
 
   const app = express();
@@ -66,6 +72,7 @@ async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
       cachePath: path.join(tmpDir, 'cache.json'),
       slingTarget: opts.slingTarget ?? 'mayor',
       triageTarget: opts.triageTarget,
+      cityPath: opts.cityPath,
       execGcSling: sling,
     }),
   );
@@ -530,6 +537,32 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     const parsed = row.parsed_args as Record<string, string>;
     assert.equal(parsed.error_kind, 'unknown');
     assert.equal(parsed.target, 'mayor');
+  });
+
+  test('threads cityPath to execGcSling stub (gascity-dashboard-f0e)', async () => {
+    h = await buildApp({ cityPath: '/home/ds/gas-city' });
+    const res = await postJson(`${h.url}/api/maintainer/sling`, {
+      kind: 'pr',
+      number: 47,
+      html_url: 'https://github.com/gastownhall/gascity/pull/47',
+      intent: 'review',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0]!.cityPath, '/home/ds/gas-city');
+  });
+
+  test('omits cityPath when option is unset (default behaviour preserved)', async () => {
+    h = await buildApp();
+    const res = await postJson(`${h.url}/api/maintainer/sling`, {
+      kind: 'pr',
+      number: 47,
+      html_url: 'https://github.com/gastownhall/gascity/pull/47',
+      intent: 'review',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0]!.cityPath, undefined);
   });
 
   test('extracts modern supervisor bead-id (gascity-dashboard-*) from stdout', async () => {

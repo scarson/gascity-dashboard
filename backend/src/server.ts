@@ -93,6 +93,7 @@ function main(): void {
       cachePath: config.maintainerCachePath,
       slingTarget: config.maintainerSlingTarget,
       triageTarget: config.maintainerTriageTarget,
+      cityPath: config.cityPath,
     }),
   );
 

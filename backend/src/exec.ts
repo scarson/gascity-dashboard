@@ -316,6 +316,7 @@ export async function execMailSend(
 export async function execGcSling(
   target: string,
   beadText: string,
+  cityPath?: string,
 ): Promise<ExecResult> {
   if (!AGENT_ALIAS_RE.test(target)) {
     throw new ExecError('invalid sling target', 'validation');
@@ -323,9 +324,20 @@ export async function execGcSling(
   if (beadText.length === 0 || beadText.length > 4 * 1024) {
     throw new ExecError('sling text must be 1–4096 chars', 'validation');
   }
+  const args: string[] = ['sling'];
+  if (cityPath !== undefined && cityPath.length > 0) {
+    if (!cityPath.startsWith('/') || cityPath.includes('..')) {
+      throw new ExecError('invalid city path', 'validation');
+    }
+    args.push(`--city=${cityPath}`);
+  }
+  args.push(target, beadText);
   await acquireSlot();
   try {
-    return await runExec('gc', ['sling', target, beadText], 15_000);
+    // gc sling does meaningful work — creates a bead, attaches a formula
+    // wisp, dispatches to the target rig — measured ~30s end-to-end on
+    // this dashboard's deployment. 60s gives ~2x headroom.
+    return await runExec('gc', args, 60_000);
   } finally {
     releaseSlot();
   }
