@@ -63,7 +63,7 @@ function buildApp(fakeUrl: string): { app: express.Express } {
   const app = express();
   app.use(express.json());
   app.use('/api/sessions', sessionsRouter(gc));
-  app.use('/api/beads', beadsRouter(gc));
+  app.use('/api/beads', beadsRouter(gc, '/home/test/gas-city'));
   app.use('/api/mail', mailRouter(gc));
   app.use('/api/system', healthRouter(gc, { supervisorTimeoutMs: 100 }));
   return { app };

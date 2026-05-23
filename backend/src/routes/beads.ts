@@ -45,11 +45,13 @@ interface BeadsRouterOptions {
     beadId: string,
     action: 'claim' | 'close' | 'nudge',
     reason?: string,
+    cityPath?: string,
   ) => Promise<ExecResult>;
 }
 
 export function beadsRouter(
   gc: GcClient,
+  cityPath: string,
   opts: BeadsRouterOptions = {},
 ): Router {
   const execBeadAction = opts.execBeadAction ?? defaultExecBeadAction;
@@ -126,16 +128,16 @@ export function beadsRouter(
   });
 
   router.post('/:id/claim', async (req, res) => {
-    await runBeadAction(req.params.id, 'claim', undefined, res, execBeadAction);
+    await runBeadAction(req.params.id, 'claim', undefined, res, execBeadAction, cityPath);
   });
 
   router.post('/:id/close', async (req, res) => {
     const reason = typeof req.body?.reason === 'string' ? req.body.reason : undefined;
-    await runBeadAction(req.params.id, 'close', reason, res, execBeadAction);
+    await runBeadAction(req.params.id, 'close', reason, res, execBeadAction, cityPath);
   });
 
   router.post('/:id/nudge', async (req, res) => {
-    await runBeadAction(req.params.id, 'nudge', undefined, res, execBeadAction);
+    await runBeadAction(req.params.id, 'nudge', undefined, res, execBeadAction, cityPath);
   });
 
   return router;
@@ -147,13 +149,14 @@ async function runBeadAction(
   reason: string | undefined,
   res: import('express').Response,
   execBeadAction: NonNullable<BeadsRouterOptions['execBeadAction']>,
+  cityPath: string,
 ): Promise<void> {
   if (!BEAD_ID_RE.test(beadId)) {
     res.status(400).json({ error: 'invalid bead id', kind: 'validation' });
     return;
   }
   try {
-    const result = await execBeadAction(beadId, action, reason);
+    const result = await execBeadAction(beadId, action, reason, cityPath);
     void recordAudit({
       type: 'dashboard.exec',
       endpoint: `POST /api/beads/:id/${action}`,

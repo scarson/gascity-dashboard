@@ -15,6 +15,11 @@ Environment=NODE_ENV=production
 Environment=PORT=8081
 Environment=GC_SUPERVISOR_URL=http://127.0.0.1:8372
 Environment=GC_CITY_NAME=gas-city
+# GC_CITY_PATH pins the city root so the `gc bd` CLI write path
+# (claim/close/nudge) doesn't depend on WorkingDirectory, which is the
+# dashboard repo, not a city directory. Without it, writes fail with
+# "not in a city directory". Override to match your actual city location.
+Environment=GC_CITY_PATH=%h/gas-city
 Environment=ADMIN_AUDIT_LOG_PATH=%h/.gc/events.jsonl
 Environment=ADMIN_FRONTEND_DIST=%h/gas-city-dashboard/frontend/dist
 # Refuse to start if a stale process holds the port. Bound to 127.0.0.1 only,
@@ -26,10 +31,14 @@ RestartSec=3
 StandardOutput=journal
 StandardError=journal
 # Hardening — the dashboard touches gc supervisor over loopback, reads
-# .gc/events.jsonl, runs `gc` CLI. No FS writes outside the workspace.
+# .gc/events.jsonl, and runs the `gc` CLI. The `gc bd` write path mutates
+# the city's embedded-Dolt bead store directly on disk (under
+# %h/gas-city/.beads + %h/gas-city/.gc, taken under a lockfile), so the
+# city root must be in ReadWritePaths or those writes fail with EROFS
+# despite ProtectHome=read-only. Keep this aligned with GC_CITY_PATH above.
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=%h/.gc %h/gas-city-dashboard
+ReadWritePaths=%h/.gc %h/gas-city-dashboard %h/gas-city
 ProtectHome=read-only
 PrivateTmp=true
 PrivateDevices=true

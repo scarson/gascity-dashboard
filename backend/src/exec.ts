@@ -188,15 +188,31 @@ export async function execBeadAction(
   beadId: string,
   action: 'claim' | 'close' | 'nudge',
   reason?: string,
+  cityPath?: string,
 ): Promise<ExecResult> {
   if (!BEAD_ID_RE.test(beadId)) {
     throw new ExecError('invalid bead id', 'validation');
   }
   const args: string[] = ['bd'];
+  // --city pins the store so `gc bd` doesn't depend on the backend's cwd
+  // (which is the dashboard repo, not a city directory). Without this,
+  // writes fail with "not in a city directory". Same defensive validation
+  // and flag placement as execBdListClosed / execAgentPrime.
+  const cityArg =
+    cityPath !== undefined && cityPath.length > 0
+      ? (() => {
+          if (!cityPath.startsWith('/') || cityPath.includes('..')) {
+            throw new ExecError('invalid city path', 'validation');
+          }
+          return `--city=${cityPath}`;
+        })()
+      : undefined;
   if (action === 'claim') {
     args.push('update', beadId, '--status=in_progress', '--assignee=stephanie');
+    if (cityArg) args.push(cityArg);
   } else if (action === 'close') {
     args.push('close', beadId);
+    if (cityArg) args.push(cityArg);
     if (typeof reason === 'string' && reason.length > 0 && reason.length <= 1024) {
       args.push('--reason', reason);
     }
@@ -207,6 +223,7 @@ export async function execBeadAction(
       throw new ExecError('nudge requires agent alias, not bead id', 'validation');
     }
     args.push('nudge', beadId);
+    if (cityArg) args.push(cityArg);
   }
   await acquireSlot();
   try {

@@ -72,7 +72,7 @@ function main(): void {
   writeRouter.use(csrfValidate);
   writeRouter.use('/sessions', sessionsRouter(gc));
   writeRouter.use('/agents', agentsRouter(config.cityPath));
-  writeRouter.use('/beads', beadsRouter(gc));
+  writeRouter.use('/beads', beadsRouter(gc, config.cityPath));
   writeRouter.use('/mail', mailRouter(gc));
   // mail-send is a SEPARATE router mounted at its own path. The handler in
   // mail-send.ts has no `viewing-as` parameter — physical separation per

@@ -23,12 +23,14 @@ type BeadActionStub = (
   beadId: string,
   action: 'claim' | 'close' | 'nudge',
   reason?: string,
+  cityPath?: string,
 ) => Promise<ExecResult>;
 
 interface StubCall {
   beadId: string;
   action: 'claim' | 'close' | 'nudge';
   reason?: string;
+  cityPath?: string;
 }
 
 interface AppHandle {
@@ -46,6 +48,7 @@ interface BuildOpts {
 // (GET /, GET /:id) need a real GcClient, but the write paths don't touch
 // it. Passing a baseUrl that we never call is fine.
 const STUB_GC = new GcClient({ baseUrl: 'http://127.0.0.1:1', cityName: 'test' });
+const TEST_CITY_PATH = '/home/test/gas-city';
 
 async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'beads-nudge-test-'));
@@ -60,14 +63,14 @@ async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
     truncated: false,
     durationMs: 13,
   });
-  const execBeadAction: BeadActionStub = async (beadId, action, reason) => {
-    calls.push({ beadId, action, reason });
-    return (opts.execBeadAction ?? defaultStub)(beadId, action, reason);
+  const execBeadAction: BeadActionStub = async (beadId, action, reason, cityPath) => {
+    calls.push({ beadId, action, reason, cityPath });
+    return (opts.execBeadAction ?? defaultStub)(beadId, action, reason, cityPath);
   };
 
   const app = express();
   app.use(express.json());
-  app.use('/api/beads', beadsRouter(STUB_GC, { execBeadAction }));
+  app.use('/api/beads', beadsRouter(STUB_GC, TEST_CITY_PATH, { execBeadAction }));
 
   return new Promise((resolve) => {
     const srv = app.listen(0, '127.0.0.1', () => {
@@ -131,6 +134,7 @@ describe('POST /api/beads/:id/{claim,close,nudge}', { concurrency: false }, () =
       beadId: 'td-wisp-abc123',
       action: 'nudge',
       reason: undefined,
+      cityPath: TEST_CITY_PATH,
     });
 
     const rows = await readAudit(h.auditPath);
@@ -165,6 +169,9 @@ describe('POST /api/beads/:id/{claim,close,nudge}', { concurrency: false }, () =
     assert.equal(h.calls.length, 1);
     assert.equal(h.calls[0]!.action, 'close');
     assert.equal(h.calls[0]!.reason, 'shipped via pf2');
+    // cityPath is threaded so `gc bd close` pins the store instead of
+    // relying on the backend's cwd (regression: "not in a city directory").
+    assert.equal(h.calls[0]!.cityPath, TEST_CITY_PATH);
 
     const rows = await readAudit(h.auditPath);
     const parsed = rows[0]!.parsed_args as Record<string, string>;
