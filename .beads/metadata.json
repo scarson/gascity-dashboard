@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "embedded",
-  "dolt_database": "gascity_dashboard",
-  "project_id": "78f4b777-ae5e-431c-b002-b4996e3090b1"
-}

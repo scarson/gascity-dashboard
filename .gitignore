@@ -4,8 +4,9 @@ dist
 *.log
 scripts/node_modules
 
-# Beads / Dolt internal files (the .beads/ store itself is tracked via the
-# allow-list below; these are its local-only / generated bits)
+# Beads / Dolt internal files. The .beads/ store itself is local-only — bd
+# state lives in each operator's Dolt working copy, not in the GitHub tree.
+# Falls under the hidden-path deny-all below; no allow-list entry on purpose.
 .dolt/
 *.db
 
@@ -33,5 +34,4 @@ credentials.*
 
 # Allow-list: the only hidden paths the project intentionally tracks.
 !.gitignore
-!.beads/
 !.env.example
