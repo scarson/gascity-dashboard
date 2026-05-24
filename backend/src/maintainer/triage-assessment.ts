@@ -62,9 +62,18 @@ const SIMPLICITY_BONUS: Readonly<Record<string, number>> = {
 export interface ParseTriageAssessmentOptions {
   /** ISO timestamp the parser stamps onto `vetted_at`. Defaults to now. */
   vettedAt?: string;
-  /** Optional notes text (e.g. extracted from a `triage-notes` fenced block
-   *  in the latest item comment). Defaults to empty string — comments are
-   *  not yet fetched by the gh ingest pipeline. */
+  /**
+   * Optional notes text (e.g. extracted from a `triage-notes` fenced block
+   * in the latest item comment). Defaults to empty string, since comments
+   * are not yet fetched by the gh ingest pipeline.
+   *
+   * SECURITY (gascity-dashboard-8h3): when the ingest path lands, this
+   * field will carry third-party-author-controllable content from PR/issue
+   * comment bodies. The ingest implementation MUST length-cap (e.g. 2000
+   * chars) and strip control chars at parse time, and every consumer MUST
+   * render `TriageAssessment.notes` as plain text only, never via
+   * `dangerouslySetInnerHTML` and never as unescaped markdown or HTML.
+   */
   notes?: string;
 }
 

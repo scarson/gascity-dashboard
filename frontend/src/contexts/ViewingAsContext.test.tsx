@@ -209,3 +209,54 @@ describe('ViewingAsProvider — bounded sessions retry', () => {
     expect(mockListSessions).toHaveBeenCalledTimes(1);
   });
 });
+
+// gascity-dashboard-7s7: explicit coverage of the two acceptance criteria
+// the bead enumerates but the retry-focused suite above does not test
+// directly — first-shot sessions success leaves the flag false, and mail
+// failure is independent of the sessions-side flag.
+describe('ViewingAsProvider — loadAliases initial flag transitions', () => {
+  it('leaves sessionsUnavailable=false when initial /api/sessions succeeds', async () => {
+    mockListSessions.mockResolvedValue({ items: [{ alias: 'mechanic' }] });
+    const states: Probe[] = [];
+    render(
+      <ViewingAsProvider>
+        <Harness onState={(p) => states.push(p)} />
+      </ViewingAsProvider>,
+    );
+    await flushPromises();
+
+    // Flag stays false; success path never sets it.
+    expect(states.at(-1)?.sessionsUnavailable).toBe(false);
+
+    // No retry scheduled on success: advancing well past the first retry
+    // delay must not trigger a second call.
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    await flushPromises();
+    expect(mockListSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves sessionsUnavailable=false when mail fetch fails but sessions succeeds', async () => {
+    // Mail-side failure must NOT flip the sessions-side flag — the two
+    // sources settle independently, and the flag is sessions-scoped.
+    mockListSessions.mockResolvedValue({ items: [{ alias: 'mechanic' }] });
+    mockListMail.mockRejectedValue(new Error('mail corpus 500'));
+
+    const states: Probe[] = [];
+    render(
+      <ViewingAsProvider>
+        <Harness onState={(p) => states.push(p)} />
+      </ViewingAsProvider>,
+    );
+    await flushPromises();
+
+    expect(states.at(-1)?.sessionsUnavailable).toBe(false);
+    // Mail failure must not schedule a sessions retry either.
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    await flushPromises();
+    expect(mockListSessions).toHaveBeenCalledTimes(1);
+  });
+});

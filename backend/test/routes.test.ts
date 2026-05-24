@@ -241,6 +241,163 @@ describe('routes: upstream timeout -> HTTP 504', () => {
     }
   });
 
+  // gascity-dashboard-ayr: extend the sr6 redaction contract across the
+  // remaining 5xx surfaces. Same rationale as the sessions tests above —
+  // fetch-level failures (ECONNREFUSED, DNS) carry OS detail in
+  // err.message and that must not reach the browser, even on a
+  // 127.0.0.1-only deployment. details.name (Error class only) is the
+  // single safe channel; server-side log retains full err.message.
+  test('GET /api/mail 502 redacts raw err.message from response body', async () => {
+    const gc = new GcClient({
+      baseUrl: 'http://127.0.0.1:1',
+      cityName: 'test',
+      defaultTimeoutMs: 100,
+    });
+    const app = express();
+    app.use(express.json());
+    app.use('/api/mail', mailRouter(gc));
+    const { url, close } = await startApp(app);
+    try {
+      const res = await fetch(`${url}/api/mail?alias=stephanie&box=inbox`);
+      assert.equal(res.status, 502);
+      const text = await res.text();
+      const body = JSON.parse(text) as {
+        kind?: string;
+        details?: Record<string, string>;
+      };
+      assert.equal(body.kind, 'upstream');
+      assert.equal(
+        body.details?.message,
+        undefined,
+        'details.message must be redacted',
+      );
+      assert.ok(
+        !text.includes('ECONNREFUSED'),
+        `response leaks ECONNREFUSED: ${text}`,
+      );
+      assert.ok(
+        !text.includes('127.0.0.1:1'),
+        `response leaks upstream host:port: ${text}`,
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  test('GET /api/mail/threads/:id 502 redacts raw err.message from response body', async () => {
+    const gc = new GcClient({
+      baseUrl: 'http://127.0.0.1:1',
+      cityName: 'test',
+      defaultTimeoutMs: 100,
+    });
+    const app = express();
+    app.use(express.json());
+    app.use('/api/mail', mailRouter(gc));
+    const { url, close } = await startApp(app);
+    try {
+      const res = await fetch(`${url}/api/mail/threads/abc?alias=stephanie`);
+      assert.equal(res.status, 502);
+      const text = await res.text();
+      const body = JSON.parse(text) as {
+        kind?: string;
+        details?: Record<string, string>;
+      };
+      assert.equal(body.kind, 'upstream');
+      assert.equal(
+        body.details?.message,
+        undefined,
+        'details.message must be redacted',
+      );
+      assert.ok(
+        !text.includes('ECONNREFUSED'),
+        `response leaks ECONNREFUSED: ${text}`,
+      );
+      assert.ok(
+        !text.includes('127.0.0.1:1'),
+        `response leaks upstream host:port: ${text}`,
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  test('GET /api/beads 502 redacts raw err.message from response body', async () => {
+    const gc = new GcClient({
+      baseUrl: 'http://127.0.0.1:1',
+      cityName: 'test',
+      defaultTimeoutMs: 100,
+    });
+    const app = express();
+    app.use(express.json());
+    app.use('/api/beads', beadsRouter(gc, '/home/test/gas-city'));
+    const { url, close } = await startApp(app);
+    try {
+      const res = await fetch(`${url}/api/beads`);
+      assert.equal(res.status, 502);
+      const text = await res.text();
+      const body = JSON.parse(text) as {
+        kind?: string;
+        details?: Record<string, string>;
+      };
+      assert.equal(body.kind, 'upstream');
+      assert.equal(
+        body.details?.message,
+        undefined,
+        'details.message must be redacted',
+      );
+      assert.ok(
+        !text.includes('ECONNREFUSED'),
+        `response leaks ECONNREFUSED: ${text}`,
+      );
+      assert.ok(
+        !text.includes('127.0.0.1:1'),
+        `response leaks upstream host:port: ${text}`,
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  test('GET /api/beads/:id 502 redacts raw err.message from response body', async () => {
+    // Single-bead fallback path: on a fetch-level failure (not the 404
+    // branch), the route emits the same details.message leak before the
+    // ayr fix. id matches BEAD_ID_RE so the validation gate passes.
+    const gc = new GcClient({
+      baseUrl: 'http://127.0.0.1:1',
+      cityName: 'test',
+      defaultTimeoutMs: 100,
+    });
+    const app = express();
+    app.use(express.json());
+    app.use('/api/beads', beadsRouter(gc, '/home/test/gas-city'));
+    const { url, close } = await startApp(app);
+    try {
+      const res = await fetch(`${url}/api/beads/td-abcdef`);
+      assert.equal(res.status, 502);
+      const text = await res.text();
+      const body = JSON.parse(text) as {
+        kind?: string;
+        details?: Record<string, string>;
+      };
+      assert.equal(body.kind, 'upstream');
+      assert.equal(
+        body.details?.message,
+        undefined,
+        'details.message must be redacted',
+      );
+      assert.ok(
+        !text.includes('ECONNREFUSED'),
+        `response leaks ECONNREFUSED: ${text}`,
+      );
+      assert.ok(
+        !text.includes('127.0.0.1:1'),
+        `response leaks upstream host:port: ${text}`,
+      );
+    } finally {
+      await close();
+    }
+  });
+
   test('GET /api/mail returns 504 with upstream-timeout kind when supervisor hangs', async () => {
     fake.setHandler(() => {
       /* never respond */

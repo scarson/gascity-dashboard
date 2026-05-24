@@ -419,6 +419,15 @@ export type TriageItemStatus =
  * `source` is `'agent'` for the only path that lands in this bead. The
  * `'manual'` arm is reserved for a future maintainer ack path; no manual
  * signal lands today.
+ *
+ * `notes` is currently always empty string. When the gh ingest path wires
+ * it up (see ParseTriageAssessmentOptions.notes), the contents will be
+ * extracted from PR/issue comment bodies, which are third-party-author
+ * controllable on incoming PRs. Treat as untrusted: any consumer MUST
+ * render it as plain text (React auto-escapes), never via
+ * `dangerouslySetInnerHTML`, and never as unescaped markdown or HTML.
+ * The ingest-side bead must also length-cap and strip control chars at
+ * parse time. See gascity-dashboard-8h3 for the contract.
  */
 export interface TriageAssessment {
   vetted_score: number;

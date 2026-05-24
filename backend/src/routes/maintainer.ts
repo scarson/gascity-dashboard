@@ -12,7 +12,11 @@ import {
   execGcSling as defaultExecGcSling,
 } from '../exec.js';
 import type { ExecResult } from '../exec.js';
-import { collectItems, fetchTriage, selectOneMark } from '../maintainer/triage.js';
+import {
+  collectItems,
+  fetchTriage as defaultFetchTriage,
+  selectOneMark,
+} from '../maintainer/triage.js';
 import { readCache, writeCache } from '../maintainer/storage.js';
 import { isMarkCandidate } from '../maintainer/classifier.js';
 import { resolveTargetToSession } from '../maintainer/resolve-target.js';
@@ -86,6 +90,13 @@ interface MaintainerRouterOptions {
     cityPath?: string,
   ) => Promise<ExecResult>;
   /**
+   * Injected triage fetcher used by POST /refresh. Defaults to the
+   * real `fetchTriage` from ../maintainer/triage. Tests pass a stub to
+   * exercise failure-redaction contracts without spawning gh. Mirrors
+   * the execGcSling DI pattern already established here.
+   */
+  fetchTriage?: (repo: string) => Promise<MaintainerTriage>;
+  /**
    * Injected supervisor sessions fetcher (gascity-dashboard-55b). Used
    * to resolve the configured sling target role (e.g. 'chief-of-staff')
    * to a concrete session_name at write time so the frontend's inline
@@ -107,6 +118,7 @@ export function maintainerRouter({
   triageTarget,
   cityPath,
   execGcSling = defaultExecGcSling,
+  fetchTriage = defaultFetchTriage,
   listSessions,
 }: MaintainerRouterOptions): Router {
   const router = Router();
@@ -179,10 +191,15 @@ export function maintainerRouter({
         res.status(status).json({ error: err.message, kind: err.kind });
         return;
       }
-      const msg = (err as Error).message;
+      // gascity-dashboard-ayr: mirror the sr6 redaction. Non-ExecError
+      // failures from fetchTriage (e.g. an unrecognised network error)
+      // can embed OS detail in err.message; details.name (Error class)
+      // is the only safe channel for the browser. journalctl keeps the
+      // full message via the warn below.
+      console.warn(`[maintainer] /api/maintainer/refresh failed: ${(err as Error).message}`);
       res
         .status(502)
-        .json({ error: 'failed to refresh maintainer triage', kind: 'upstream', details: { message: msg } });
+        .json({ error: 'failed to refresh maintainer triage', kind: 'upstream', details: { name: (err as Error).name ?? 'Error' } });
     }
   });
 

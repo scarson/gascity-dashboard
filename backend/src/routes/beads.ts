@@ -81,9 +81,13 @@ export function beadsRouter(
         });
         return;
       }
+      // gascity-dashboard-ayr: mirror the sr6 redaction. err.message from
+      // fetch-level failures embeds OS detail (ECONNREFUSED, host:port);
+      // details.name (Error class) is the only safe channel for the browser.
+      console.warn(`[beads] /api/beads failed: ${(err as Error).message}`);
       res
         .status(502)
-        .json({ error: 'failed to list beads', kind: 'upstream', details: { message: (err as Error).message } });
+        .json({ error: 'failed to list beads', kind: 'upstream', details: { name: (err as Error).name ?? 'Error' } });
     }
   });
 
@@ -123,7 +127,12 @@ export function beadsRouter(
         res.status(404).json({ error: 'bead not found', kind: 'not_found' });
         return;
       }
-      res.status(502).json({ error: 'failed to fetch bead', kind: 'upstream', details: { message: msg } });
+      // gascity-dashboard-ayr: same redaction rationale as the list-beads
+      // handler above. err.name only on the wire; msg already holds the
+      // full message from the 404-fallback extraction at the top of the
+      // catch block — log it for journalctl, don't ship it to the browser.
+      console.warn(`[beads] /api/beads/:id failed: ${msg}`);
+      res.status(502).json({ error: 'failed to fetch bead', kind: 'upstream', details: { name: (err as Error).name ?? 'Error' } });
     }
   });
 

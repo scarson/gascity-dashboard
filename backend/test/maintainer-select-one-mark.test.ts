@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import type { TriageItem, TriageItemStatus } from 'gas-city-dashboard-shared';
 import { selectOneMark } from '../src/maintainer/triage.js';
+import { makeIssue, makePr } from './fixtures/triage-item.js';
 
 // gascity-dashboard-bs2: One Mark must skip issues with in-flight PRs.
 // The maroon ● indicates "what most needs operator action." The only
@@ -11,78 +11,9 @@ import { selectOneMark } from '../src/maintainer/triage.js';
 //
 // These tests pin the selectOneMark contract directly. The slung-overlay
 // integration coverage lives in maintainer-sling.test.ts; here we lock
-// down the pure function.
-
-const FIXED_ISO = '2026-05-24T00:00:00.000Z';
-
-interface ItemOverrides extends Partial<TriageItem> {
-  number: number;
-}
-
-function makeIssue(overrides: ItemOverrides): TriageItem {
-  return {
-    kind: 'issue',
-    title: `issue ${overrides.number}`,
-    status: 'open' as TriageItemStatus,
-    author: {
-      login: 'someone',
-      tier: 'regular',
-      issues_accepted: null,
-      issues_opened: null,
-      prs_merged: null,
-      prs_opened: null,
-      computed_at: null,
-    },
-    created_at: FIXED_ISO,
-    updated_at: FIXED_ISO,
-    labels: ['kind/bug', 'priority/p0'],
-    tier: 'regression_breaking',
-    triage_score: 300,
-    triage_assessment: null,
-    slung: null,
-    cluster_id: null,
-    blast_files: [],
-    lines_changed: null,
-    weak_ties: [],
-    linked_numbers: [],
-    html_url: `https://example/issues/${overrides.number}`,
-    // Issues are not mark candidates per isMarkCandidate, so default false.
-    is_marked: false,
-    ...overrides,
-  };
-}
-
-function makePr(overrides: ItemOverrides): TriageItem {
-  return {
-    kind: 'pr',
-    title: `pr ${overrides.number}`,
-    status: 'open' as TriageItemStatus,
-    author: {
-      login: 'someone',
-      tier: 'regular',
-      issues_accepted: null,
-      issues_opened: null,
-      prs_merged: null,
-      prs_opened: null,
-      computed_at: null,
-    },
-    created_at: FIXED_ISO,
-    updated_at: FIXED_ISO,
-    labels: ['kind/bug', 'priority/p0'],
-    tier: 'regression_breaking',
-    triage_score: 300,
-    triage_assessment: null,
-    slung: null,
-    cluster_id: null,
-    blast_files: [],
-    lines_changed: 50,
-    weak_ties: [],
-    linked_numbers: [],
-    html_url: `https://example/pull/${overrides.number}`,
-    is_marked: true,
-    ...overrides,
-  };
-}
+// down the pure function. Shared TriageItem factory lives in
+// ./fixtures/triage-item.ts so adding a new required field on
+// TriageItem is a single-file update (gascity-dashboard-i8w).
 
 describe('selectOneMark — One Mark Rule winnower', () => {
   test('single marked PR wins the mark', () => {

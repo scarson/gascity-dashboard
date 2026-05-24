@@ -71,9 +71,14 @@ export function mailRouter(gc: GcClient): Router {
         });
         return;
       }
+      // gascity-dashboard-ayr: mirror the sr6 redaction. err.message
+      // from fetch-level failures embeds OS detail (ECONNREFUSED, host:port,
+      // interface names); details.name (Error class) is the only safe
+      // channel for the browser. journalctl keeps the full message.
+      console.warn(`[mail] /api/mail failed: ${(err as Error).message}`);
       res
         .status(502)
-        .json({ error: 'failed to list mail', kind: 'upstream', details: { message: (err as Error).message } });
+        .json({ error: 'failed to list mail', kind: 'upstream', details: { name: (err as Error).name ?? 'Error' } });
     }
   });
 
@@ -121,9 +126,12 @@ export function mailRouter(gc: GcClient): Router {
         });
         return;
       }
+      // gascity-dashboard-ayr: same redaction rationale as the list-mail
+      // handler above. err.name only on the wire; full message in journal.
+      console.warn(`[mail] /api/mail/threads/:id failed: ${(err as Error).message}`);
       res
         .status(502)
-        .json({ error: 'failed to load thread', kind: 'upstream', details: { message: (err as Error).message } });
+        .json({ error: 'failed to load thread', kind: 'upstream', details: { name: (err as Error).name ?? 'Error' } });
     }
   });
 

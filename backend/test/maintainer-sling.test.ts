@@ -12,6 +12,7 @@ import { maintainerRouter } from '../src/routes/maintainer.js';
 import { setAuditLogPath } from '../src/audit.js';
 import { readSlungState, slungKey, writeSlungEntry } from '../src/maintainer/slung-state.js';
 import type { GcSession, MaintainerTriage, TriageItem } from 'gas-city-dashboard-shared';
+import { makePr } from './fixtures/triage-item.js';
 
 // Tests for POST /api/maintainer/sling (gascity-dashboard-ib5).
 //
@@ -54,6 +55,12 @@ interface BuildOpts {
    * assertions while new tests opt in explicitly.
    */
   listSessions?: () => Promise<readonly GcSession[]>;
+  /**
+   * gascity-dashboard-ayr: injected fetchTriage so the /refresh failure
+   * path can be exercised without spawning gh. Mirrors the execGcSling
+   * DI pattern. When omitted, the route uses the real implementation.
+   */
+  fetchTriage?: (repo: string) => Promise<MaintainerTriage>;
 }
 
 async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
@@ -96,6 +103,7 @@ async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
       cityPath: opts.cityPath,
       execGcSling: sling,
       listSessions: opts.listSessions,
+      fetchTriage: opts.fetchTriage,
     }),
   );
 
@@ -897,37 +905,14 @@ describe('POST /api/maintainer/sling — slung-state persistence', { concurrency
 // dot moved off the slung item onto the next candidate. This is the
 // integration test that proves splice-at-read closes the regression.
 
-function makePr(overrides: Partial<TriageItem> & { number: number }): TriageItem {
-  return {
-    kind: 'pr',
-    title: `PR ${overrides.number}`,
-    status: 'needs_review',
-    author: {
-      login: 'sjarmak',
-      tier: 'core',
-      issues_accepted: null,
-      issues_opened: null,
-      prs_merged: null,
-      prs_opened: null,
-      computed_at: null,
-    },
-    created_at: '2026-05-24T00:00:00Z',
-    updated_at: '2026-05-24T00:00:00Z',
-    labels: ['kind/bug', 'priority/p0'],
-    tier: 'regression_breaking',
-    triage_score: 300,
-    triage_assessment: null,
-    slung: null,
-    cluster_id: null,
-    blast_files: [],
-    lines_changed: 100,
-    weak_ties: [],
-    linked_numbers: [],
-    html_url: `https://github.com/gastownhall/gascity/pull/${overrides.number}`,
-    is_marked: true,
-    ...overrides,
-  };
-}
+// makePr now imported from ./fixtures/triage-item.js
+// (gascity-dashboard-i8w). The shared fixture's defaults differ slightly
+// from the local copy that lived here pre-i8w (status='open' vs
+// 'needs_review', author.login='someone' vs 'sjarmak',
+// lines_changed=50 vs 100), but every test call site in this file
+// either overrides what it asserts on or asserts on fields not affected
+// by these defaults (is_marked, slung.target, slung.bead_id,
+// slung.resolved_session_name).
 
 function envelopeWithMarkedCandidates(items: TriageItem[]): MaintainerTriage {
   return {
@@ -1232,5 +1217,69 @@ describe('POST /api/maintainer/sling — target role resolution (gascity-dashboa
     const item = env.tiers[0]!.unclustered.find((it) => it.number === 47)!;
     assert.ok(item.slung);
     assert.equal(item.slung.resolved_session_name, 'oversight-rig__chief-of-staff');
+  });
+});
+
+// gascity-dashboard-ayr: complete the sr6 redaction sweep. The /refresh
+// route's non-ExecError catch arm previously emitted details.message
+// containing whatever the underlying network error reported. err.name
+// (Error class) is the only safe channel; full message is preserved
+// in journalctl via console.warn. Mirrors the sessions/mail/beads
+// 5xx redaction tests in routes.test.ts.
+describe('POST /api/maintainer/refresh — err.message redaction', { concurrency: false }, () => {
+  let h: AppHandle;
+  afterEach(async () => {
+    if (h !== undefined) await h.close();
+  });
+
+  test('502 response redacts raw err.message from non-ExecError failures', async () => {
+    // Shape the thrown error to look like a fetch-level network failure
+    // — that's the realistic threat (gh subprocess can also wrap
+    // network errors that don't surface as ExecError). The redaction
+    // contract: details.name is allowed; raw OS-detail substrings must
+    // not slip through the response body.
+    const leakyErr = new Error(
+      'connect ECONNREFUSED 127.0.0.1:1 (interface lo) at /var/run/sock',
+    );
+    leakyErr.name = 'FetchError';
+    h = await buildApp({
+      fetchTriage: async () => {
+        throw leakyErr;
+      },
+    });
+    const res = await fetch(`${h.url}/api/maintainer/refresh`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(res.status, 502);
+    const text = await res.text();
+    const body = JSON.parse(text) as {
+      kind?: string;
+      details?: Record<string, string>;
+    };
+    assert.equal(body.kind, 'upstream');
+    assert.equal(
+      body.details?.message,
+      undefined,
+      'details.message must be redacted',
+    );
+    assert.equal(
+      body.details?.name,
+      'FetchError',
+      'details.name must carry the Error class discriminator',
+    );
+    assert.ok(
+      !text.includes('ECONNREFUSED'),
+      `response leaks ECONNREFUSED: ${text}`,
+    );
+    assert.ok(
+      !text.includes('127.0.0.1:1'),
+      `response leaks upstream host:port: ${text}`,
+    );
+    assert.ok(
+      !text.includes('/var/run/sock'),
+      `response leaks file path: ${text}`,
+    );
   });
 });
