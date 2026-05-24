@@ -10,7 +10,6 @@ import type {
   DeployList,
   SystemHealth,
   DoltNomsTrend,
-  KanbanResponse,
   MaintainerTriage,
   ContributorStat,
   ApiError,
@@ -163,9 +162,6 @@ export const api = {
   },
   agentPrime(alias: string): Promise<{ agent: string; prompt: string; bytes: number }> {
     return request('GET', `/api/agents/${encodeURIComponent(alias)}/prime`);
-  },
-  kanban(): Promise<KanbanResponse> {
-    return request('GET', '/api/admin/kanban');
   },
   snapshot(): Promise<DashboardSnapshot> {
     return request('GET', '/api/snapshot');

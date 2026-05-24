@@ -20,7 +20,6 @@ import { gitRouter } from './routes/git.js';
 import { buildsRouter } from './routes/builds.js';
 import { healthRouter } from './routes/health.js';
 import { doltRouter, startDoltNomsSampler } from './routes/dolt.js';
-import { adminRouter } from './routes/admin.js';
 import { eventsRouter } from './routes/events.js';
 import { maintainerRouter } from './routes/maintainer.js';
 import { snapshotRouter } from './routes/snapshot.js';
@@ -83,8 +82,6 @@ function main(): void {
   writeRouter.use('/builds', buildsRouter());
   writeRouter.use('/system', healthRouter(gc));
   writeRouter.use('/dolt-noms', doltRouter());
-  // Kanban view (gascity-dashboard-dh6) — admin-surface read-only.
-  writeRouter.use('/admin', adminRouter(gc, config.cityPath));
   // Maintainer triage (gascity-dashboard-hq2 + 361 onward).
   writeRouter.use(
     '/maintainer',
