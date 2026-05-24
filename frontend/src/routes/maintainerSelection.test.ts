@@ -424,9 +424,8 @@ describe('useSlingSuccess', () => {
     // React 18 removed the "setState on unmounted component" warning, so
     // asserting only that advancing timers doesn't throw would silently
     // pass if cleanup were broken. Spy on setTimeout/clearTimeout instead
-    // (same approach as useKanbanMoves: hooks/kanbanMoves.test.ts) so the
-    // assertion is a direct check on the cleanup contract, not on React's
-    // error surface.
+    // so the assertion is a direct check on the cleanup contract, not on
+    // React's error surface.
     const setSpy = vi.spyOn(globalThis, 'setTimeout');
     const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
     try {

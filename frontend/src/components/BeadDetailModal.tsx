@@ -4,10 +4,10 @@ import { api, ApiClientError } from '../api/client';
 import { Modal } from './Modal';
 import { StatusBadge, type StatusTone } from './StatusBadge';
 
-// Click-to-read modal for a single bead. Used from the Kanban cards,
-// the Beads list rows, and the AgentDetail assigned-beads list. Pure
-// read view; mutations (claim/close/nudge) live on the Beads page row
-// actions and are deliberately not duplicated here.
+// Click-to-read modal for a single bead. Used from the Beads list
+// rows and the AgentDetail assigned-beads list. Pure read view;
+// mutations (claim/close/nudge) live on the Beads page row actions
+// and are deliberately not duplicated here.
 //
 // Fetches /api/beads/:id on open. If the caller already has the full
 // bead in state (Beads, AgentDetail), it can pass it via `initialBead`
