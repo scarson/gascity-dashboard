@@ -362,66 +362,6 @@ export interface GcEventList {
   next?: number;
 }
 
-// ── Kanban view (gascity-dashboard-dh6; ported from Wldc4rd/citadel) ─────
-//
-// Ownership-state board, read-only. Nine columns rendered left to right
-// in the order below. `blocked_real` vs `blocked_stale` is computed
-// server-side via open-bead-id set membership of each blocked bead's
-// deps; `in_flight` vs `stalled` is computed via the bead's bound
-// session activity (>1h idle → stalled).
-
-export type KanbanColumn =
-  | 'mayor_plate'
-  | 'in_flight'
-  | 'stalled'
-  | 'blocked_real'
-  | 'blocked_stale'
-  | 'in_review'
-  | 'needs_changes'
-  | 'approved'
-  | 'closed_24h';
-
-export const KANBAN_COLUMNS: readonly KanbanColumn[] = [
-  'mayor_plate',
-  'in_flight',
-  'stalled',
-  'blocked_real',
-  'blocked_stale',
-  'in_review',
-  'needs_changes',
-  'approved',
-  'closed_24h',
-];
-
-/**
- * Card shape — just the fields the Kanban card needs to render so the
- * payload stays small even with hundreds of beads. The card links to
- * /beads (the existing list view; no drill-in route yet) on click.
- */
-export interface KanbanCard {
-  id: BeadId;
-  /** Truncated server-side so the wire stays small. */
-  title: string;
-  /** Bead's assignee field as-is (empty string if missing). Used as text only. */
-  assignee: string;
-  /** ISO of most-recent activity signal on the bead OR its bound session. */
-  last_active: IsoTimestamp | null;
-  /** Number of open dependencies, used for a small blocker indicator. */
-  open_blocker_count: number;
-  priority: number;
-}
-
-/**
- * Response for /api/admin/kanban — columns keyed by name, cards inside.
- * `as_of` drives the stale-data UX in the frontend.
- */
-export interface KanbanResponse {
-  as_of: IsoTimestamp;
-  columns: Record<KanbanColumn, KanbanCard[]>;
-  /** Total eng beads visible to the classifier (sum of all columns). */
-  total: number;
-}
-
 // ── Admin-dashboard internal API responses ───────────────────────────────
 
 /** Wrapped error returned by the backend on any 4xx/5xx. */
