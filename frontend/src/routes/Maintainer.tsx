@@ -44,6 +44,37 @@ const DRAFT_TARGET_LABEL = 'draft agent';
 const CACHE_KEY = 'maintainer-triage';
 const COLLAPSE_KEY = 'maintainer:collapsed';
 const FOCUS_KEY = 'maintainer:focusBreaking';
+// gascity-dashboard-omv: persists the "Needs PR only" filter toggle so
+// the operator's choice survives reloads / SSE refreshes.
+const NEEDS_PR_KEY = 'maintainer:needsPrOnly';
+
+/**
+ * Pure filter helper for the "Needs PR only" toggle
+ * (gascity-dashboard-omv). Returns a new TriageTierSection containing
+ * only issue items where `has_in_flight_pr === false`. PR items are
+ * dropped entirely — the filter is issue-focused ("show me work that
+ * needs someone to write a fix") per the bead. Clusters that become
+ * empty after the filter are dropped from the result.
+ *
+ * Stale-cache safety: items from a pre-omv envelope have
+ * `has_in_flight_pr === undefined`. Treated as needs-PR (conservative
+ * default that surfaces work rather than hides it).
+ */
+export function filterTierByNeedsPr(section: TriageTierSection): TriageTierSection {
+  const needsPr = (item: TriageItem): boolean =>
+    item.kind === 'issue' && item.has_in_flight_pr !== true;
+  const filteredClusters = section.clusters
+    .map((cluster) => ({
+      ...cluster,
+      items: cluster.items.filter(needsPr),
+    }))
+    .filter((cluster) => cluster.items.length > 0);
+  return {
+    ...section,
+    clusters: filteredClusters,
+    unclustered: section.unclustered.filter(needsPr),
+  };
+}
 
 // Persists which tier / cluster headings the operator has collapsed.
 // Set of ids; default empty (all expanded). LocalStorage-backed so the
@@ -130,6 +161,28 @@ export function MaintainerPage() {
       const next = !prev;
       try {
         localStorage.setItem(FOCUS_KEY, next ? '1' : '0');
+      } catch {
+        /* skip */
+      }
+      return next;
+    });
+  }, []);
+
+  // gascity-dashboard-omv: "Needs PR only" toggle. Sibling of
+  // focusBreaking; both compose so an operator can ask for
+  // "breaking-tier issues that need a PR" in one view.
+  const [needsPrOnly, setNeedsPrOnly] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(NEEDS_PR_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleNeedsPrOnly = useCallback(() => {
+    setNeedsPrOnly((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(NEEDS_PR_KEY, next ? '1' : '0');
       } catch {
         /* skip */
       }
@@ -254,6 +307,9 @@ export function MaintainerPage() {
             <Button size="sm" onClick={toggleFocus}>
               {focusBreaking ? 'Show all tiers' : 'Breaking only'}
             </Button>
+            <Button size="sm" onClick={toggleNeedsPrOnly}>
+              {needsPrOnly ? 'Show all items' : 'Needs PR only'}
+            </Button>
             <Button size="sm" onClick={() => void handleRefresh()} disabled={refreshing}>
               {refreshing ? 'Refreshing' : 'Refresh from gh'}
             </Button>
@@ -269,6 +325,7 @@ export function MaintainerPage() {
           <div className="space-y-14">
             {data.tiers
               .filter((tier) => !focusBreaking || tier.tier === 'regression_breaking')
+              .map((tier) => (needsPrOnly ? filterTierByNeedsPr(tier) : tier))
               .map((tier) => (
                 <TierSection
                   key={tier.tier}
@@ -693,7 +750,12 @@ const ROW_GRID_NO_SELECT = 'grid grid-cols-[1.75em_2.25em_1fr_auto] items-baseli
 const ROW_GRID_WITH_SELECT =
   'grid grid-cols-[1.25em_1.75em_2.25em_1fr_auto] items-baseline gap-x-3';
 
-function IssueRow({
+// Exported so vitest can render the row in isolation for the
+// needs-PR indicator assertions (gascity-dashboard-omv). The
+// indicator is a typographic label, not a chip — same uppercase /
+// tracked / faint register as the existing 'anchored' label so the
+// metadata strip reads in one voice.
+export function IssueRow({
   item,
   hasInListChildren,
   selection,
@@ -708,6 +770,14 @@ function IssueRow({
   // when it IS in view, the visual nesting already communicates the
   // link and the label would be noise.
   const showAnchored = item.linked_numbers.length > 0 && !hasInListChildren;
+  // gascity-dashboard-omv: 'needs PR' surfaces issues where the
+  // backend computed `has_in_flight_pr === false`. Loose `!== true`
+  // catches the stale-cache case (item from a pre-omv envelope has
+  // the field as `undefined`), defaulting to the conservative reading
+  // "no PR known — needs one". The two labels can co-exist on the
+  // same row (e.g. an issue linked to a now-closed PR is both
+  // anchored historically AND needs a fresh PR); both are accurate.
+  const showNeedsPr = item.has_in_flight_pr !== true;
   const gridClass = onToggleSelect ? ROW_GRID_WITH_SELECT : ROW_GRID_NO_SELECT;
   return (
     <div className={`${gridClass} py-1.5`}>
@@ -728,6 +798,14 @@ function IssueRow({
         {showAnchored && (
           <span className="ml-3 text-label uppercase tracking-wider text-fg-faint">
             anchored
+          </span>
+        )}
+        {showNeedsPr && (
+          <span
+            className="ml-3 text-label uppercase tracking-wider text-fg-faint"
+            title="no in-flight PR claims to fix this; an agent or contributor needs to write one"
+          >
+            needs PR
           </span>
         )}
       </div>

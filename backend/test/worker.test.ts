@@ -79,6 +79,7 @@ function makeItem(
     linked_numbers: [],
     html_url: `https://github.com/test/test/${kind === 'pr' ? 'pull' : 'issues'}/${number}`,
     is_marked: false,
+    has_in_flight_pr: false,
     ...overrides,
   };
 }

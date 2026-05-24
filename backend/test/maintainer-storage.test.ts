@@ -46,6 +46,7 @@ function makeItem(overrides: Partial<TriageItem> = {}): TriageItem {
     linked_numbers: [],
     html_url: 'https://example/42',
     is_marked: false,
+    has_in_flight_pr: false,
     ...overrides,
   };
 }

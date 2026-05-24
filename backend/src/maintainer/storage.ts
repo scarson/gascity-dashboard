@@ -64,6 +64,7 @@ const REQUIRED_TRIAGE_ITEM_KEYS = [
   'triage_score',
   'triage_assessment',
   'is_marked',
+  'has_in_flight_pr',
 ] as const satisfies ReadonlyArray<keyof TriageItem>;
 
 function firstTriageItem(env: MaintainerTriage): unknown {

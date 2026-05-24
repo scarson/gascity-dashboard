@@ -1282,4 +1282,125 @@ describe('POST /api/maintainer/refresh — err.message redaction', { concurrency
       `response leaks file path: ${text}`,
     );
   });
+
+  // gascity-dashboard-473: complete the sweep on the /refresh ExecError
+  // arm. The spawn kind wraps "spawn <abs-path-to-gh> ENOENT" which
+  // exposes the operator's PATH layout. validation/timeout pass through
+  // (pre-authored safe messages by ExecError construction).
+  test('502 response redacts spawn-arm host path from ExecError', async () => {
+    h = await buildApp({
+      fetchTriage: async () => {
+        throw new ExecError(
+          'spawn failed: spawn /home/ds/.local/bin/gh ENOENT',
+          'spawn',
+        );
+      },
+    });
+    const res = await fetch(`${h.url}/api/maintainer/refresh`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    // ExecError 'spawn' kind maps to 502 in /refresh's status table.
+    assert.equal(res.status, 502);
+    const text = await res.text();
+    const body = JSON.parse(text) as { kind?: string; error?: string };
+    assert.equal(body.kind, 'spawn');
+    assert.ok(
+      !text.includes('/home/ds'),
+      `response leaks operator home: ${text}`,
+    );
+    assert.ok(
+      !text.includes('.local/bin'),
+      `response leaks binary path: ${text}`,
+    );
+    assert.ok(
+      !text.includes('ENOENT'),
+      `response leaks OS errno: ${text}`,
+    );
+  });
+});
+
+// gascity-dashboard-473: complete the redaction sweep on the /sling
+// catch arms. ExecError spawn-arm wraps host paths the same way as
+// /refresh; the non-ExecError 500 fallback was the last remaining
+// raw err.message site flagged by the wave-ayr-wave-review pass.
+describe('POST /api/maintainer/sling — err.message redaction', { concurrency: false }, () => {
+  let h: AppHandle;
+  afterEach(async () => {
+    if (h !== undefined) await h.close();
+  });
+
+  test('ExecError spawn arm redacts host path from response body', async () => {
+    h = await buildApp({
+      sling: async () => {
+        throw new ExecError(
+          'spawn failed: spawn /home/ds/.local/bin/gc ENOENT',
+          'spawn',
+        );
+      },
+    });
+    const res = await postJson(`${h.url}/api/maintainer/sling`, {
+      kind: 'pr',
+      number: 1,
+      html_url: 'https://github.com/gastownhall/gascity/pull/1',
+      intent: 'review',
+    });
+    // ExecError 'spawn' kind maps to 502 in /sling's status table.
+    assert.equal(res.status, 502);
+    assert.equal(res.body.kind, 'spawn');
+    const wire = JSON.stringify(res.body);
+    assert.ok(
+      !wire.includes('/home/ds'),
+      `response leaks operator home: ${wire}`,
+    );
+    assert.ok(
+      !wire.includes('.local/bin'),
+      `response leaks binary path: ${wire}`,
+    );
+    assert.ok(
+      !wire.includes('ENOENT'),
+      `response leaks OS errno: ${wire}`,
+    );
+  });
+
+  test('non-ExecError 500 fallback redacts raw err.message', async () => {
+    const leakyErr = new Error(
+      'connect ECONNREFUSED 127.0.0.1:1 (interface lo) at /var/run/sock',
+    );
+    leakyErr.name = 'NetworkError';
+    h = await buildApp({
+      sling: async () => {
+        throw leakyErr;
+      },
+    });
+    const res = await postJson(`${h.url}/api/maintainer/sling`, {
+      kind: 'pr',
+      number: 1,
+      html_url: 'https://github.com/gastownhall/gascity/pull/1',
+      intent: 'review',
+    });
+    assert.equal(res.status, 500);
+    assert.equal(res.body.kind, 'internal');
+    const details = res.body.details as { name?: string; message?: string };
+    assert.equal(
+      details?.message,
+      undefined,
+      'details.message must be redacted',
+    );
+    assert.equal(
+      details?.name,
+      'NetworkError',
+      'details.name must carry the Error class discriminator',
+    );
+    const wire = JSON.stringify(res.body);
+    assert.ok(
+      !wire.includes('ECONNREFUSED'),
+      `response leaks ECONNREFUSED: ${wire}`,
+    );
+    assert.ok(
+      !wire.includes('/var/run/sock'),
+      `response leaks file path: ${wire}`,
+    );
+  });
 });

@@ -185,9 +185,26 @@ async function runBeadAction(
   } catch (err) {
     if (err instanceof ExecError) {
       const status = err.kind === 'validation' ? 400 : err.kind === 'timeout' ? 504 : 500;
-      res.status(status).json({ error: err.message, kind: err.kind });
+      // gascity-dashboard-473: the 'spawn' kind wraps node's child_process
+      // "spawn <abs-path> ENOENT" which exposes the operator's binary
+      // layout. validation/timeout carry pre-authored safe strings by
+      // ExecError construction (see backend/src/exec.ts), so they pass
+      // through. journalctl retains the full message via the source-side
+      // ExecError instantiation.
+      const wireMessage =
+        err.kind === 'spawn' ? 'subprocess could not be started' : err.message;
+      if (err.kind === 'spawn') {
+        console.warn(`[beads] runBeadAction spawn failed: ${err.message}`);
+      }
+      res.status(status).json({ error: wireMessage, kind: err.kind });
       return;
     }
-    res.status(500).json({ error: (err as Error).message, kind: 'internal' });
+    // gascity-dashboard-473: mirror the ayr sr6 redaction. Raw err.message
+    // from unexpected throws can embed OS detail; details.name (Error
+    // class) is the only safe channel for the browser.
+    console.warn(`[beads] runBeadAction failed: ${(err as Error).message}`);
+    res
+      .status(500)
+      .json({ error: 'internal error', kind: 'internal', details: { name: (err as Error).name ?? 'Error' } });
   }
 }

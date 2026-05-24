@@ -61,6 +61,11 @@ function commonDefaults(number: number): Omit<TriageItem, 'kind' | 'title' | 'ht
     blast_files: [],
     weak_ties: [],
     linked_numbers: [],
+    // Default false: most fixture-driven tests construct items in
+    // isolation and don't care about the omv signal. Tests that
+    // exercise the needs-PR semantics set this explicitly via
+    // computeHasInFlightPr or via overrides.
+    has_in_flight_pr: false,
   };
 }
 

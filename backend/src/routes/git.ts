@@ -34,10 +34,27 @@ export function gitRouter(): Router {
       res.json({ view, items });
     } catch (err) {
       if (err instanceof ExecError) {
-        res.status(err.kind === 'timeout' ? 504 : 500).json({ error: err.message, kind: err.kind });
+        // gascity-dashboard-473: spawn-arm host path redaction. The
+        // 'spawn' kind wraps node's "spawn <abs-path> ENOENT" exposing
+        // the operator's binary layout; validation/timeout carry safe
+        // pre-authored strings by ExecError construction. /commits has
+        // no validation kind in practice (view is enum-validated above),
+        // so the per-kind branch is here for completeness with the
+        // sibling routes in this directory.
+        const wireMessage =
+          err.kind === 'spawn' ? 'subprocess could not be started' : err.message;
+        if (err.kind === 'spawn') {
+          console.warn(`[git] /api/git/commits spawn failed: ${err.message}`);
+        }
+        res.status(err.kind === 'timeout' ? 504 : 500).json({ error: wireMessage, kind: err.kind });
         return;
       }
-      res.status(500).json({ error: (err as Error).message, kind: 'internal' });
+      // gascity-dashboard-473: mirror the ayr sr6 redaction on the
+      // catch-all 500. Raw err.message can embed OS detail.
+      console.warn(`[git] /api/git/commits failed: ${(err as Error).message}`);
+      res
+        .status(500)
+        .json({ error: 'internal error', kind: 'internal', details: { name: (err as Error).name ?? 'Error' } });
     }
   });
 

@@ -556,6 +556,25 @@ export interface TriageItem {
   html_url: string;
   /** True when bug + breaking + actively shipping. Drives the maroon mark (One Mark Rule). */
   is_marked: boolean;
+  /**
+   * Backend-computed signal that at least one linked PR in the SAME
+   * envelope is in-flight (status not 'merged' / not 'closed') and
+   * claims to fix this item via `linked_numbers` (gascity-dashboard-omv).
+   *
+   * Drives the issue-row "needs PR" indicator and the "Needs PR only"
+   * filter chip on the maintainer view. Inverse: `!has_in_flight_pr`
+   * is the "nobody has written a fix yet" signal.
+   *
+   * Always `false` for PR items (the signal is issue-anchored — a PR
+   * doesn't need its own PR). Always `false` for issues whose
+   * `linked_numbers` are empty, only reference PRs not in the envelope,
+   * or only reference merged/closed PRs.
+   *
+   * Single source of truth: do NOT recompute this on the frontend from
+   * `linked_numbers` + the items[] map. The backend ships it so every
+   * consumer reads the same value.
+   */
+  has_in_flight_pr: boolean;
 }
 
 export interface TriageCluster {

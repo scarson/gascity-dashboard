@@ -75,7 +75,14 @@ export function agentsRouter(cityPath: string): Router {
           parsed_args: { agent: alias, error_kind: err.kind },
           duration_ms: 0,
         });
-        res.status(status).json({ error: err.message, kind: err.kind });
+        // gascity-dashboard-473: spawn-arm host path redaction. See
+        // beads.ts / mail-send.ts for rationale.
+        const wireMessage =
+          err.kind === 'spawn' ? 'subprocess could not be started' : err.message;
+        if (err.kind === 'spawn') {
+          console.warn(`[agents] /api/agents/${alias}/prime spawn failed: ${err.message}`);
+        }
+        res.status(status).json({ error: wireMessage, kind: err.kind });
         return;
       }
       void recordAudit({
@@ -84,7 +91,13 @@ export function agentsRouter(cityPath: string): Router {
         parsed_args: { agent: alias, error_kind: 'unknown' },
         duration_ms: 0,
       });
-      res.status(500).json({ error: (err as Error).message, kind: 'internal' });
+      // gascity-dashboard-473: mirror the ayr sr6 redaction on the
+      // catch-all 500. Raw err.message can embed OS detail; details.name
+      // (Error class) is the only safe channel.
+      console.warn(`[agents] /api/agents/${alias}/prime failed: ${(err as Error).message}`);
+      res
+        .status(500)
+        .json({ error: 'internal error', kind: 'internal', details: { name: (err as Error).name ?? 'Error' } });
     }
   });
 

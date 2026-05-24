@@ -188,6 +188,9 @@ function mapIssue(it: GhIssue): TriageItem {
     linked_numbers: [],
     html_url: it.url,
     is_marked: false,
+    // Conservative default; overwritten by computeHasInFlightPr in
+    // composeEnvelope once the linked_numbers reverse-map is populated.
+    has_in_flight_pr: false,
   };
 }
 
@@ -234,6 +237,9 @@ function mapPr(pr: GhPr): TriageItem {
     linked_numbers: extractLinkedIssueNumbers(pr.body),
     html_url: pr.url,
     is_marked: false,
+    // PR items never carry the issue-anchored needs-PR signal. See
+    // computeHasInFlightPr for the field semantics.
+    has_in_flight_pr: false,
   };
 }
 
@@ -289,6 +295,51 @@ export function collectItems(envelope: MaintainerTriage): TriageItem[] {
     }
   }
   return out;
+}
+
+/**
+ * Per-item "is there an in-flight PR claiming to fix this?" signal
+ * (gascity-dashboard-omv). Mutates each item's `has_in_flight_pr` in
+ * place; sets true on issue items whose `linked_numbers` reference at
+ * least one PR in the same envelope with status != 'merged' /
+ * != 'closed'. PR items always get `false` (the signal is
+ * issue-anchored — a PR doesn't need its own PR).
+ *
+ * This is the inverse of the bs2 issueNumbersWithInFlightPr set used
+ * by selectOneMark, materialised as a typed boolean on every item so
+ * downstream consumers (the frontend "needs PR" indicator and the
+ * "Needs PR only" filter) read one source of truth instead of
+ * recomputing from linked_numbers + the items[] map.
+ *
+ * The predicate walks PR items directly (reading PR.linked_numbers,
+ * which mapPr populates from the PR body), so this function has no
+ * data dependency on the issue→PR reverse map that fetchTriage builds
+ * afterward. composeEnvelope still invokes this after fetchTriage
+ * returns the fully-assembled item list, for parity with bs2.
+ *
+ * Idempotent: safe to re-run; each call overwrites the field on every
+ * item in the input.
+ */
+export function computeHasInFlightPr(items: TriageItem[]): void {
+  // Build the set of issue numbers that have at least one in-flight
+  // PR in this envelope. A PR is in-flight when its status is
+  // anything other than merged / closed.
+  const issuesWithInFlightPr = new Set<number>();
+  for (const item of items) {
+    if (item.kind !== 'pr') continue;
+    if (item.status === 'merged' || item.status === 'closed') continue;
+    for (const linkedNum of item.linked_numbers) {
+      issuesWithInFlightPr.add(linkedNum);
+    }
+  }
+  for (const item of items) {
+    if (item.kind === 'issue') {
+      item.has_in_flight_pr = issuesWithInFlightPr.has(item.number);
+    } else {
+      // PRs themselves never carry the signal.
+      item.has_in_flight_pr = false;
+    }
+  }
 }
 
 /**
@@ -392,6 +443,13 @@ function composeEnvelope(repo: string, items: TriageItem[]): MaintainerTriage {
     item.triage_score = triage_score;
     item.triage_assessment = parseTriageAssessment(item.labels);
   }
+
+  // gascity-dashboard-omv: per-item "needs PR" signal. Walks PR
+  // linked_numbers to mark each issue with whether at least one
+  // in-flight PR claims to fix it. Independent of selectOneMark; both
+  // derive from the same in-flight predicate but produce different
+  // downstream signals.
+  computeHasInFlightPr(items);
 
   selectOneMark(items);
 

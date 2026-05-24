@@ -310,4 +310,77 @@ describe('POST /api/mail-send', { concurrency: false }, () => {
     assert.equal(res.body.ok, true);
     assert.equal(res.body.message_id, undefined);
   });
+
+  // gascity-dashboard-473: complete the ayr/sr6 redaction sweep on the
+  // POST /api/mail-send catch arms. See beads-nudge.test.ts for the
+  // two-pattern rationale.
+  test('ExecError spawn arm redacts host path from response body', async () => {
+    h = await buildApp({
+      mailSend: async () => {
+        throw new ExecError(
+          'spawn failed: spawn /home/ds/.local/bin/gc ENOENT',
+          'spawn',
+        );
+      },
+    });
+    const res = await postJson(`${h.url}/api/mail-send`, {
+      to: 'mayor',
+      subject: 'x',
+      body: 'y',
+    });
+    assert.equal(res.status, 500);
+    assert.equal(res.body.kind, 'spawn');
+    const wire = JSON.stringify(res.body);
+    assert.ok(
+      !wire.includes('/home/ds'),
+      `response leaks operator home: ${wire}`,
+    );
+    assert.ok(
+      !wire.includes('.local/bin'),
+      `response leaks binary path: ${wire}`,
+    );
+    assert.ok(
+      !wire.includes('ENOENT'),
+      `response leaks OS errno: ${wire}`,
+    );
+  });
+
+  test('non-ExecError 500 fallback redacts raw err.message', async () => {
+    const leakyErr = new Error(
+      'connect ECONNREFUSED 127.0.0.1:1 (interface lo) at /var/run/sock',
+    );
+    leakyErr.name = 'NetworkError';
+    h = await buildApp({
+      mailSend: async () => {
+        throw leakyErr;
+      },
+    });
+    const res = await postJson(`${h.url}/api/mail-send`, {
+      to: 'mayor',
+      subject: 'x',
+      body: 'y',
+    });
+    assert.equal(res.status, 500);
+    assert.equal(res.body.kind, 'internal');
+    const details = res.body.details as { name?: string; message?: string };
+    assert.equal(
+      details?.message,
+      undefined,
+      'details.message must be redacted',
+    );
+    assert.equal(
+      details?.name,
+      'NetworkError',
+      'details.name must carry the Error class discriminator',
+    );
+    const wire = JSON.stringify(res.body);
+    assert.ok(
+      !wire.includes('ECONNREFUSED'),
+      `response leaks ECONNREFUSED: ${wire}`,
+    );
+    assert.ok(
+      !wire.includes('/var/run/sock'),
+      `response leaks file path: ${wire}`,
+    );
+  });
 });

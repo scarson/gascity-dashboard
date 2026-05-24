@@ -227,6 +227,7 @@ describe('sortScore — vetted overrides heuristic, falls back when null', () =>
       linked_numbers: [],
       html_url: '',
       is_marked: false,
+      has_in_flight_pr: false,
       ...overrides,
     };
   }

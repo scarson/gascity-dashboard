@@ -242,4 +242,80 @@ describe('POST /api/beads/:id/{claim,close,nudge}', { concurrency: false }, () =
     assert.equal(res.body.kind, 'internal');
     assert.equal(h.calls.length, 1);
   });
+
+  // gascity-dashboard-473: complete the ayr/sr6 redaction sweep on the
+  // runBeadAction catch arms. Two distinct fix patterns:
+  //
+  //   - ExecError kind='spawn' wraps "spawn /home/ds/.local/bin/gc ENOENT"
+  //     style messages exposing the operator's binary path. The wire
+  //     message must collapse to a static string; the kind tag still
+  //     surfaces 'spawn' so the client can branch on it.
+  //   - Non-ExecError 500 fallback embeds whatever the unexpected error
+  //     reported (could carry OS detail). Replace with a static 'internal
+  //     error' + details.name carrying the Error class discriminator,
+  //     mirroring the sessions/mail/beads 5xx redaction contract from ayr.
+  //
+  // Server-side journalctl retains full message fidelity via console.warn
+  // at the source (not asserted here — log channel, not wire channel).
+  test('ExecError spawn arm redacts host path from response body', async () => {
+    h = await buildApp({
+      execBeadAction: async () => {
+        throw new ExecError(
+          'spawn failed: spawn /home/ds/.local/bin/gc ENOENT',
+          'spawn',
+        );
+      },
+    });
+    const res = await postJson(`${h.url}/api/beads/td-wisp-abc123/nudge`);
+    assert.equal(res.status, 500);
+    assert.equal(res.body.kind, 'spawn');
+    const wire = JSON.stringify(res.body);
+    assert.ok(
+      !wire.includes('/home/ds'),
+      `response leaks operator home: ${wire}`,
+    );
+    assert.ok(
+      !wire.includes('.local/bin'),
+      `response leaks binary path: ${wire}`,
+    );
+    assert.ok(
+      !wire.includes('ENOENT'),
+      `response leaks OS errno: ${wire}`,
+    );
+  });
+
+  test('non-ExecError 500 fallback redacts raw err.message', async () => {
+    const leakyErr = new Error(
+      'connect ECONNREFUSED 127.0.0.1:1 (interface lo) at /var/run/sock',
+    );
+    leakyErr.name = 'NetworkError';
+    h = await buildApp({
+      execBeadAction: async () => {
+        throw leakyErr;
+      },
+    });
+    const res = await postJson(`${h.url}/api/beads/td-wisp-abc123/nudge`);
+    assert.equal(res.status, 500);
+    assert.equal(res.body.kind, 'internal');
+    const details = res.body.details as { name?: string; message?: string };
+    assert.equal(
+      details?.message,
+      undefined,
+      'details.message must be redacted',
+    );
+    assert.equal(
+      details?.name,
+      'NetworkError',
+      'details.name must carry the Error class discriminator',
+    );
+    const wire = JSON.stringify(res.body);
+    assert.ok(
+      !wire.includes('ECONNREFUSED'),
+      `response leaks ECONNREFUSED: ${wire}`,
+    );
+    assert.ok(
+      !wire.includes('/var/run/sock'),
+      `response leaks file path: ${wire}`,
+    );
+  });
 });

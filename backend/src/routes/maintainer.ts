@@ -188,7 +188,17 @@ export function maintainerRouter({
       if (err instanceof ExecError) {
         const status =
           err.kind === 'validation' ? 400 : err.kind === 'timeout' ? 504 : 502;
-        res.status(status).json({ error: err.message, kind: err.kind });
+        // gascity-dashboard-473: the 'spawn' kind wraps node's
+        // child_process "spawn <abs-path> ENOENT" which exposes the
+        // operator's PATH layout. validation/timeout carry pre-authored
+        // safe strings by ExecError construction (see backend/src/exec.ts),
+        // so they pass through.
+        const wireMessage =
+          err.kind === 'spawn' ? 'subprocess could not be started' : err.message;
+        if (err.kind === 'spawn') {
+          console.warn(`[maintainer] /api/maintainer/refresh spawn failed: ${err.message}`);
+        }
+        res.status(status).json({ error: wireMessage, kind: err.kind });
         return;
       }
       // gascity-dashboard-ayr: mirror the sr6 redaction. Non-ExecError
@@ -373,10 +383,23 @@ export function maintainerRouter({
       if (err instanceof ExecError) {
         const status =
           err.kind === 'validation' ? 400 : err.kind === 'timeout' ? 504 : 502;
-        res.status(status).json({ error: err.message, kind: err.kind });
+        // gascity-dashboard-473: spawn-arm host path redaction; see
+        // /refresh above for rationale.
+        const wireMessage =
+          err.kind === 'spawn' ? 'subprocess could not be started' : err.message;
+        if (err.kind === 'spawn') {
+          console.warn(`[maintainer] /api/maintainer/sling spawn failed: ${err.message}`);
+        }
+        res.status(status).json({ error: wireMessage, kind: err.kind });
         return;
       }
-      res.status(500).json({ error: (err as Error).message, kind: 'internal' });
+      // gascity-dashboard-473: mirror the ayr sr6 redaction on the
+      // catch-all 500. Raw err.message from unexpected throws can embed
+      // OS detail; details.name (Error class) is the only safe channel.
+      console.warn(`[maintainer] /api/maintainer/sling failed: ${(err as Error).message}`);
+      res
+        .status(500)
+        .json({ error: 'internal error', kind: 'internal', details: { name: (err as Error).name ?? 'Error' } });
     }
   });
 
