@@ -311,10 +311,11 @@ export function collectItems(envelope: MaintainerTriage): TriageItem[] {
  * "Needs PR only" filter) read one source of truth instead of
  * recomputing from linked_numbers + the items[] map.
  *
- * Run order matters: this must execute AFTER the issue→PR reverse
- * map in fetchTriage populates issue.linked_numbers, but the predicate
- * walks PR items directly so the issue-side reverse map is not
- * strictly required — included for clarity and parity with bs2.
+ * The predicate walks PR items directly (reading PR.linked_numbers,
+ * which mapPr populates from the PR body), so this function has no
+ * data dependency on the issue→PR reverse map that fetchTriage builds
+ * afterward. composeEnvelope still invokes this after fetchTriage
+ * returns the fully-assembled item list, for parity with bs2.
  *
  * Idempotent: safe to re-run; each call overwrites the field on every
  * item in the input.

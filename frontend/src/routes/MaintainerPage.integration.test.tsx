@@ -45,6 +45,8 @@ import { invalidateKey } from '../api/cache';
 import { MaintainerPage } from './Maintainer';
 // eslint-disable-next-line import/first
 import { ViewingAsProvider } from '../contexts/ViewingAsContext';
+// eslint-disable-next-line import/first
+import type { MaintainerTriage } from 'gas-city-dashboard-shared';
 
 const mockTriage = api.maintainerTriage as Mock;
 const mockSling = api.maintainerSling as Mock;
@@ -73,7 +75,7 @@ class NoopEventSource {
 const SYNTHETIC_ITEM_NUMBER = 4242;
 const SYNTHETIC_ITEM_URL = 'https://github.com/gastownhall/gascity/issues/4242';
 
-function syntheticEnvelope() {
+function syntheticEnvelope(): MaintainerTriage {
   return {
     computed_at: '2026-05-24T00:00:00.000Z',
     repo: 'gastownhall/gascity',
@@ -111,6 +113,7 @@ function syntheticEnvelope() {
             linked_numbers: [],
             html_url: SYNTHETIC_ITEM_URL,
             is_marked: false,
+            has_in_flight_pr: false,
           },
         ],
       },
