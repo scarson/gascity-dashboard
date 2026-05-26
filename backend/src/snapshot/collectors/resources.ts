@@ -68,6 +68,14 @@ function logCollectorError(
   phase: 'load' | 'fixture',
   err: unknown,
 ): void {
+  // GUARDRAIL (gascity-dashboard-tva): err.message can embed OS paths. Today
+  // this lands in journalctl, read only by the local operator, so it stays
+  // raw for debug fidelity. If off-host log shipping is ever wired (loki,
+  // datadog, journal-upload), the path redaction that gascity-dashboard-fhj
+  // stripped from the wire must be re-introduced AT THE LOGGER LAYER (a
+  // structured logger with path-like field redaction, or a forwarder
+  // transform) — NOT here. Per-site redaction is the wrong layer; it forces
+  // every log call to remember the policy.
   const message = err instanceof Error ? err.message : String(err);
   console.warn(`[snapshot] ${source}.${phase} failed: ${message}`);
 }
