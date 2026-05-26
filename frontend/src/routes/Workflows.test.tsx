@@ -81,7 +81,7 @@ function buildEnvelope(workflowsStatus: SourceStatus = 'fresh'): DashboardSnapsh
         fetchedAt: '2026-05-25T00:00:00.000Z',
         staleAt: '2026-05-25T00:01:00.000Z',
         error: null,
-        data: { totalActive: 0, runCounts: { total: 0, visible: 0, prReview: 0, designReview: 0, bugfix: 0, blocked: 0, other: 0 }, lanes: [], recentChanges: [] },
+        data: { totalActive: 0, runCounts: { total: 0, visible: 0, prReview: 0, designReview: 0, bugfix: 0, blocked: 0, other: 0 }, lanes: [], recentChanges: [], census: null },
       },
       github: { source: 'github', status: 'fixture', fetchedAt: null, staleAt: null, error: null, data: null },
       tokens: { source: 'tokens', status: 'fixture', fetchedAt: null, staleAt: null, error: null, data: null },
