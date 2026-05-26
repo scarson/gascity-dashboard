@@ -461,12 +461,22 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     assert.equal(h.calls.length, 0);
   });
 
-  test('gc sling non-zero exit surfaces as 502 with stderr', async () => {
+  // gascity-dashboard-k1y: the non-zero-exit SUCCESS-PATH branch (gc sling
+  // ran but exited non-zero) must NOT echo raw gc-sling stderr on the wire.
+  // gc-sling's stderr is implementation-defined and can carry host paths or
+  // sensitive context. Mirror the i53/473 redaction pattern: the wire carries
+  // kind:'upstream' + a fixed `details: { name: 'NonZeroExit' }` shape; the
+  // full stderr stays server-side (console.warn -> journalctl). The frontend
+  // routes on kind + status code only, never on details.stderr.
+  test('gc sling non-zero exit surfaces as 502 with redacted details (no raw stderr)', async () => {
+    // Fixture stderr deliberately embeds a host path so a leak would be
+    // observable as that path appearing anywhere in the response body.
+    const leakyStderr = 'gc: agent not found at /home/ds/secret/city/config.toml\n';
     h = await buildApp({
       sling: async () => ({
         exitCode: 1,
         stdout: '',
-        stderr: 'gc: agent not found\n',
+        stderr: leakyStderr,
         truncated: false,
         durationMs: 17,
       }),
@@ -479,9 +489,17 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     });
     assert.equal(res.status, 502);
     assert.equal(res.body.kind, 'upstream');
+    // The fixed redaction shape: name only, no stderr key.
+    assert.deepEqual(res.body.details, { name: 'NonZeroExit' });
     const details = res.body.details as { stderr?: string };
-    assert.ok(details.stderr?.includes('agent not found'));
+    assert.equal(details.stderr, undefined, 'response leaked stderr');
+    // No fragment of the raw stderr (incl. the host path) may appear anywhere
+    // in the serialised wire body.
+    const serialised = JSON.stringify(res.body);
+    assert.ok(!serialised.includes('/home/ds/secret'), 'response leaked host path');
+    assert.ok(!serialised.includes('agent not found'), 'response leaked raw stderr text');
 
+    // The forensic audit row still captures the real exit code (server-side).
     const rows = await readAudit(h.auditPath);
     assert.equal(rows.length, 1);
     assert.equal(rows[0]!.exit_code, 1);

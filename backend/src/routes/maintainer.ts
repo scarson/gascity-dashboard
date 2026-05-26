@@ -307,10 +307,20 @@ export function maintainerRouter({
         duration_ms: result.durationMs,
       });
       if (result.exitCode !== 0) {
+        // gascity-dashboard-k1y: do NOT echo raw gc-sling stderr on the wire.
+        // gc-sling's stderr is implementation-defined and can include host
+        // paths or sensitive context. Mirror the i53/473 redaction pattern
+        // (see agents.ts /prime and sanitise-error.ts): stderr stays
+        // server-side in console.warn for journalctl; the wire carries
+        // kind:'upstream' + a fixed `details: { name }` shape. The frontend
+        // routes on kind + status code only, never on details.stderr.
+        console.warn(
+          `[maintainer] /api/maintainer/sling non-zero exit ${result.exitCode}: ${result.stderr}`,
+        );
         res.status(502).json({
           error: `gc sling failed (${result.exitCode})`,
           kind: 'upstream',
-          details: { stderr: result.stderr.slice(0, 1024) },
+          details: { name: 'NonZeroExit' },
         });
         return;
       }
