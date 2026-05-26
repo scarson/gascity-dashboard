@@ -241,7 +241,15 @@ describe('SlungLink — inline workflow link for slung items', () => {
     expect(link?.getAttribute('aria-label')).toMatch(/slung to project-lead/);
   });
 
-  it('URL-encodes the resolved session_name so qualified names (rig/agent) link correctly', () => {
+  // gascity-dashboard-tgk: a resolved_session_name containing '/' is
+  // treated defensively as if it were null. encodeURIComponent would
+  // turn '/' into '%2F', but React Router's path matching is not
+  // guaranteed to leave that encoded slash intact when matching :slug —
+  // some configs normalize %2F back to '/' before matching, which splits
+  // the path and breaks the :slug capture. Rather than emit a link that
+  // may 404, SlungLink renders the same inline non-link path it uses for
+  // the null case.
+  it('renders inline "no session" error (no link) when resolved_session_name contains "/"', () => {
     const { container } = render(
       <MemoryRouter>
         <SlungLink
@@ -250,18 +258,20 @@ describe('SlungLink — inline workflow link for slung items', () => {
               slung_at: '2026-05-24T12:00:00.000Z',
               target: 'chief-of-staff',
               bead_id: null,
-              // Some session_names carry '/' as a rig delimiter; ensure
-              // encodeURIComponent still wraps it so React Router keeps
-              // the slug as a single :slug segment.
               resolved_session_name: 'hello-world/chief-of-staff',
             },
           }}
         />
       </MemoryRouter>,
     );
-    const link = container.querySelector('a');
-    // encodeURIComponent turns '/' into '%2F'.
-    expect(link?.getAttribute('href')).toBe('/agents/hello-world%2Fchief-of-staff');
+    // No link — a '/' in the slug is rejected at the rendering boundary.
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.textContent).toMatch(/no session for chief-of-staff/i);
+    // The accessible label (which differs from the visible text) must still
+    // name the role and reassure that the sling itself succeeded.
+    expect(
+      container.querySelector('[aria-label]')?.getAttribute('aria-label'),
+    ).toBe('no session for role chief-of-staff; sling itself succeeded');
   });
 
   // ── gascity-dashboard-55b: no-session error path ──────────────────

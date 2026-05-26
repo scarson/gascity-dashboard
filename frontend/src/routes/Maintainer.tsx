@@ -1121,24 +1121,26 @@ export function TriageScore({ item }: { item: Pick<TriageItem, 'triage_score' | 
 // a build that pre-dates this field has `slung: undefined`, and strict
 // `!== null` would let undefined pass into a property read and throw.
 //
-// Qualified-name handling (rig/agent session_names like
-// 'hello-world/chief-of-staff'): encodeURIComponent turns the '/' into
-// '%2F'. React Router v6 leaves percent-encoded path characters as-is
-// when matching `:slug`, so the encoded form arrives at useParams; the
-// existing AgentDetail.tsx wraps a try/catch decodeURIComponent around
-// the slug (it had to, for other reasons), so the round-trip lands the
-// canonical form in the page's lookup. Don't switch to a plain
-// `/agents/${slug}` template — that splits qualified names into two
-// path segments and breaks the route match.
+// Qualified-name guard (rig/agent session_names like
+// 'hello-world/chief-of-staff'): a resolved_session_name containing '/'
+// is rejected defensively and routed down the same inline non-link path
+// as the null case. encodeURIComponent would turn '/' into '%2F', but
+// React Router's path matching is NOT guaranteed to preserve an encoded
+// slash when matching `:slug` — some configs normalize %2F back to '/'
+// before matching, which splits the path into two segments and breaks
+// the :slug capture, yielding a 404-bound link. Rather than emit a link
+// that may not resolve, we surface the inline 'no session' affordance.
 export function SlungLink({ item }: { item: Pick<TriageItem, 'slung'> }) {
   if (item.slung == null) return null;
   const { target, resolved_session_name } = item.slung;
-  // No resolved session: render error rather than a 404-bound link.
-  // Treat both null (post-55b: resolution attempted, no match) and
-  // undefined (pre-55b on-disk shape) the same way — the operator's
-  // remediation is the same in both cases (spawn the agent or fix
-  // MAINTAINER_SLING_TARGET; then re-sling to refresh the resolution).
-  if (resolved_session_name == null) {
+  // No usable resolved session: render error rather than a 404-bound link.
+  // Treat all of these the same way — the operator's remediation is the
+  // same (spawn the agent or fix MAINTAINER_SLING_TARGET, then re-sling):
+  //   - null (post-55b: resolution attempted, no match)
+  //   - undefined (pre-55b on-disk shape, field absent)
+  //   - a value containing '/' (gascity-dashboard-tgk: can't be safely
+  //     encoded into a single :slug path segment, see comment above)
+  if (resolved_session_name == null || resolved_session_name.includes('/')) {
     return (
       <>
         <span aria-hidden>·</span>
