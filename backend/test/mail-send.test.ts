@@ -218,12 +218,18 @@ describe('POST /api/mail-send', { concurrency: false }, () => {
     assert.equal(h.calls.length, 0);
   });
 
-  test('gc mail send non-zero exit surfaces as 502 with stderr', async () => {
+  // gascity-dashboard-i0b: the non-zero-exit SUCCESS-path branch (exec
+  // resolved, but `gc mail send` returned non-zero) used to echo raw stderr
+  // on the wire — same threat-family as the 473 catch-arms. gc's stderr can
+  // embed host paths / socket paths / ENOENT. The wire must carry only the
+  // fixed details:{name:'NonZeroExit'} shape (mirroring agents.ts i53);
+  // full stderr is retained server-side via console.warn for journalctl.
+  test('gc mail send non-zero exit surfaces as 502 with redacted details', async () => {
     h = await buildApp({
       mailSend: async () => ({
         exitCode: 1,
         stdout: '',
-        stderr: 'gc: recipient mailbox not found\n',
+        stderr: 'gc: open /home/ds/.local/share/gc/mail.sock: ENOENT\n',
         truncated: false,
         durationMs: 15,
       }),
@@ -235,8 +241,17 @@ describe('POST /api/mail-send', { concurrency: false }, () => {
     });
     assert.equal(res.status, 502);
     assert.equal(res.body.kind, 'upstream');
-    const details = res.body.details as { stderr?: string };
-    assert.ok(details.stderr?.includes('recipient mailbox not found'));
+    const details = res.body.details as { stderr?: string; name?: string };
+    assert.equal(details.stderr, undefined, 'wire must not carry raw stderr');
+    assert.equal(
+      details.name,
+      'NonZeroExit',
+      'wire must carry the fixed details discriminator only',
+    );
+    const wire = JSON.stringify(res.body);
+    assert.ok(!wire.includes('/home/ds'), `response leaks operator home: ${wire}`);
+    assert.ok(!wire.includes('.sock'), `response leaks socket path: ${wire}`);
+    assert.ok(!wire.includes('ENOENT'), `response leaks OS errno: ${wire}`);
 
     const rows = await readAudit(h.auditPath);
     assert.equal(rows.length, 1);

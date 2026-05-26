@@ -183,10 +183,19 @@ async function runBeadAction(
       duration_ms: result.durationMs,
     });
     if (result.exitCode !== 0) {
+      // gascity-dashboard-i0b: do NOT echo raw stderr on the wire. gc's
+      // stderr is implementation-defined and can embed host paths / socket
+      // paths / ENOENT. Mirror the i53 (agents.ts) + 473 catch-arm pattern:
+      // stderr stays server-side in console.warn for journalctl; the wire
+      // carries kind + a fixed message plus details:{name} for shape parity
+      // with the catch-all 500.
+      console.warn(
+        `[beads] runBeadAction ${action} non-zero exit ${result.exitCode}: ${result.stderr}`,
+      );
       res.status(502).json({
         error: `gc command failed with exit ${result.exitCode}`,
         kind: 'upstream',
-        details: { stderr: result.stderr.slice(0, 1024) },
+        details: { name: 'NonZeroExit' },
       });
       return;
     }
