@@ -1,5 +1,9 @@
 import { Router } from 'express';
-import { ExecError, execAgentPrime } from '../exec.js';
+import {
+  ExecError,
+  execAgentPrime as defaultExecAgentPrime,
+} from '../exec.js';
+import type { ExecResult } from '../exec.js';
 import { recordAudit } from '../audit.js';
 
 // gascity-dashboard-vq7: per-agent prompt/directive surface. Read-only.
@@ -19,7 +23,25 @@ import { recordAudit } from '../audit.js';
 // "agent ... not found in city config" for unknown agents, exits 0 with
 // the composed prompt on success.
 
-export function agentsRouter(cityPath: string): Router {
+interface AgentsRouterOptions {
+  /** Optional city path forwarded to `gc prime --city=<path>`. */
+  cityPath?: string;
+  /**
+   * Injected `gc prime` runner. Defaults to the real exec wrapper; tests
+   * pass a stub. Mirrors the DI pattern used by maintainerRouter and
+   * mailSendRouter so the non-zero-exit redaction contract
+   * (gascity-dashboard-i53) is unit-testable without spawning gc.
+   */
+  execAgentPrime?: (alias: string, cityPath?: string) => Promise<ExecResult>;
+}
+
+export function agentsRouter(opts: AgentsRouterOptions | string = {}): Router {
+  // Back-compat shim: server.ts historically called agentsRouter(cityPath).
+  // Accept either the legacy string form or the new options object.
+  const normalised: AgentsRouterOptions =
+    typeof opts === 'string' ? { cityPath: opts } : opts;
+  const cityPath = normalised.cityPath;
+  const execAgentPrime = normalised.execAgentPrime ?? defaultExecAgentPrime;
   const router = Router();
 
   router.get('/:alias/prime', async (req, res) => {
@@ -46,11 +68,31 @@ export function agentsRouter(cityPath: string): Router {
         duration_ms: result.durationMs,
       });
       if (!exitOk) {
-        res.status(notFound ? 404 : 502).json({
-          error: notFound ? 'agent not configured' : `gc prime failed with exit ${result.exitCode}`,
-          kind: notFound ? 'not_found' : 'upstream',
-          details: { stderr },
-        });
+        // gascity-dashboard-i53: do NOT echo raw stderr to the client.
+        // gc prime's stderr is implementation-defined (up to 1024 bytes)
+        // and can include host paths or sensitive context. The frontend
+        // routes on `kind` + status code only (see AgentDetail.tsx:659
+        // — `error?.status === 404 || error?.kind === 'not_found'`),
+        // never on `details.stderr`. Mirror the 473 catch-arm pattern:
+        // stderr stays server-side in console.warn for journalctl
+        // debugging; the wire carries `kind` + a fixed error message,
+        // plus `details: { name }` on the upstream arm so the shape is
+        // consistent with the catch-all 500 below.
+        console.warn(
+          `[agents] /api/agents/${alias}/prime non-zero exit ${result.exitCode}: ${stderr}`,
+        );
+        if (notFound) {
+          res.status(404).json({
+            error: 'agent not configured',
+            kind: 'not_found',
+          });
+        } else {
+          res.status(502).json({
+            error: `gc prime failed with exit ${result.exitCode}`,
+            kind: 'upstream',
+            details: { name: 'NonZeroExit' },
+          });
+        }
         return;
       }
       res.setHeader('Cache-Control', 'no-store');

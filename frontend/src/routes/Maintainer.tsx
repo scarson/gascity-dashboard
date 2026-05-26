@@ -47,6 +47,10 @@ const FOCUS_KEY = 'maintainer:focusBreaking';
 // gascity-dashboard-omv: persists the "Needs PR only" filter toggle so
 // the operator's choice survives reloads / SSE refreshes.
 const NEEDS_PR_KEY = 'maintainer:needsPrOnly';
+// gascity-dashboard-x8q: persists the "Awaiting triage only" toggle so
+// the operator's choice survives reloads / SSE refreshes. Sibling of
+// FOCUS_KEY and NEEDS_PR_KEY; all three filters compose.
+const AWAITING_KEY = 'maintainer:awaitingOnly';
 
 /**
  * Pure filter helper for the "Needs PR only" toggle
@@ -74,6 +78,66 @@ export function filterTierByNeedsPr(section: TriageTierSection): TriageTierSecti
     clusters: filteredClusters,
     unclustered: section.unclustered.filter(needsPr),
   };
+}
+
+/**
+ * Pure filter helper for the "Awaiting triage only" toggle
+ * (gascity-dashboard-x8q). Returns a new TriageTierSection containing
+ * only items whose `triage_assessment` is absent — i.e. the unvetted
+ * backlog the operator wants to focus on. Both kinds (issue, PR) are
+ * kept; vetted-ness, not item type, is the filter axis. Clusters that
+ * become empty are dropped.
+ *
+ * Stale-cache safety: a pre-`are` envelope carries no
+ * `triage_assessment` field; loose `== null` matches both `null` and
+ * `undefined`, so legacy items default to "awaiting" — the
+ * conservative reading that surfaces work for triage rather than
+ * silently hiding it.
+ */
+export function filterTierByAwaitingTriage(
+  section: TriageTierSection,
+): TriageTierSection {
+  const awaiting = (item: TriageItem): boolean => item.triage_assessment == null;
+  const filteredClusters = section.clusters
+    .map((cluster) => ({
+      ...cluster,
+      items: cluster.items.filter(awaiting),
+    }))
+    .filter((cluster) => cluster.items.length > 0);
+  return {
+    ...section,
+    clusters: filteredClusters,
+    unclustered: section.unclustered.filter(awaiting),
+  };
+}
+
+/**
+ * Per-tier vetted / awaiting tally (gascity-dashboard-x8q). Drives the
+ * "N vetted · M awaiting" line in each tier header so the operator
+ * sees the size of the unvetted backlog without scanning rows.
+ *
+ * `vetted` counts items with a non-null `triage_assessment`; `awaiting`
+ * counts the rest. Loose `!= null` matches `filterTierByAwaitingTriage`
+ * so undefined-on-stale-cache items are counted as awaiting.
+ *
+ * Callers should compute this from the UNFILTERED tier and pass it
+ * into `TierSection` as a prop — toggling the awaiting-only chip must
+ * not rewrite the tally, it just hides vetted rows.
+ */
+export function countTierByVetted(
+  section: TriageTierSection,
+): { vetted: number; awaiting: number } {
+  let vetted = 0;
+  let awaiting = 0;
+  const tally = (item: TriageItem): void => {
+    if (item.triage_assessment != null) vetted += 1;
+    else awaiting += 1;
+  };
+  for (const item of section.unclustered) tally(item);
+  for (const cluster of section.clusters) {
+    for (const item of cluster.items) tally(item);
+  }
+  return { vetted, awaiting };
 }
 
 // Persists which tier / cluster headings the operator has collapsed.
@@ -183,6 +247,29 @@ export function MaintainerPage() {
       const next = !prev;
       try {
         localStorage.setItem(NEEDS_PR_KEY, next ? '1' : '0');
+      } catch {
+        /* skip */
+      }
+      return next;
+    });
+  }, []);
+
+  // gascity-dashboard-x8q: "Awaiting triage only" toggle. Sibling of
+  // focusBreaking + needsPrOnly; all three compose. When on, every
+  // tier section is restricted to items whose triage_assessment is
+  // still null — the unvetted backlog the operator wants to batch.
+  const [awaitingOnly, setAwaitingOnly] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(AWAITING_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleAwaitingOnly = useCallback(() => {
+    setAwaitingOnly((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(AWAITING_KEY, next ? '1' : '0');
       } catch {
         /* skip */
       }
@@ -310,6 +397,9 @@ export function MaintainerPage() {
             <Button size="sm" onClick={toggleNeedsPrOnly}>
               {needsPrOnly ? 'Show all items' : 'Needs PR only'}
             </Button>
+            <Button size="sm" onClick={toggleAwaitingOnly}>
+              {awaitingOnly ? 'Show vetted too' : 'Awaiting triage only'}
+            </Button>
             <Button size="sm" onClick={() => void handleRefresh()} disabled={refreshing}>
               {refreshing ? 'Refreshing' : 'Refresh from gh'}
             </Button>
@@ -325,19 +415,29 @@ export function MaintainerPage() {
           <div className="space-y-14">
             {data.tiers
               .filter((tier) => !focusBreaking || tier.tier === 'regression_breaking')
-              .map((tier) => (needsPrOnly ? filterTierByNeedsPr(tier) : tier))
-              .map((tier) => (
-                <TierSection
-                  key={tier.tier}
-                  section={tier}
-                  collapsed={collapse.isCollapsed(`tier:${tier.tier}`)}
-                  onToggle={() => collapse.toggle(`tier:${tier.tier}`)}
-                  isCollapsed={collapse.isCollapsed}
-                  toggleCluster={collapse.toggle}
-                  selection={selection}
-                  onToggleSelect={viewingAs.isOperator ? toggleSelection : null}
-                />
-              ))}
+              .map((tier) => {
+                // Counts are derived from the UNFILTERED tier so the
+                // 'N vetted · M awaiting' line in the header reflects the
+                // tier's actual shape, not the current filter view
+                // (gascity-dashboard-x8q).
+                const counts = countTierByVetted(tier);
+                let view = tier;
+                if (needsPrOnly) view = filterTierByNeedsPr(view);
+                if (awaitingOnly) view = filterTierByAwaitingTriage(view);
+                return (
+                  <TierSection
+                    key={tier.tier}
+                    section={view}
+                    counts={counts}
+                    collapsed={collapse.isCollapsed(`tier:${tier.tier}`)}
+                    onToggle={() => collapse.toggle(`tier:${tier.tier}`)}
+                    isCollapsed={collapse.isCollapsed}
+                    toggleCluster={collapse.toggle}
+                    selection={selection}
+                    onToggleSelect={viewingAs.isOperator ? toggleSelection : null}
+                  />
+                );
+              })}
           </div>
           <Footer computedAt={data.computed_at} />
           {viewingAs.isOperator && (selection.size > 0 || slingSuccess !== null) && (
@@ -480,8 +580,12 @@ export function SelectionActionBar({
 // the no-checkbox grid. Mail's `canSend` pattern at routes/Mail.tsx:423.
 type ToggleSelect = ((item: { kind: 'pr' | 'issue'; number: number }) => void) | null;
 
-function TierSection({
+// Exported so vitest can render the section in isolation for the
+// per-tier vetted/awaiting count assertions (gascity-dashboard-x8q).
+// Same pattern as the existing IssueRow export.
+export function TierSection({
   section,
+  counts,
   collapsed,
   onToggle,
   isCollapsed,
@@ -490,6 +594,11 @@ function TierSection({
   onToggleSelect,
 }: {
   section: TriageTierSection;
+  /** Vetted / awaiting tally for this tier. Computed by the caller from the
+   *  UNFILTERED tier so the header line stays stable when the awaiting-only
+   *  chip is toggled (gascity-dashboard-x8q). Optional for back-compat with
+   *  callers / tests that pre-date the counts line. */
+  counts?: { vetted: number; awaiting: number };
   collapsed: boolean;
   onToggle: () => void;
   isCollapsed: (id: string) => boolean;
@@ -520,8 +629,21 @@ function TierSection({
             <CollapseGlyph collapsed={collapsed} />
             {tierLabel(section.tier)}
           </h2>
-          <span className="text-label uppercase tracking-wider text-fg-muted tnum">
-            {itemCount} {itemCount === 1 ? 'item' : 'items'}
+          <span className="flex items-baseline gap-3 text-label uppercase tracking-wider text-fg-muted tnum">
+            {counts !== undefined && (
+              <>
+                <span
+                  title="vetted by a triage agent · awaiting an agent assessment"
+                >
+                  <span>{counts.vetted}</span> vetted <span aria-hidden>·</span>{' '}
+                  <span>{counts.awaiting}</span> awaiting
+                </span>
+                <span aria-hidden>·</span>
+              </>
+            )}
+            <span>
+              {itemCount} {itemCount === 1 ? 'item' : 'items'}
+            </span>
           </span>
         </button>
       </header>

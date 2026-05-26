@@ -81,7 +81,7 @@ function buildEnvelope(workflowsStatus: SourceStatus = 'fresh'): DashboardSnapsh
         fetchedAt: '2026-05-25T00:00:00.000Z',
         staleAt: '2026-05-25T00:01:00.000Z',
         error: null,
-        data: { totalActive: 0, runCounts: { total: 0, visible: 0, prReview: 0, designReview: 0, bugfix: 0, blocked: 0, other: 0 }, lanes: [], recentChanges: [] },
+        data: { totalActive: 0, runCounts: { total: 0, visible: 0, prReview: 0, designReview: 0, bugfix: 0, blocked: 0, other: 0 }, lanes: [], recentChanges: [], census: null },
       },
       github: { source: 'github', status: 'fixture', fetchedAt: null, staleAt: null, error: null, data: null },
       tokens: { source: 'tokens', status: 'fixture', fetchedAt: null, staleAt: null, error: null, data: null },
@@ -178,6 +178,38 @@ describe('WorkflowsPage — SSE wiring (gascity-dashboard-bqn)', () => {
     // that suppresses the leading edge entirely (count would be 0) is
     // caught loudly.
     expect(mockSnapshotRefresh.mock.calls.length).toBe(1);
+  });
+
+  it('fires a second snapshotRefresh once the debounce window elapses', async () => {
+    // Pins the trailing edge of the in-component debounce. The burst
+    // test above proves we collapse a flurry to one POST; this test
+    // proves we DON'T accidentally latch the gate shut forever. If a
+    // future refactor drops the `lastRefreshAtRef.current = Date.now()`
+    // reset (or fails to clear it on error), the second event would be
+    // silently swallowed and the page would stop receiving live updates
+    // until full reload. Catch that loudly here.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mount();
+    await waitForMount();
+    mockSnapshotRefresh.mockClear();
+
+    // Leading edge: one event, one POST.
+    await act(async () => {
+      lastHookCall.onMatch?.();
+    });
+    expect(mockSnapshotRefresh.mock.calls.length).toBe(1);
+
+    // Advance past the 10s debounce floor (REFRESH_DEBOUNCE_MS = 10_000
+    // in Workflows.tsx; +100ms cushion so we're unambiguously past it).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_100);
+    });
+
+    // Second event after the window must fire a second POST.
+    await act(async () => {
+      lastHookCall.onMatch?.();
+    });
+    expect(mockSnapshotRefresh.mock.calls.length).toBe(2);
   });
 
   it('SSE callback no-ops when workflows source status is not fresh', async () => {
