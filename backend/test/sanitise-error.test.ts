@@ -26,6 +26,23 @@ describe('toWireExecError — spawn redaction', () => {
     assert.equal(/ENOENT/.test(body.error), false);
   });
 
+  test('spawn kind redacts the exact exec.ts wrapper format (spawn failed: …)', () => {
+    // Mirror what exec.ts:170 actually constructs: `spawn failed: ${err.message}`
+    // where node's child_process message for an abs-path binary is
+    // `spawn <abs-path> ENOENT`. The wire must show neither the wrapper
+    // nor the leaked binary path.
+    const err = new ExecError(
+      'spawn failed: spawn /usr/local/opt/gc/bin/gc ENOENT',
+      'spawn',
+    );
+    const { status, body } = toWireExecError(err, 500);
+    assert.equal(status, 500);
+    assert.equal(body.error, 'subprocess could not be started');
+    assert.equal(body.kind, 'spawn');
+    assert.equal(/usr\/local\/opt\/gc\/bin/.test(JSON.stringify(body)), false);
+    assert.equal(/spawn failed/.test(JSON.stringify(body)), false);
+  });
+
   test('validation kind passes the (safe, pre-authored) message through', () => {
     const err = new ExecError('invalid agent alias', 'validation');
     const { status, body } = toWireExecError(err, 400);
