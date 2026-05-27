@@ -137,10 +137,16 @@ export interface EntityLinkView {
 
 /**
  * Build the namespaced, globally-unique node key (RK1 / OQ#1). Bead IDs
- * are unique within a single city today, but keying on `<type>:<scope>:<ref>`
- * future-proofs against rig-scoped collisions where the same bare ID can
- * recur across scopes. `scope` is the bead's `gc.scope_ref` (or the city
- * name as the default scope) so distinct-rig beads never collide.
+ * are unique within a single city today, but keying on
+ * `<type>:<scope>:<ref>` future-proofs against rig-scoped collisions where
+ * the same bare ID can recur across scopes.
+ *
+ * The PRD specifies `scope_kind:scope_ref:id` to avoid cross-scope
+ * collisions. `scope` MUST therefore already encode the bead's scope KIND
+ * as well as its ref (the backend passes `<scope_kind>:<scope_ref>`, e.g.
+ * `rig:rig-a` or `city:ds-research`). A bare `scope_ref` is insufficient:
+ * a city-scoped and a rig-scoped bead can share a `scope_ref` value and
+ * would otherwise collide.
  */
 export function makeNodeKey(
   type: LinkNodeType,

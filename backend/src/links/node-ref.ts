@@ -67,10 +67,11 @@ export function sanitiseUrl(raw: unknown): string | null {
 }
 
 /**
- * Namespaced node key. The scope defaults to the city name so a
- * single-scope city keys stably; a rig-scoped bead carries its own
- * scope_ref so distinct-rig beads of the same bare id never collide
- * (RK1 / OQ#1).
+ * Namespaced node key. `scope` already encodes kind+ref
+ * (`<scope_kind>:<scope_ref>`, e.g. `city:ds-research` or `rig:rig-a`;
+ * see relation-index.ts `beadScope`), so distinct-rig beads — and beads
+ * of differing scope KIND that share a bare ref — of the same bare id
+ * never collide (RK1 / OQ#1).
  */
 export function nodeKey(
   type: LinkNodeType,

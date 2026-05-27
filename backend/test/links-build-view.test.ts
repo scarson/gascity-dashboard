@@ -105,9 +105,10 @@ describe('buildLinkView (R2/R3/R4/R6/R7/R11)', () => {
     assert.equal(stat?.resolved, 0);
   });
 
-  test('R6: a session name matching two sessions renders as N candidates (focus on PR)', () => {
+  test('R6: a PR referenced by two beads renders as N candidates (focus on pr/5)', () => {
     // Two live beads reference the same PR number → focusing the PR yields
-    // two candidates for the focus, recorded as n-candidates (R11).
+    // two candidate beads for the focus, recorded as N candidates (R6)
+    // rather than guessing a single target.
     const beads = [
       bead('a', { 'pr_review.pr_number': '5' }),
       bead('b', { 'pr_review.pr_number': '5' }),
@@ -119,6 +120,9 @@ describe('buildLinkView (R2/R3/R4/R6/R7/R11)', () => {
     // The PR focus resolved to two candidate beads; the focus node records
     // the count rather than guessing a single target (R6).
     assert.equal(view.nodes[0]?.candidateCount, 2);
+    // Non-bead focus links one hop to the candidate bead(s) themselves.
+    const beadEdges = view.edges.filter((e) => e.relation === 'bead');
+    assert.equal(beadEdges.length, 2);
   });
 
   test('R7: section asOf is the older of two contributing sources', () => {
@@ -165,6 +169,93 @@ describe('buildLinkView (R2/R3/R4/R6/R7/R11)', () => {
     assert.equal(view.partial, true);
     assert.equal(view.nodes.length, 1, 'only the focus node');
     assert.equal(view.edges.length, 0);
+  });
+
+  test('non-bead focus: a present session with zero linked beads is a valid empty set (not partial/unresolved)', () => {
+    // A session that EXISTS in the snapshot but has no linked beads must
+    // resolve to an empty related-set, not be flagged unresolved/partial.
+    const index = buildRelationIndex([], [session('sess-empty')], 'c');
+    const view = buildLinkView(index, ok('sess-empty'));
+    assert.equal(view.focus.type, 'session');
+    assert.equal(view.partial, false, 'a resolved-but-empty focus is not partial');
+    const focusNode = nodeFor(view.nodes, (n) => n.key === view.focus.key);
+    assert.equal(focusNode.unresolved, false, 'a present session is resolved');
+    assert.equal(view.edges.length, 0, 'no adjacent beads → no edges');
+  });
+
+  test('non-bead focus: a ref matching neither bead nor present session is unresolvable + partial', () => {
+    const index = buildRelationIndex([bead('other')], [], 'c');
+    const view = buildLinkView(index, ok('ghost-session'));
+    assert.equal(view.partial, true);
+    const focusNode = nodeFor(view.nodes, (n) => n.key === view.focus.key);
+    assert.equal(focusNode.unresolved, true);
+    assert.equal(view.edges.length, 0);
+  });
+
+  test('non-bead focus: links one hop to the candidate bead, not the bead’s own parent/molecule', () => {
+    // Focusing a session links to its bead(s) themselves — NOT to those
+    // beads' parent/molecule, which are adjacent to the bead, not the
+    // session. Prevents showing a bead's parent as if adjacent to the
+    // session.
+    const beads = [
+      bead('worker', {
+        session_id: 'sess-1',
+        'gc.parent_bead_id': 'root',
+        molecule_id: 'mol-1',
+      }),
+      bead('root'),
+      bead('peer', { molecule_id: 'mol-1' }),
+    ];
+    const index = buildRelationIndex(beads, [session('sess-1')], 'c');
+    const view = buildLinkView(index, ok('sess-1'));
+    assert.equal(view.focus.type, 'session');
+    // Exactly one edge from the focus: session → its worker bead.
+    const fromFocus = view.edges.filter((e) => e.from === view.focus.key);
+    assert.equal(fromFocus.length, 1, 'one hop: session → worker bead only');
+    assert.equal(fromFocus[0]?.relation, 'bead');
+    // The worker bead's parent/molecule are NOT expanded from the session.
+    assert.equal(
+      view.edges.some((e) => e.relation === 'parent' || e.relation === 'molecule'),
+      false,
+      'no second-hop parent/molecule edges from a non-bead focus',
+    );
+  });
+
+  test('molecule: the molecule root bead is linked alongside peer members', () => {
+    // molecule_id is the workflow ROOT bead id; it should be linked as a
+    // navigable bead in addition to peer members.
+    const beads = [
+      bead('focus', { molecule_id: 'root-mol' }),
+      bead('root-mol'),
+      bead('peer', { molecule_id: 'root-mol' }),
+    ];
+    const index = buildRelationIndex(beads, [], 'c');
+    const view = buildLinkView(index, ok('focus'));
+    const molEdges = view.edges.filter((e) => e.relation === 'molecule');
+    const targets = new Set(molEdges.map((e) => e.to));
+    const rootNode = nodeFor(view.nodes, (n) => n.ref === 'root-mol');
+    const peerNode = nodeFor(view.nodes, (n) => n.ref === 'peer');
+    assert.ok(targets.has(rootNode.key), 'molecule root bead is linked');
+    assert.ok(targets.has(peerNode.key), 'peer member is linked');
+    // Root is linked exactly once (no double-count when it is also a member).
+    assert.equal(
+      molEdges.filter((e) => e.to === rootNode.key).length,
+      1,
+      'molecule root linked exactly once',
+    );
+  });
+
+  test('molecule: the root bead is not linked to itself when focus IS the root', () => {
+    const beads = [
+      bead('root-mol', { molecule_id: 'root-mol' }),
+      bead('member', { molecule_id: 'root-mol' }),
+    ];
+    const index = buildRelationIndex(beads, [], 'c');
+    const view = buildLinkView(index, ok('root-mol'));
+    const molEdges = view.edges.filter((e) => e.relation === 'molecule');
+    // Only the member is linked; the root does not link to itself.
+    assert.equal(molEdges.length, 1);
+    assert.equal(nodeFor(view.nodes, (n) => n.ref === 'member').ref, 'member');
   });
 
   test('R11: a resolved supervisor edge records a resolved outcome', () => {

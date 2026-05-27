@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import type { GcBead, GcSession } from 'gas-city-dashboard-shared';
+import { makeNodeKey } from 'gas-city-dashboard-shared';
 import { buildRelationIndex } from '../src/links/relation-index.js';
 
 // R1 + RK1 unit tests for the backend relation index.
@@ -88,11 +89,41 @@ describe('buildRelationIndex (R1)', () => {
       bead('rig-b-bead', { molecule_id: 'mol-2', 'gc.scope_ref': 'rig-b' }),
     ];
     const index = buildRelationIndex(beads, [], 'ds-research');
-    assert.equal(index.beads.get('rig-a-bead')?.scope, 'rig-a');
-    assert.equal(index.beads.get('rig-b-bead')?.scope, 'rig-b');
+    // The scope token encodes kind+ref (defaulting to `rig` kind when only
+    // a scope_ref is present) so distinct rigs never collide.
+    assert.equal(index.beads.get('rig-a-bead')?.scope, 'rig:rig-a');
+    assert.equal(index.beads.get('rig-b-bead')?.scope, 'rig:rig-b');
     // Distinct molecules don't merge.
     assert.deepEqual(index.membersOfMolecule.get('mol-1'), ['rig-a-bead']);
     assert.deepEqual(index.membersOfMolecule.get('mol-2'), ['rig-b-bead']);
+  });
+
+  test('OQ#1: same bare id under different scope_kind yields distinct node keys', () => {
+    // The actual cross-scope collision case the namespaced key prevents: a
+    // city-scoped bead and a rig-scoped bead sharing the SAME bare id and
+    // the SAME bare scope_ref. The bare id alone would collide; the scope
+    // token (kind+ref) keeps them distinct.
+    const cityBead = bead('shared-id', {
+      'gc.scope_kind': 'city',
+      'gc.scope_ref': 'overlap',
+    });
+    const rigBead = bead('shared-id', {
+      'gc.scope_kind': 'rig',
+      'gc.scope_ref': 'overlap',
+    });
+    const cityIndex = buildRelationIndex([cityBead], [], 'ds-research');
+    const rigIndex = buildRelationIndex([rigBead], [], 'ds-research');
+    const cityScope = cityIndex.beads.get('shared-id')?.scope;
+    const rigScope = rigIndex.beads.get('shared-id')?.scope;
+    assert.equal(cityScope, 'city:overlap');
+    assert.equal(rigScope, 'rig:overlap');
+    // Distinct scope tokens → distinct namespaced node keys for the same
+    // bare id, so the two beads never collide in the link view.
+    assert.notEqual(cityScope, rigScope);
+    assert.notEqual(
+      makeNodeKey('bead', 'shared-id', cityScope ?? ''),
+      makeNodeKey('bead', 'shared-id', rigScope ?? ''),
+    );
   });
 
   test('a bead with only one attempt is never superseded', () => {

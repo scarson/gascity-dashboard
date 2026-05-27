@@ -1,14 +1,16 @@
 import type { LinkResolutionStat } from 'gas-city-dashboard-shared';
 
-// R11 — resolution instrumentation with a NAMED consumer (RK4).
+// R11 — resolution instrumentation (RK4).
 //
 // Every link-view build records per-edge-type resolution outcomes into a
-// process-level rollup. The consumer is GET /api/links/_stats, surfaced in
-// the Activity/Health register, so deferred link directions (rich
-// GitHub→bead, more surfaces) are promoted on measured hit-rate, not
-// speculation. A nonzero n-candidates rate on an AUTHORITATIVE direction
-// (parent/molecule) is a correctness alarm — it means the namespaced key
-// failed to keep distinct-scope beads apart.
+// process-level rollup, exposed by the GET /api/links/_stats endpoint, so
+// deferred link directions (rich GitHub→bead, more surfaces) can be
+// promoted on measured hit-rate, not speculation. No frontend surface
+// consumes this endpoint in this PR — it is an out-of-band / future-use
+// endpoint (curl-able, or for a later Activity/Health register tile). A
+// nonzero n-candidates rate on an AUTHORITATIVE direction (parent/molecule)
+// is a correctness alarm — it means the namespaced key failed to keep
+// distinct-scope beads apart.
 //
 // Promote / kill thresholds (reviewed quarterly by the dashboard owner):
 //   - Promote rich GitHub→bead join when bead→PR resolution to a PRESENT

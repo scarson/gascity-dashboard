@@ -41,6 +41,21 @@ export function BeadDetailModal({
   const [error, setError] = useState<string | null>(null);
   const links = useEntityLinks(open ? beadId : null);
 
+  // Live clock for RelatedEntities staleness / "as of" (matches the
+  // setNow+interval pattern in AgentDetail / WorkflowRunDetail). A frozen
+  // Date.now() captured once would never re-tick while the modal stays
+  // open, so the relative ages would silently go stale. Only tick while
+  // the modal is open and the tab is visible.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!open) return;
+    setNow(Date.now());
+    const tick = setInterval(() => {
+      if (!document.hidden) setNow(Date.now());
+    }, 30_000);
+    return () => clearInterval(tick);
+  }, [open]);
+
   useEffect(() => {
     if (!open || !beadId) return;
     // If we already have the bead and it includes a description, skip the
@@ -114,7 +129,7 @@ export function BeadDetailModal({
             view={links.view}
             loading={links.loading}
             error={links.error}
-            now={Date.now()}
+            now={now}
             onOpenBead={onOpenBead}
           />
         </>

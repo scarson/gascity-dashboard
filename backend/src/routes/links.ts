@@ -16,10 +16,15 @@ import { toWireInternal500 } from '../lib/sanitise-error.js';
 // authoritative numbers, but the PR/issue entities are rendered as honest
 // unresolved rows — PG2 safety valve).
 //
-// GET /api/links/_stats — the R11 rollup consumer (RK4): per-edge-type
-// resolution rates for the Activity/Health register.
+// GET /api/links/_stats — the R11 rollup endpoint (RK4): per-edge-type
+// resolution rates. Out-of-band / future-use (curl-able); no frontend
+// surface consumes it in this PR.
 
-const LINKS_FETCH_LIMIT = 2000;
+// The supervisor's working set is ~2139 beads (see GcClient.listBeads), so
+// a 2000 limit silently truncates relations. Fetch comfortably above the
+// known working set; if the supervisor's reported `total` ever exceeds even
+// this, the view is marked `partial` (truncation is never silent).
+const LINKS_FETCH_LIMIT = 5000;
 
 export interface LinksRouterOptions {
   /** Process-scoped resolution rollup (R11). Defaults to a fresh instance. */
@@ -86,17 +91,28 @@ interface Sources {
 }
 
 /**
- * Fetch the bead set + session list with allSettled so a single failed
- * source degrades the view to `partial` rather than collapsing to a 5xx
- * (mirrors routes/workflows.ts). The bead list is the load-bearing
- * source: if it fails the request errors (no index is possible).
+ * Fetch the bead set + session list so a single failed source degrades the
+ * view to `partial` rather than collapsing to a 5xx (mirrors
+ * routes/workflows.ts). The bead list is the load-bearing source: if it
+ * fails the request errors (no index is possible).
+ *
+ * Truncation is never silent: if the supervisor reports a `total` larger
+ * than the fetched window, the view is marked `partial` so the operator
+ * knows relations may be incomplete (rather than the index quietly missing
+ * edges to beads beyond the limit).
  */
 async function fetchSources(gc: GcClient): Promise<Sources> {
   const supervisorFetchedAt = new Date().toISOString();
   const beadList = await gc.listBeads(undefined, { limit: LINKS_FETCH_LIMIT });
   const beads = Array.isArray(beadList.items) ? beadList.items : [];
-  let sessions: GcSession[] = [];
   let partial = false;
+  if (typeof beadList.total === 'number' && beadList.total > beads.length) {
+    console.warn(
+      `[links] bead set truncated: supervisor total ${beadList.total} > fetched ${beads.length}; serving partial`,
+    );
+    partial = true;
+  }
+  let sessions: GcSession[] = [];
   try {
     const sessionList = await gc.listSessions();
     sessions = Array.isArray(sessionList.items) ? sessionList.items : [];

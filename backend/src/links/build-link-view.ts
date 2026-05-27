@@ -141,9 +141,12 @@ export function buildLinkView(
   // Focus node itself is always present.
   addNode(acc, focusResult.focusNode);
 
-  // When the focus ref didn't resolve to a bead, the view is focus-only +
-  // partial (R3 acceptance: an unresolvable ref returns 200, not 500).
-  if (focusResult.beads.length === 0) {
+  // A ref that resolved to NO entity at all (no bead, no present session,
+  // no PR-referencing bead) is genuinely unresolvable → focus-only +
+  // partial (R3 acceptance: an unresolvable ref returns 200, not 500). A
+  // focus that DID resolve to a real entity but has zero adjacent beads is
+  // a valid empty related-set — not partial, not unresolved.
+  if (!focusResult.focusResolved) {
     view.partial = true;
     finalize(acc, supervisorFetchedAt, githubFetchedAt);
     return view;
@@ -151,8 +154,20 @@ export function buildLinkView(
 
   const fromKey = focusResult.focusNode.key;
 
-  for (const bead of focusResult.beads) {
-    addBeadEdges(acc, bead, fromKey, index, supervisorFetchedAt, githubFetchedAt);
+  if (focusResult.beadFocus) {
+    // Bead-shaped focus: expand the bead's own one-hop adjacency
+    // (parent/children/molecule/PR/issue/session) directly from the focus.
+    for (const bead of focusResult.beads) {
+      addBeadEdges(acc, bead, fromKey, index, supervisorFetchedAt, githubFetchedAt);
+    }
+  } else {
+    // Non-bead focus (PR/issue/session): the adjacent entities are the
+    // candidate bead(s) THEMSELVES, one hop from the focus. Do NOT expand
+    // those beads' parent/molecule/PR edges — those are adjacent to the
+    // bead, not to the PR/session, and would misrepresent adjacency.
+    for (const bead of focusResult.beads) {
+      linkBead(acc, fromKey, bead, 'bead', supervisorFetchedAt);
+    }
   }
 
   finalize(acc, supervisorFetchedAt, githubFetchedAt);
@@ -164,6 +179,21 @@ interface FocusResult {
   focusNode: LinkNode;
   /** The bead(s) the focus resolves to (1 normally; >1 only via reverse refs). */
   beads: IndexBead[];
+  /**
+   * True when the focus REF resolved to a real entity (a known bead, a
+   * session present in the snapshot, or a PR/issue with ≥1 referencing
+   * bead). A resolved focus with zero adjacent beads is a valid empty
+   * related-set — NOT `partial`, NOT `unresolved`. Only a ref that maps to
+   * no entity at all is unresolvable.
+   */
+  focusResolved: boolean;
+  /**
+   * True when the focus is bead-shaped (bead / session id / workflow id).
+   * A non-bead focus (PR/issue/session) links one hop to its candidate
+   * bead(s) only; it does NOT expand those beads' own parent/molecule
+   * edges (those are adjacent to the bead, not to the PR/session).
+   */
+  beadFocus: boolean;
 }
 
 function resolveFocus(
@@ -182,6 +212,9 @@ function resolveFocus(
       .map((id) => index.beads.get(id))
       .filter((b): b is IndexBead => b !== undefined);
     const focus: LinkNodeRef = { key: nodeKey(type, parsed.value, 'github'), type, ref };
+    // A PR/issue focus resolves iff at least one bead references it. The
+    // PR/issue entity itself is never in the fetched (open-only) set, so
+    // "resolved" here means "we found the beads it links to".
     return {
       focus,
       focusNode: {
@@ -194,6 +227,8 @@ function resolveFocus(
         ...(beads.length > 1 ? { candidateCount: beads.length } : {}),
       },
       beads,
+      focusResolved: beads.length > 0,
+      beadFocus: false,
     };
   }
 
@@ -214,12 +249,15 @@ function resolveFocus(
         unresolved: false,
       },
       beads: bead.superseded ? [] : [bead],
+      focusResolved: true,
+      beadFocus: true,
     };
   }
 
   // A bead-shaped ref with no matching bead may still be a session id.
   const beadsForSession = index.beadsForSession.get(parsed.value) ?? [];
-  if (beadsForSession.length > 0 || index.sessions.has(parsed.value)) {
+  const sessionPresent = index.sessions.has(parsed.value);
+  if (beadsForSession.length > 0 || sessionPresent) {
     const focus: LinkNodeRef = {
       key: nodeKey('session', parsed.value, 'session'),
       type: 'session',
@@ -228,6 +266,12 @@ function resolveFocus(
     const beads = beadsForSession
       .map((id) => index.beads.get(id))
       .filter((b): b is IndexBead => b !== undefined);
+    // A session that IS in the snapshot resolves even with zero linked
+    // beads — that is a valid empty related-set, not an unresolved focus.
+    // Only a bead-shaped ref that matched NEITHER a bead NOR a present
+    // session (i.e. matched purely via dangling beadsForSession entries)
+    // is treated as unresolvable.
+    const focusResolved = sessionPresent || beads.length > 0;
     return {
       focus,
       focusNode: {
@@ -236,9 +280,11 @@ function resolveFocus(
         status: index.sessions.get(parsed.value)?.state ?? null,
         url: null,
         fetchedAt: null,
-        unresolved: beads.length === 0,
+        unresolved: !focusResolved,
       },
       beads,
+      focusResolved,
+      beadFocus: false,
     };
   }
 
@@ -259,6 +305,8 @@ function resolveFocus(
       unresolved: true,
     },
     beads: [],
+    focusResolved: false,
+    beadFocus: true,
   };
 }
 
@@ -288,14 +336,19 @@ function addBeadEdges(
     if (child) linkBead(acc, fromKey, child, 'child', supervisorFetchedAt);
   }
 
-  // molecule membership
+  // molecule membership. `molecule_id` is the workflow ROOT bead id (see
+  // collectors/workflows.ts workflowRootId) and is usually a real
+  // navigable bead, so link the molecule root whenever it exists and isn't
+  // the current bead — in addition to the peer members.
   if (bead.moleculeId) {
+    // Peer members (excluding self and the root, which is linked
+    // separately below so it isn't double-counted in the stats/edges).
     const members = (index.membersOfMolecule.get(bead.moleculeId) ?? []).filter(
-      (id) => id !== bead.id,
+      (id) => id !== bead.id && id !== bead.moleculeId,
     );
-    if (members.length === 0 && index.beads.has(bead.moleculeId)) {
-      const mol = index.beads.get(bead.moleculeId);
-      if (mol) linkBead(acc, fromKey, mol, 'molecule', supervisorFetchedAt);
+    if (bead.moleculeId !== bead.id) {
+      const root = index.beads.get(bead.moleculeId);
+      if (root) linkBead(acc, fromKey, root, 'molecule', supervisorFetchedAt);
     }
     for (const id of members) {
       const member = index.beads.get(id);

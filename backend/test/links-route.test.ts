@@ -28,11 +28,16 @@ class StubGcClient extends GcClient {
   constructor(
     private readonly stubBeads: GcBead[],
     private readonly sessionsThrow = false,
+    /** Override the reported supervisor total (defaults to items.length). */
+    private readonly reportedTotal?: number,
   ) {
     super({ baseUrl: 'http://127.0.0.1:1', cityName: 'ds-research' });
   }
   override async listBeads(): Promise<GcBeadList> {
-    return { items: this.stubBeads, total: this.stubBeads.length };
+    return {
+      items: this.stubBeads,
+      total: this.reportedTotal ?? this.stubBeads.length,
+    };
   }
   override async listSessions(): Promise<GcSessionList> {
     if (this.sessionsThrow) throw new Error('sessions down');
@@ -45,10 +50,14 @@ interface AppHandle {
   close: () => Promise<void>;
 }
 
-async function buildApp(beads: GcBead[], sessionsThrow = false): Promise<AppHandle> {
+async function buildApp(
+  beads: GcBead[],
+  sessionsThrow = false,
+  reportedTotal?: number,
+): Promise<AppHandle> {
   const app = express();
   app.use(express.json());
-  app.use('/api/links', linksRouter(new StubGcClient(beads, sessionsThrow)));
+  app.use('/api/links', linksRouter(new StubGcClient(beads, sessionsThrow, reportedTotal)));
   return new Promise((resolve) => {
     const srv = app.listen(0, '127.0.0.1', () => {
       const port = (srv.address() as AddressInfo).port;
@@ -114,6 +123,23 @@ describe('GET /api/links/:ref (R3)', () => {
     const { status, body } = await getJson(`${h.url}/api/links/focus`);
     assert.equal(status, 200);
     assert.equal(body.partial, true);
+  });
+
+  test('a truncated bead set (supervisor total > fetched) degrades to partial', async () => {
+    // Supervisor reports more beads than were returned in the fetch window
+    // → relations may be missing edges to beads beyond the limit, so the
+    // view must be flagged partial (truncation is never silent).
+    h = await buildApp([bead('focus')], false, 9999);
+    const { status, body } = await getJson(`${h.url}/api/links/focus`);
+    assert.equal(status, 200);
+    assert.equal(body.partial, true, 'truncated bead set must mark the view partial');
+  });
+
+  test('a fully-fetched bead set (total === fetched) is not partial', async () => {
+    h = await buildApp([bead('focus', { 'gc.parent_bead_id': 'root' }), bead('root')]);
+    const { status, body } = await getJson(`${h.url}/api/links/focus`);
+    assert.equal(status, 200);
+    assert.equal(body.partial, false);
   });
 
   test('_stats returns the resolution rollup', async () => {
