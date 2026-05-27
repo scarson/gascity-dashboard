@@ -3,12 +3,7 @@ import type {
   WorkflowDisplayNode,
   WorkflowExecutionInstance,
 } from 'gas-city-dashboard-shared';
-import { SessionPeekContent } from '../SessionPeek';
-import { StatusBadge, type StatusTone } from '../StatusBadge';
-import {
-  useSessionStream,
-  type SessionStreamConnState,
-} from '../../hooks/useSessionStream';
+import { LiveSessionPeek } from '../LiveSessionPeek';
 
 interface WorkflowNodeSessionPanelProps {
   node: WorkflowDisplayNode | null;
@@ -140,39 +135,15 @@ function SessionTranscript({
 }) {
   const sessionId = instance.sessionLink?.sessionId ?? null;
   const stream = visible && Boolean(instance.streamable);
-  const { result, loading, error, streamState } = useSessionStream(sessionId, stream);
-  const badge = streamBadge(streamState);
   return (
-    <div className="mt-5 space-y-4">
-      {instance.streamable && (
-        <div className="flex justify-end">
-          <StatusBadge
-            tone={badge.tone}
-            label={badge.label}
-            title={`Session stream: ${streamState}`}
-            className="text-label uppercase tracking-wider"
-          />
-        </div>
-      )}
-      <SessionPeekContent loading={loading} error={error} result={result} />
+    <div className="mt-5">
+      <LiveSessionPeek
+        sessionId={sessionId}
+        stream={stream}
+        showBadge={Boolean(instance.streamable)}
+      />
     </div>
   );
-}
-
-function streamBadge(state: SessionStreamConnState): {
-  tone: StatusTone;
-  label: string;
-} {
-  switch (state) {
-    case 'open':
-      return { tone: 'ok', label: 'live' };
-    case 'connecting':
-      return { tone: 'warn', label: 'connecting' };
-    case 'closed':
-      return { tone: 'stuck', label: 'offline' };
-    case 'idle':
-      return { tone: 'neutral', label: 'snapshot' };
-  }
 }
 
 function preferredInstance(
