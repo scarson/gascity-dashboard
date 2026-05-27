@@ -19,7 +19,7 @@ An editorial-typographic ambient dashboard surfacing live state from a [Gas City
 
 Published at **github.com/sjarmak/gascity-dashboard**. The working remote is named `origin`; land feature work on branches and open PRs against `main`.
 
-`main` is branch-protected — land work via a PR that passes CI (`.github/workflows`); you cannot push straight to `main`. **Match CI locally before pushing or the merge blocks:** the root `npm run typecheck` covers only each workspace's *app* tsconfig, but CI also runs `typecheck:test` (backend + frontend), `frontend run build`, and both test suites. A change to a `shared` wire-shape type breaks `*.test.ts(x)` fixtures the app typecheck never sees — run both `typecheck:test`s too.
+`main` is branch-protected — land work via a PR that passes CI (`.github/workflows`); you cannot push straight to `main`. **Match CI locally before pushing or the merge blocks:** the root `npm run typecheck` covers only each workspace's _app_ tsconfig, but CI also runs `typecheck:test` (backend + frontend), `frontend run build`, and both test suites. A change to a `shared` wire-shape type breaks `*.test.ts(x)` fixtures the app typecheck never sees — run both `typecheck:test`s too.
 
 ## Gotchas the code won't tell you
 
@@ -31,3 +31,65 @@ Published at **github.com/sjarmak/gascity-dashboard**. The working remote is nam
 ## Issue tracking
 
 Work items live in **`bd` (beads)** in an embedded-dolt store at `.beads/`, isolated from the gc supervisor — these beads are **not** in the dashboard's own `/api/beads` view, and `.beads/` has no Dolt remote yet, so bead state is local-only. Anything that outlives the current task goes in `bd` (`bd ready` / `show` / `update --claim` / `close`), not scattered TODO comments.
+
+## Architecture Best Practices
+
+These apply to all code in this project — frontend and server:
+
+- **TDD (Test-Driven Development)** - write the tests first; the implementation
+  code isn't done until the tests pass.
+- **Consider First Principles** to assess your current architecture against the
+  one you'd use if you started over from scratch.
+- **Leverage Types** using statically typed languages (TypeScript, Rust, etc) so
+  that we can leverage the power of the compiler as guardrails and immediate
+  feedback on our code at build-time instead of waiting until run-time.
+- **DRY (Don’t Repeat Yourself)** – eliminate duplicated logic by extracting
+  shared utilities and modules.
+- **Separation of Concerns** – each module should handle one distinct
+  responsibility.
+- **Single Responsibility Principle (SRP)** – every class/module/function/file
+  should have exactly one reason to change.
+- **Clear Abstractions & Contracts** – expose intent through small, stable
+  interfaces and hide implementation details.
+- **Low Coupling, High Cohesion** – keep modules self-contained, minimize
+  cross-dependencies.
+- **Scalability & Statelessness** – design components to scale horizontally and
+  prefer stateless services when possible.
+- **Observability & Testability** – build in logging, metrics, tracing, and
+  ensure components can be unit/integration tested.
+- **KISS (Keep It Simple, Sir)** - keep solutions as simple as possible.
+- **YAGNI (You're Not Gonna Need It)** – avoid speculative complexity or
+  over-engineering.
+- **Don't Swallow Errors** by catching exceptions, silently filling in required
+  but missing values, masking deserialization with nulls or empty lists, or
+  ignoring timeouts when something hangs. All of those are errors (client-side
+  and server-side) and must be tracked in a centralized log so it can be used to
+  improve the app over time. Also, inform the user as appropriate so that they
+  can take necessary action.
+- **No Placeholder Code** - we're building production code here, not toys.
+- **No Comments for Removed Functionality** - the source is not the place to
+  keep history of what's changed; it's the place to implement the current
+  requirements only.
+- **Layered Architecture** - organize code into clear tiers where each layer
+  depends only on the one(s) below it, keeping logic cleanly separated.
+- **Use Non-Nullable Variables** when possible; use nullability only when there
+  is NO other possiblity.
+- **Use Async Notifications** when possible over inefficient polling.
+- **Eliminate Race Conditions** that might cause dropped or corrupted data
+- **Write for Maintainability** so that the code is clear and readable and easy
+  to maintain by future developers.
+- **Arrange Project Idiomatically** for the language and framework being used,
+  including recommended lints, static analysis tools, folder structure and
+  gitignore entries.
+- **Keep Serialization/Deserialization At The Edges** to make full use of
+  type-safe objects in the app itself and to centralize error handling for
+  type-system translation. Do NOT allow untyped data with known shapes to flow
+  through the system and subvert the type system.
+- **Prefer Well-Known, High Quality OSS Libraries** instead of hand-rolling your
+  own behavior to get more robust, better maintained and better tested results.
+- **Treat Static Warnings And Info As Errors To Be Fixed**. The whole point of
+  static checking (linting, compilers, etc) is that they surface issues at
+  build-time so that they can be fixed now instead of lead to errors at runtime.
+  Take advantage of that feedback to fix those errors!
+- **Use Centralized Semantic Constant Values** using enums and constants instead
+  of spreading magic numbers through-out the code.
