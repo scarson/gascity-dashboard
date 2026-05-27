@@ -111,7 +111,10 @@ function main(): void {
       slungStatePath: maintainerSlungStatePath,
       slingTarget: config.maintainerSlingTarget,
       triageTarget: config.maintainerTriageTarget,
-      cityPath: config.cityPath,
+      // gascity-dashboard-mq2: sling over HTTP via the supervisor's
+      // POST /sling endpoint instead of the gc CLI subprocess. The city is
+      // in the request URL path, so no --city threading is needed.
+      sling: (input) => gc.sling(input),
       // gascity-dashboard-55b: resolve sling target role to a concrete
       // supervisor session at write time so the inline 'slung →' link
       // lands on a real /agents/<session_name> route. Wrapped in a 3s

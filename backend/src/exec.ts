@@ -337,50 +337,6 @@ export async function execMailSend(
   }
 }
 
-/**
- * `gc sling <target> <text>` — auto-creates a bead from text and routes it
- * to the named agent. Used by POST /api/maintainer/sling (gascity-dashboard-ib5)
- * for the maintainer's "review this PR / draft from issue / triage this"
- * inline actions.
- *
- * v1 ships text-only (no --formula); the templated text carries the URL +
- * intent verb and the receiving agent figures out the rest. A
- * formula-driven sibling (execGcSlingFormula) is the natural follow-up
- * when bead 6fp lands the formula dropdown UI.
- *
- * 4KB text cap is comfortably above the longest possible templated body
- * (~80 chars) and well under runExec's 100KB stdout cap.
- */
-export async function execGcSling(
-  target: string,
-  beadText: string,
-  cityPath?: string,
-): Promise<ExecResult> {
-  if (!AGENT_ALIAS_RE.test(target)) {
-    throw new ExecError('invalid sling target', 'validation');
-  }
-  if (beadText.length === 0 || beadText.length > 4 * 1024) {
-    throw new ExecError('sling text must be 1–4096 chars', 'validation');
-  }
-  const args: string[] = ['sling'];
-  if (cityPath !== undefined && cityPath.length > 0) {
-    if (!cityPath.startsWith('/') || cityPath.includes('..')) {
-      throw new ExecError('invalid city path', 'validation');
-    }
-    args.push(`--city=${cityPath}`);
-  }
-  args.push(target, beadText);
-  await acquireSlot();
-  try {
-    // gc sling does meaningful work — creates a bead, attaches a formula
-    // wisp, dispatches to the target rig — measured ~30s end-to-end on
-    // this dashboard's deployment. 60s gives ~2x headroom.
-    return await runExec('gc', args, 60_000);
-  } finally {
-    releaseSlot();
-  }
-}
-
 // Hardcoded enum of `git log` invocations. Each view's args live entirely
 // in this file — the operator cannot pass arbitrary git arguments to the
 // server. The caller can only pick a view *name* (validated upstream).

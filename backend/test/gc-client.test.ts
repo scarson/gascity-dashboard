@@ -270,3 +270,69 @@ describe('GcClient error handling', () => {
     assert.doesNotMatch(msg, /secret-city/, `message leaked city name: ${msg}`);
   });
 });
+
+// gascity-dashboard-mq2: GcClient.sling POSTs to the supervisor's write
+// endpoint in place of the `gc sling` CLI subprocess.
+describe('GcClient.sling', () => {
+  let fake: Fake;
+  beforeEach(async () => {
+    fake = await startFake();
+  });
+  afterEach(async () => {
+    await fake.close();
+  });
+
+  test('POSTs to the city sling endpoint with the CSRF header + JSON body, parses the response', async () => {
+    let method: string | undefined;
+    let url: string | undefined;
+    let csrf: string | undefined;
+    let contentType: string | undefined;
+    let bodyRaw = '';
+    fake.setHandler((req, res) => {
+      method = req.method;
+      url = req.url;
+      csrf = req.headers['x-gc-request'] as string | undefined;
+      contentType = req.headers['content-type'] as string | undefined;
+      req.on('data', (c) => (bodyRaw += c));
+      req.on('end', () => {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ root_bead_id: 'gc-900', target: 'mayor', status: 'ok' }));
+      });
+    });
+    const gc = new GcClient({ baseUrl: fake.baseUrl, cityName: 'test-city', defaultTimeoutMs: 5_000 });
+
+    const out = await gc.sling({ target: 'mayor', bead: 'Please review PR https://x/pull/1' });
+
+    assert.equal(method, 'POST');
+    assert.equal(url, '/v0/city/test-city/sling');
+    // Anti-CSRF presence header — any non-empty value (the supervisor only
+    // checks presence), so assert it's a non-empty string.
+    assert.ok(csrf && csrf.length > 0, 'X-GC-Request header must be present');
+    assert.match(contentType ?? '', /application\/json/);
+    assert.deepEqual(JSON.parse(bodyRaw), {
+      target: 'mayor',
+      bead: 'Please review PR https://x/pull/1',
+    });
+    assert.equal(out.root_bead_id, 'gc-900');
+  });
+
+  test('non-2xx throws a redacted error (status only, no topology)', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 502;
+      res.end('boom');
+    });
+    const gc = new GcClient({ baseUrl: fake.baseUrl, cityName: 'secret-city', defaultTimeoutMs: 5_000 });
+    let err: unknown;
+    try {
+      await gc.sling({ target: 'mayor', bead: 'x' });
+    } catch (e) {
+      err = e;
+    }
+    assert.ok(err instanceof Error, 'expected an Error rejection');
+    const msg = (err as Error).message;
+    assert.match(msg, /502/);
+    assert.doesNotMatch(msg, /secret-city/, `message leaked city name: ${msg}`);
+    assert.doesNotMatch(msg, /127\.0\.0\.1/, `message leaked loopback address: ${msg}`);
+  });
+});

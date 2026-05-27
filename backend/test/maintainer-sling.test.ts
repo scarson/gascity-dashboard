@@ -5,46 +5,41 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
-import type { ExecResult } from '../src/exec.js';
+// ExecError is still used by the /refresh tests below — that route shells
+// `gh` (execGhIssueList) and maps ExecError kinds to wire codes. The /sling
+// path no longer throws ExecError (it POSTs to the supervisor via GcClient).
 import { ExecError } from '../src/exec.js';
 import { maintainerRouter } from '../src/routes/maintainer.js';
 import { setAuditLogPath } from '../src/audit.js';
 import { readSlungState, slungKey, writeSlungEntry } from '../src/maintainer/slung-state.js';
-import type { GcSession, MaintainerTriage, TriageItem } from 'gas-city-dashboard-shared';
+import type {
+  GcSession,
+  MaintainerTriage,
+  SlingInput,
+  SlingResponse,
+  TriageItem,
+} from 'gas-city-dashboard-shared';
 import { makePr } from './fixtures/triage-item.js';
 
-// Tests for POST /api/maintainer/sling (gascity-dashboard-ib5).
-//
-// Harness shape: own app skeleton (the routes.test.ts buildApp() targets
-// a fake gc-supervisor HTTP server, which doesn't apply to a route that
-// shells out via execGcSling). The route accepts execGcSling via DI so
-// tests can stub without module mocking; audit assertions hit a tmp file
-// via setAuditLogPath.
+// Tests for POST /api/maintainer/sling (gascity-dashboard-ib5,
+// gascity-dashboard-mq2). The route POSTs to the supervisor's /sling
+// endpoint via GcClient; the router accepts the `sling` fn via DI so tests
+// can stub the HTTP call without standing up a fake supervisor. Audit
+// assertions hit a tmp file via setAuditLogPath.
 
-type SlingStub = (
-  target: string,
-  beadText: string,
-  cityPath?: string,
-) => Promise<ExecResult>;
-
-interface StubCall {
-  target: string;
-  beadText: string;
-  cityPath?: string;
-}
+type SlingStub = (input: SlingInput) => Promise<SlingResponse>;
 
 interface AppHandle {
   url: string;
   close: () => Promise<void>;
   auditPath: string;
-  calls: StubCall[];
+  calls: SlingInput[];
 }
 
 interface BuildOpts {
   sling?: SlingStub;
   slingTarget?: string;
   triageTarget?: string;
-  cityPath?: string;
   /**
    * gascity-dashboard-55b: injected supervisor sessions fetcher used by
    * the sling handler to resolve the target role into a concrete
@@ -56,8 +51,8 @@ interface BuildOpts {
   listSessions?: () => Promise<readonly GcSession[]>;
   /**
    * gascity-dashboard-ayr: injected fetchTriage so the /refresh failure
-   * path can be exercised without spawning gh. Mirrors the execGcSling
-   * DI pattern. When omitted, the route uses the real implementation.
+   * path can be exercised without spawning gh. When omitted, the route
+   * uses the real implementation.
    */
   fetchTriage?: (repo: string) => Promise<MaintainerTriage>;
 }
@@ -67,27 +62,19 @@ async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
   const auditPath = path.join(tmpDir, 'events.jsonl');
   setAuditLogPath(auditPath);
 
-  const calls: StubCall[] = [];
-  // gascity-dashboard-wds: modern `gc sling` stdout is a multi-line
-  // envelope ending with "Slung <id> (with default formula ...) → <target>".
-  // The bead_id extractor anchors on that final line, so the default stub
-  // mirrors the real CLI shape.
-  const defaultStub: SlingStub = async () => ({
-    exitCode: 0,
-    stdout: [
-      'Created gc-255139 — "Please review PR https://example/pull/1"',
-      'Auto-convoy gc-255141',
-      'Attached wisp gc-255140 (formula "mol-focus-review") to gc-255139',
-      'Slung gc-255139 (with default formula "mol-focus-review") → oversight-rig.chief-of-staff',
-      '',
-    ].join('\n'),
-    stderr: '',
-    truncated: false,
-    durationMs: 42,
+  const calls: SlingInput[] = [];
+  // The supervisor's /sling returns a SlingResponse; root_bead_id is the
+  // routed bead the route records in slung-state (replaces the old
+  // ^Slung-stdout parse).
+  const defaultStub: SlingStub = async (input) => ({
+    root_bead_id: 'gc-255139',
+    bead: 'gc-255139',
+    target: input.target,
+    status: 'ok',
   });
-  const sling: SlingStub = async (target, beadText, cityPath) => {
-    calls.push({ target, beadText, cityPath });
-    return (opts.sling ?? defaultStub)(target, beadText, cityPath);
+  const sling: SlingStub = async (input) => {
+    calls.push(input);
+    return (opts.sling ?? defaultStub)(input);
   };
 
   const app = express();
@@ -99,8 +86,7 @@ async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
       cachePath: path.join(tmpDir, 'cache.json'),
       slingTarget: opts.slingTarget ?? 'mayor',
       triageTarget: opts.triageTarget,
-      cityPath: opts.cityPath,
-      execGcSling: sling,
+      sling,
       listSessions: opts.listSessions,
       fetchTriage: opts.fetchTriage,
     }),
@@ -200,7 +186,7 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     const call = h.calls[0]!;
     assert.equal(call.target, 'mayor');
     assert.equal(
-      call.beadText,
+      call.bead,
       'Please review PR https://github.com/gastownhall/gascity/pull/47',
     );
 
@@ -210,7 +196,9 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     assert.equal(row.type, 'dashboard.sling');
     assert.equal(row.endpoint, 'POST /api/maintainer/sling');
     assert.equal(row.actor, 'stephanie');
-    assert.equal(row.exit_code, 0);
+    // gascity-dashboard-mq2: the HTTP sling has no subprocess exit code;
+    // the success audit records duration only.
+    assert.equal('exit_code' in row, false);
     assert.equal(typeof row.duration_ms, 'number');
     const parsed = row.parsed_args as Record<string, string>;
     assert.equal(parsed.kind, 'pr');
@@ -237,7 +225,7 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     assert.equal(res.status, 200);
     assert.equal(h.calls.length, 1);
     assert.equal(
-      h.calls[0]!.beadText,
+      h.calls[0]!.bead,
       'Please draft a PR addressing https://github.com/gastownhall/gascity/issues/12',
     );
   });
@@ -253,7 +241,7 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     assert.equal(res.status, 200);
     assert.equal(h.calls.length, 1);
     assert.equal(
-      h.calls[0]!.beadText,
+      h.calls[0]!.bead,
       'Please triage https://github.com/gastownhall/gascity/pull/99',
     );
   });
@@ -460,25 +448,17 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     assert.equal(h.calls.length, 0);
   });
 
-  // gascity-dashboard-k1y: the non-zero-exit SUCCESS-PATH branch (gc sling
-  // ran but exited non-zero) must NOT echo raw gc-sling stderr on the wire.
-  // gc-sling's stderr is implementation-defined and can carry host paths or
-  // sensitive context. Mirror the i53/473 redaction pattern: the wire carries
-  // kind:'upstream' + a fixed `details: { name: 'NonZeroExit' }` shape; the
-  // full stderr stays server-side (console.warn -> journalctl). The frontend
-  // routes on kind + status code only, never on details.stderr.
-  test('gc sling non-zero exit surfaces as 502 with redacted details (no raw stderr)', async () => {
-    // Fixture stderr deliberately embeds a host path so a leak would be
-    // observable as that path appearing anywhere in the response body.
-    const leakyStderr = 'gc: agent not found at /home/ds/secret/city/config.toml\n';
+  // gascity-dashboard-mq2: the sling is an HTTP POST to the supervisor.
+  // A non-2xx from the supervisor surfaces as GcClient throwing
+  // `gc supervisor returned NNN` — that message can embed topology detail,
+  // so the wire must carry only kind:'upstream' + details.name; the raw
+  // message stays server-side (console.warn -> journalctl).
+  test('supervisor non-2xx surfaces as 502 with redacted details (no raw message)', async () => {
     h = await buildApp({
-      sling: async () => ({
-        exitCode: 1,
-        stdout: '',
-        stderr: leakyStderr,
-        truncated: false,
-        durationMs: 17,
-      }),
+      sling: async () => {
+        // Mirrors GcClient.postJson on a non-ok response.
+        throw new Error('gc supervisor returned 502');
+      },
     });
     const res = await postJson(`${h.url}/api/maintainer/sling`, {
       kind: 'pr',
@@ -488,58 +468,28 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     });
     assert.equal(res.status, 502);
     assert.equal(res.body.kind, 'upstream');
-    // The fixed redaction shape: name only, no stderr key. deepEqual pins
-    // the entire object, so a stray stderr key cannot slip through.
-    assert.deepEqual(res.body.details, { name: 'NonZeroExit' });
-    // No fragment of the raw stderr (incl. the host path) may appear anywhere
-    // in the serialised wire body.
+    // Only details.name (the Error class) reaches the wire — never the raw
+    // message that could carry the supervisor status/topology.
+    assert.deepEqual(res.body.details, { name: 'Error' });
     const serialised = JSON.stringify(res.body);
-    assert.ok(!serialised.includes('/home/ds/secret'), 'response leaked host path');
-    assert.ok(!serialised.includes('agent not found'), 'response leaked raw stderr text');
+    assert.ok(!serialised.includes('supervisor returned'), 'response leaked raw upstream message');
 
-    // The forensic audit row still captures the real exit code (server-side).
+    // gascity-dashboard-ur0: the throw still leaves a forensic audit row.
     const rows = await readAudit(h.auditPath);
     assert.equal(rows.length, 1);
-    assert.equal(rows[0]!.exit_code, 1);
-  });
-
-  test('ExecError validation (from exec) surfaces as 400 — post-dispatch boundary', async () => {
-    h = await buildApp({
-      sling: async () => {
-        throw new ExecError('invalid target', 'validation');
-      },
-    });
-    const res = await postJson(`${h.url}/api/maintainer/sling`, {
-      kind: 'pr',
-      number: 1,
-      html_url: 'https://github.com/gastownhall/gascity/pull/1',
-      intent: 'review',
-    });
-    assert.equal(res.status, 400);
-    assert.equal(res.body.kind, 'validation');
-    // Came from exec, not from body validation — wrapper recorded the call.
-    assert.equal(h.calls.length, 1);
-
-    // gascity-dashboard-ur0: thrown ExecError still emits an audit row
-    // so the forensic record is symmetric across success / non-zero / throw.
-    const rows = await readAudit(h.auditPath);
-    assert.equal(rows.length, 1);
-    const row = rows[0]!;
-    assert.equal(row.type, 'dashboard.sling');
-    assert.equal(row.endpoint, 'POST /api/maintainer/sling');
-    assert.equal(row.actor, 'stephanie');
-    assert.ok(!('exit_code' in row));
-    const parsed = row.parsed_args as Record<string, string>;
-    assert.equal(parsed.error_kind, 'validation');
-    assert.equal(parsed.kind, 'pr');
-    assert.equal(parsed.intent, 'review');
+    const parsed = rows[0]!.parsed_args as Record<string, string>;
+    assert.equal(parsed.error_kind, 'upstream');
     assert.equal(parsed.target, 'mayor');
   });
 
-  test('ExecError timeout surfaces as 504', async () => {
+  test('supervisor timeout surfaces as 504', async () => {
     h = await buildApp({
       sling: async () => {
-        throw new ExecError('sling timed out', 'timeout');
+        // GcClient.isTimeoutError keys on err.name === 'TimeoutError'
+        // (AbortSignal.timeout fires a TimeoutError).
+        const e = new Error('the operation timed out');
+        e.name = 'TimeoutError';
+        throw e;
       },
     });
     const res = await postJson(`${h.url}/api/maintainer/sling`, {
@@ -557,109 +507,13 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     // patterns from events.jsonl alone.
     const rows = await readAudit(h.auditPath);
     assert.equal(rows.length, 1);
-    const row = rows[0]!;
-    assert.equal(row.type, 'dashboard.sling');
-    const parsed = row.parsed_args as Record<string, string>;
+    const parsed = rows[0]!.parsed_args as Record<string, string>;
     assert.equal(parsed.error_kind, 'timeout');
   });
 
-  test('ExecError spawn surfaces as 502', async () => {
+  test('reads root_bead_id from the SlingResponse', async () => {
     h = await buildApp({
-      sling: async () => {
-        throw new ExecError('spawn failed: ENOENT', 'spawn');
-      },
-    });
-    const res = await postJson(`${h.url}/api/maintainer/sling`, {
-      kind: 'pr',
-      number: 1,
-      html_url: 'https://github.com/gastownhall/gascity/pull/1',
-      intent: 'review',
-    });
-    assert.equal(res.status, 502);
-    assert.equal(res.body.kind, 'spawn');
-    assert.equal(h.calls.length, 1);
-
-    // gascity-dashboard-ur0.
-    const rows = await readAudit(h.auditPath);
-    assert.equal(rows.length, 1);
-    const parsed = rows[0]!.parsed_args as Record<string, string>;
-    assert.equal(parsed.error_kind, 'spawn');
-  });
-
-  test('non-ExecError throw (unknown) still audits with error_kind=unknown', async () => {
-    // gascity-dashboard-ur0: cover the catch-all branch — any unexpected
-    // throw from execGcSling should still leave a forensic row, mirroring
-    // the agents.ts (GET /api/agents/:alias/prime) precedent.
-    h = await buildApp({
-      sling: async () => {
-        throw new Error('boom');
-      },
-    });
-    const res = await postJson(`${h.url}/api/maintainer/sling`, {
-      kind: 'pr',
-      number: 1,
-      html_url: 'https://github.com/gastownhall/gascity/pull/1',
-      intent: 'review',
-    });
-    assert.equal(res.status, 500);
-    assert.equal(res.body.kind, 'internal');
-
-    const rows = await readAudit(h.auditPath);
-    assert.equal(rows.length, 1);
-    const row = rows[0]!;
-    assert.equal(row.type, 'dashboard.sling');
-    const parsed = row.parsed_args as Record<string, string>;
-    assert.equal(parsed.error_kind, 'unknown');
-    assert.equal(parsed.target, 'mayor');
-  });
-
-  test('threads cityPath to execGcSling stub (gascity-dashboard-f0e)', async () => {
-    h = await buildApp({ cityPath: '/home/ds/gas-city' });
-    const res = await postJson(`${h.url}/api/maintainer/sling`, {
-      kind: 'pr',
-      number: 47,
-      html_url: 'https://github.com/gastownhall/gascity/pull/47',
-      intent: 'review',
-    });
-    assert.equal(res.status, 200);
-    assert.equal(h.calls.length, 1);
-    assert.equal(h.calls[0]!.cityPath, '/home/ds/gas-city');
-  });
-
-  test('omits cityPath when option is unset (default behaviour preserved)', async () => {
-    h = await buildApp();
-    const res = await postJson(`${h.url}/api/maintainer/sling`, {
-      kind: 'pr',
-      number: 47,
-      html_url: 'https://github.com/gastownhall/gascity/pull/47',
-      intent: 'review',
-    });
-    assert.equal(res.status, 200);
-    assert.equal(h.calls.length, 1);
-    assert.equal(h.calls[0]!.cityPath, undefined);
-  });
-
-  test('extracts modern supervisor bead-id (gc-NNN) from multi-line Slung stdout (gascity-dashboard-wds)', async () => {
-    // The wave-8nj regex anchored on "created bead <id>" — a stdout shape
-    // gc sling no longer emits. The modern envelope mentions the bead id
-    // in three places: the "Created", "Attached wisp", and "Slung" lines.
-    // We anchor on the trailing "Slung <id>" summary because it's the one
-    // line that always carries the routed bead id (and nothing else) at
-    // line start.
-    h = await buildApp({
-      sling: async () => ({
-        exitCode: 0,
-        stdout: [
-          'Created gc-255139 — "Please review PR https://github.com/gastownhall/gascity/pull/1"',
-          'Auto-convoy gc-255141',
-          'Attached wisp gc-255140 (formula "mol-focus-review") to gc-255139',
-          'Slung gc-255139 (with default formula "mol-focus-review") → oversight-rig.chief-of-staff',
-          '',
-        ].join('\n'),
-        stderr: '',
-        truncated: false,
-        durationMs: 10,
-      }),
+      sling: async () => ({ root_bead_id: 'gc-255139', bead: 'gc-other' }),
     });
     const res = await postJson(`${h.url}/api/maintainer/sling`, {
       kind: 'pr',
@@ -669,18 +523,13 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
     });
     assert.equal(res.status, 200);
     assert.equal(res.body.ok, true);
+    // root_bead_id wins over bead.
     assert.equal(res.body.bead_id, 'gc-255139');
   });
 
-  test('stdout without Slung line returns 200 with bead_id omitted', async () => {
+  test('falls back to bead when root_bead_id is absent', async () => {
     h = await buildApp({
-      sling: async () => ({
-        exitCode: 0,
-        stdout: 'dispatched\n',
-        stderr: '',
-        truncated: false,
-        durationMs: 10,
-      }),
+      sling: async () => ({ bead: 'gc-abc' }),
     });
     const res = await postJson(`${h.url}/api/maintainer/sling`, {
       kind: 'pr',
@@ -689,59 +538,12 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
       intent: 'review',
     });
     assert.equal(res.status, 200);
-    assert.equal(res.body.ok, true);
-    assert.equal(res.body.bead_id, undefined);
+    assert.equal(res.body.bead_id, 'gc-abc');
   });
 
-  test('id ending in a non-word char (-/.) is captured in full, not truncated', async () => {
-    // Regression guard against the `\b` word-boundary edge case. The bd id
-    // alphabet permits `.` and `-` as trailing characters. With `\b` the
-    // regex would backtrack and drop the trailing non-word char silently;
-    // `(?!\S)` keeps it. Live IDs today end in alphanumerics, so this is
-    // forward-coverage against any future id-shape change upstream.
+  test('omits bead_id when the response carries neither root_bead_id nor bead', async () => {
     h = await buildApp({
-      sling: async () => ({
-        exitCode: 0,
-        stdout: [
-          'Created gc-foo-bar- — "Please review PR ..."',
-          'Slung gc-foo-bar- (with default formula "mol-focus-review") → oversight-rig.chief-of-staff',
-          '',
-        ].join('\n'),
-        stderr: '',
-        truncated: false,
-        durationMs: 10,
-      }),
-    });
-    const res = await postJson(`${h.url}/api/maintainer/sling`, {
-      kind: 'pr',
-      number: 1,
-      html_url: 'https://github.com/gastownhall/gascity/pull/1',
-      intent: 'review',
-    });
-    assert.equal(res.status, 200);
-    assert.equal(res.body.ok, true);
-    assert.equal(res.body.bead_id, 'gc-foo-bar-');
-  });
-
-  test('stdout with only Created/Attached lines (no Slung) returns bead_id omitted', async () => {
-    // gascity-dashboard-wds negative case: confirms we don't fall back to
-    // "Created" lines, which appear multiple times in the modern envelope
-    // (Created, Attached wisp <id>, Auto-convoy <id>). A partial run that
-    // creates beads but never reaches the Slung step should not pretend a
-    // routing happened.
-    h = await buildApp({
-      sling: async () => ({
-        exitCode: 0,
-        stdout: [
-          'Created gc-255139 — "Please review PR https://example/pull/1"',
-          'Auto-convoy gc-255141',
-          'Attached wisp gc-255140 (formula "mol-focus-review") to gc-255139',
-          '',
-        ].join('\n'),
-        stderr: '',
-        truncated: false,
-        durationMs: 10,
-      }),
+      sling: async () => ({ status: 'ok' }),
     });
     const res = await postJson(`${h.url}/api/maintainer/sling`, {
       kind: 'pr',
@@ -793,15 +595,9 @@ describe('POST /api/maintainer/sling — slung-state persistence', { concurrency
     assert.match(entry.slung_at, /^\d{4}-\d{2}-\d{2}T/);
   });
 
-  test('success path persists bead_id: null when stdout has no parseable id', async () => {
+  test('success path persists bead_id: null when the response has no bead id', async () => {
     h = await buildApp({
-      sling: async () => ({
-        exitCode: 0,
-        stdout: 'unrelated output\n',
-        stderr: '',
-        truncated: false,
-        durationMs: 5,
-      }),
+      sling: async () => ({ status: 'ok' }),
     });
     const res = await postJson(`${h.url}/api/maintainer/sling`, {
       kind: 'issue',
@@ -818,15 +614,11 @@ describe('POST /api/maintainer/sling — slung-state persistence', { concurrency
     assert.equal(entry.bead_id, null);
   });
 
-  test('non-zero exit code does NOT write slung-state (sling failed)', async () => {
+  test('supervisor error does NOT write slung-state (sling failed)', async () => {
     h = await buildApp({
-      sling: async () => ({
-        exitCode: 1,
-        stdout: '',
-        stderr: 'gc supervisor unreachable',
-        truncated: false,
-        durationMs: 10,
-      }),
+      sling: async () => {
+        throw new Error('gc supervisor returned 502');
+      },
     });
     const res = await postJson(`${h.url}/api/maintainer/sling`, {
       kind: 'pr',
@@ -840,10 +632,12 @@ describe('POST /api/maintainer/sling — slung-state persistence', { concurrency
     assert.equal(state['pr:12'], undefined);
   });
 
-  test('thrown ExecError (timeout) does NOT write slung-state', async () => {
+  test('timeout does NOT write slung-state', async () => {
     h = await buildApp({
       sling: async () => {
-        throw new ExecError('gc sling timed out', 'timeout');
+        const e = new Error('the operation timed out');
+        e.name = 'TimeoutError';
+        throw e;
       },
     });
     const res = await postJson(`${h.url}/api/maintainer/sling`, {
@@ -1427,50 +1221,18 @@ describe('POST /api/maintainer/refresh — err.message redaction', { concurrency
   });
 });
 
-// gascity-dashboard-473: complete the redaction sweep on the /sling
-// catch arms. ExecError spawn-arm wraps host paths the same way as
-// /refresh; the non-ExecError 500 fallback was the last remaining
-// raw err.message site flagged by the wave-ayr-wave-review pass.
+// gascity-dashboard-473 / mq2: redaction sweep on the /sling catch arm.
+// The sling now goes over HTTP, so a failure is a thrown Error (GcClient's
+// `gc supervisor returned NNN`, or a raw fetch/network error). Its message
+// can embed host/socket detail; only details.name (the Error class) may
+// reach the wire — the full message stays server-side (console.warn).
 describe('POST /api/maintainer/sling — err.message redaction', { concurrency: false }, () => {
   let h: AppHandle;
   afterEach(async () => {
     if (h !== undefined) await h.close();
   });
 
-  test('ExecError spawn arm redacts host path from response body', async () => {
-    h = await buildApp({
-      sling: async () => {
-        throw new ExecError(
-          'spawn failed: spawn /home/ds/.local/bin/gc ENOENT',
-          'spawn',
-        );
-      },
-    });
-    const res = await postJson(`${h.url}/api/maintainer/sling`, {
-      kind: 'pr',
-      number: 1,
-      html_url: 'https://github.com/gastownhall/gascity/pull/1',
-      intent: 'review',
-    });
-    // ExecError 'spawn' kind maps to 502 in /sling's status table.
-    assert.equal(res.status, 502);
-    assert.equal(res.body.kind, 'spawn');
-    const wire = JSON.stringify(res.body);
-    assert.ok(
-      !wire.includes('/home/ds'),
-      `response leaks operator home: ${wire}`,
-    );
-    assert.ok(
-      !wire.includes('.local/bin'),
-      `response leaks binary path: ${wire}`,
-    );
-    assert.ok(
-      !wire.includes('ENOENT'),
-      `response leaks OS errno: ${wire}`,
-    );
-  });
-
-  test('non-ExecError 500 fallback redacts raw err.message', async () => {
+  test('upstream failure (502) redacts raw err.message host/socket detail', async () => {
     const leakyErr = new Error(
       'connect ECONNREFUSED 127.0.0.1:1 (interface lo) at /var/run/sock',
     );
@@ -1486,27 +1248,18 @@ describe('POST /api/maintainer/sling — err.message redaction', { concurrency: 
       html_url: 'https://github.com/gastownhall/gascity/pull/1',
       intent: 'review',
     });
-    assert.equal(res.status, 500);
-    assert.equal(res.body.kind, 'internal');
+    // Any non-timeout throw maps to 502 upstream (gascity-dashboard-mq2).
+    assert.equal(res.status, 502);
+    assert.equal(res.body.kind, 'upstream');
     const details = res.body.details as { name?: string; message?: string };
-    assert.equal(
-      details?.message,
-      undefined,
-      'details.message must be redacted',
-    );
+    assert.equal(details?.message, undefined, 'details.message must be redacted');
     assert.equal(
       details?.name,
       'NetworkError',
       'details.name must carry the Error class discriminator',
     );
     const wire = JSON.stringify(res.body);
-    assert.ok(
-      !wire.includes('ECONNREFUSED'),
-      `response leaks ECONNREFUSED: ${wire}`,
-    );
-    assert.ok(
-      !wire.includes('/var/run/sock'),
-      `response leaks file path: ${wire}`,
-    );
+    assert.ok(!wire.includes('ECONNREFUSED'), `response leaks ECONNREFUSED: ${wire}`);
+    assert.ok(!wire.includes('/var/run/sock'), `response leaks file path: ${wire}`);
   });
 });

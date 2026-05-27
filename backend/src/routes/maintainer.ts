@@ -4,15 +4,13 @@ import type {
   ContributorStat,
   GcSession,
   MaintainerTriage,
+  SlingInput,
+  SlingResponse,
   TriageItem,
 } from 'gas-city-dashboard-shared';
 import { recordAudit } from '../audit.js';
-import {
-  AGENT_ALIAS_RE,
-  ExecError,
-  execGcSling as defaultExecGcSling,
-} from '../exec.js';
-import type { ExecResult } from '../exec.js';
+import { AGENT_ALIAS_RE, ExecError } from '../exec.js';
+import { GcClient } from '../gc-client.js';
 import {
   collectItems,
   fetchTriage as defaultFetchTriage,
@@ -32,21 +30,6 @@ import { toWireExecError, toWireInternal500 } from '../lib/sanitise-error.js';
 const GH_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 const GH_URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/(issues|pull)\/\d+$/;
 const MAX_URL_LEN = 2_048;
-// gascity-dashboard-wds: gc sling emits a multi-line envelope; only the
-// trailing "Slung <id> ..." line uniquely identifies the routed bead.
-// Earlier lines ("Created <id>", "Auto-convoy <id>", "Attached wisp <id>")
-// each carry an id but refer to the create/wisp/convoy steps, and
-// "Created" recurs 3+ times in multi-bead workflows. The wave-8nj regex
-// anchored on "created bead <id>", a shape gc sling no longer emits, so
-// the silent-omission bead-id failure was back. Anchoring on ^Slung with
-// the multiline flag picks the routing summary deterministically.
-//
-// Delimiter: `(?!\S)` (next char is whitespace or EOL), not `\b`. The id
-// alphabet [A-Za-z0-9_.-] permits trailing `.` or `-` (both non-word),
-// which would silently truncate the captured id by one char if `\b` were
-// used: between two non-word chars `\b` doesn't assert, so the engine
-// backtracks one position. `(?!\S)` is delimiter-agnostic.
-const BEAD_ID_RE = /^Slung ([A-Za-z0-9][A-Za-z0-9_.-]{0,63})(?!\S)/m;
 
 type SlingIntent = 'review' | 'draft' | 'triage';
 type SlingKind = 'pr' | 'issue';
@@ -74,23 +57,13 @@ interface MaintainerRouterOptions {
    */
   triageTarget?: string;
   /**
-   * Absolute path to the Gas City root. Threaded as `--city=<path>` to
-   * `gc sling` so the subprocess finds city.toml without walking up from
-   * the dashboard's own cwd. Optional: when unset, gc falls back to its
-   * cwd-walk discovery, which fails in this dashboard's deployment.
-   * From config.cityPath.
+   * Injected sling runner (gascity-dashboard-mq2). Production wires
+   * `gc.sling` (GcClient HTTP POST /sling); tests pass a stub. Replaces the
+   * former `execGcSling` subprocess DI — the supervisor exposes the write
+   * endpoint directly, so the route no longer shells the gc CLI, parses
+   * stdout, or threads `--city` (the city is in the request URL path).
    */
-  cityPath?: string;
-  /**
-   * Injected `gc sling` runner. Defaults to the real exec wrapper; tests
-   * pass a stub. This DI is the new pattern for write-exec routers
-   * (mailSendRouter is a candidate for the same retrofit later).
-   */
-  execGcSling?: (
-    target: string,
-    beadText: string,
-    cityPath?: string,
-  ) => Promise<ExecResult>;
+  sling: (input: SlingInput) => Promise<SlingResponse>;
   /**
    * Injected triage fetcher used by POST /refresh. Defaults to the
    * real `fetchTriage` from ../maintainer/triage. Tests pass a stub to
@@ -118,8 +91,7 @@ export function maintainerRouter({
   slungStatePath = defaultSlungStatePath(cachePath),
   slingTarget,
   triageTarget,
-  cityPath,
-  execGcSling = defaultExecGcSling,
+  sling,
   fetchTriage = defaultFetchTriage,
   listSessions,
 }: MaintainerRouterOptions): Router {
@@ -292,8 +264,14 @@ export function maintainerRouter({
     }
 
     const beadText = composeBeadText(body.intent, body.html_url);
+    const startedAt = Date.now();
     try {
-      const result = await execGcSling(target, beadText, cityPath);
+      const result = await sling({ target, bead: beadText });
+      // root_bead_id is the routed bead the supervisor created — the JSON
+      // replacement for the old `^Slung <id>` stdout parse. `bead` is a
+      // fallback if a future supervisor omits root_bead_id; null when
+      // neither is present (slung-state tolerates a null bead_id).
+      const beadId = result.root_bead_id ?? result.bead ?? null;
       void recordAudit({
         type: 'dashboard.sling',
         endpoint: 'POST /api/maintainer/sling',
@@ -304,29 +282,8 @@ export function maintainerRouter({
           target,
           text_len: String(beadText.length),
         },
-        exit_code: result.exitCode,
-        duration_ms: result.durationMs,
+        duration_ms: Date.now() - startedAt,
       });
-      if (result.exitCode !== 0) {
-        // gascity-dashboard-k1y: do NOT echo raw gc-sling stderr on the wire.
-        // gc-sling's stderr is implementation-defined and can include host
-        // paths or sensitive context. Mirror the i53/473 redaction pattern
-        // (see agents.ts /prime and sanitise-error.ts): stderr stays
-        // server-side in console.warn for journalctl; the wire carries
-        // kind:'upstream' + a fixed `details: { name }` shape. The frontend
-        // routes on kind + status code only, never on details.stderr.
-        console.warn(
-          `[maintainer] /api/maintainer/sling non-zero exit ${result.exitCode}: ${result.stderr}`,
-        );
-        res.status(502).json({
-          error: `gc sling failed (${result.exitCode})`,
-          kind: 'upstream',
-          details: { name: 'NonZeroExit' },
-        });
-        return;
-      }
-      const idMatch = BEAD_ID_RE.exec(result.stdout);
-      const beadId = idMatch?.[1] ?? null;
       // Persist active slung state so subsequent GET /triage requests
       // exclude this item from the One Mark and surface the inline
       // workflow link (gascity-dashboard-9qs). Failed slings (above
@@ -376,12 +333,10 @@ export function maintainerRouter({
     } catch (err) {
       // gascity-dashboard-ur0: thrown errors must also leave an audit row.
       // Timeouts in particular are operationally significant — the
-      // success-path + non-zero-exit branches already audit, so failing
-      // to audit throws would create an asymmetric forensic record where
-      // the most-interesting failure mode (the supervisor hung) is the
-      // one that leaves no trace in events.jsonl. Mirrors the pattern in
-      // routes/agents.ts (GET /api/agents/:alias/prime).
-      const errorKind = err instanceof ExecError ? err.kind : 'unknown';
+      // success path already audits, so failing to audit throws would
+      // create an asymmetric forensic record where the most-interesting
+      // failure mode (the supervisor hung) leaves no trace in events.jsonl.
+      const isTimeout = GcClient.isTimeoutError(err);
       void recordAudit({
         type: 'dashboard.sling',
         endpoint: 'POST /api/maintainer/sling',
@@ -391,29 +346,22 @@ export function maintainerRouter({
           intent: body.intent,
           target,
           text_len: String(beadText.length),
-          error_kind: errorKind,
+          error_kind: isTimeout ? 'timeout' : 'upstream',
         },
       });
-      if (err instanceof ExecError) {
-        const status =
-          err.kind === 'validation' ? 400 : err.kind === 'timeout' ? 504 : 502;
-        // gascity-dashboard-473: spawn-arm host path redaction; see
-        // /refresh above for rationale.
-        if (err.kind === 'spawn') {
-          console.warn(`[maintainer] /api/maintainer/sling spawn failed: ${err.message}`);
-        }
-        const wire = toWireExecError(err, status);
-        res.status(wire.status).json(wire.body);
-        return;
-      }
-      // gascity-dashboard-473: mirror the ayr sr6 redaction on the
-      // catch-all 500. Raw err.message from unexpected throws can embed
-      // OS detail; details.name (Error class) is the only safe channel.
+      // gascity-dashboard-mq2: the sling is now an HTTP POST to the
+      // supervisor. A true client-side timeout maps to 504; any other
+      // failure (non-2xx from the supervisor, network error) maps to 502
+      // upstream. The raw message can embed the supervisor URL / host
+      // (GcClient throws `gc supervisor returned NNN`; fetch errors embed
+      // host:port), so it stays server-side in console.warn — only
+      // details.name reaches the wire, mirroring the /refresh + sr6
+      // redaction (gascity-dashboard-473/ayr).
       console.warn(`[maintainer] /api/maintainer/sling failed: ${(err as Error).message}`);
       const wire = toWireInternal500(err, {
-        status: 500,
-        error: 'internal error',
-        kind: 'internal',
+        status: isTimeout ? 504 : 502,
+        error: isTimeout ? 'gc supervisor timed out' : 'gc sling failed',
+        kind: isTimeout ? 'timeout' : 'upstream',
       });
       res.status(wire.status).json(wire.body);
     }

@@ -225,6 +225,40 @@ export interface BeadActionRequest {
   reason?: string;
 }
 
+// ── Supervisor write wire-shapes (gascity-dashboard-mq2) ─────────────────
+// Request/response bodies for the supervisor's HTTP write endpoints the
+// dashboard adopts in place of `gc` CLI subprocesses. These are the
+// supervisor↔backend contract (mirroring SlingInputBody / SlingResponse in
+// the supervisor's OpenAPI), distinct from the browser↔backend shapes; the
+// GcClient is the only consumer.
+
+/**
+ * Body for `POST /v0/city/{city}/sling`. Only `target` is required
+ * upstream; `bead` carries the free-text bead body (what the `gc sling
+ * <target> <text>` CLI passed positionally). The formula/scope fields are
+ * part of the upstream schema but unused by v1 text-only slings — kept off
+ * this type until the formula-driven follow-up (bead 6fp) needs them.
+ */
+export interface SlingInput {
+  target: string;
+  /** Free-text bead body. */
+  bead?: string;
+}
+
+/**
+ * Response from `POST /v0/city/{city}/sling`. `root_bead_id` is the routed
+ * bead the dashboard records in slung-state (replaces the `^Slung <id>`
+ * stdout parse). Other fields are surfaced by the supervisor but unused
+ * here; typed optional so a schema addition upstream doesn't break parsing.
+ */
+export interface SlingResponse {
+  root_bead_id?: string;
+  bead?: string;
+  workflow_id?: string;
+  target?: string;
+  status?: string;
+}
+
 // ── Mail (Phase B but type-locked now so Phase A frontend compiles) ──────
 
 export interface GcMailItem {
