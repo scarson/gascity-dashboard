@@ -593,10 +593,12 @@ async function applySlungOverlay(
 /**
  * Remove the given items (by kind:number identity) from every tier's
  * clusters and unclustered lists, dropping any cluster left empty so the
- * UI never renders a zero-row cluster block. Immutable per the
- * coding-style rule: rebuilds each tier's arrays rather than splicing in
- * place. Used by applySlungOverlay to lift slung items into their own
- * section.
+ * UI never renders a zero-row cluster block. Rebuilds each tier's arrays
+ * (and each cluster object) rather than splicing in place — but does
+ * reassign `tier.clusters` / `tier.unclustered`, so the envelope itself
+ * is mutated, consistent with applySlungOverlay's serve-time overlay
+ * pattern (collectItems hands back live references it edits in place).
+ * Used by applySlungOverlay to lift slung items into their own section.
  */
 function removeItemsFromTiers(
   envelope: MaintainerTriage,

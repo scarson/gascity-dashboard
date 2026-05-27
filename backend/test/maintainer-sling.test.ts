@@ -1319,8 +1319,9 @@ describe('POST /api/maintainer/sling — target role resolution (gascity-dashboa
 
     const env = (await fetch(`${h.url}/api/maintainer/triage`).then((r) => r.json())) as MaintainerTriage;
     // Slung items are lifted into slung_section (gascity-dashboard-2yr).
-    const item = env.slung_section?.find((it) => it.number === 47)!;
-    assert.ok(item?.slung);
+    const item = (env.slung_section ?? []).find((it) => it.number === 47);
+    assert.ok(item, 'item 47 present in slung_section');
+    assert.ok(item.slung);
     assert.equal(item.slung.resolved_session_name, 'oversight-rig__chief-of-staff');
   });
 });

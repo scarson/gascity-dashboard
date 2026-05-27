@@ -261,8 +261,12 @@ describe('MaintainerPage — dual-intent dispatch contract (gascity-dashboard-pp
 describe('MaintainerPage — slung section wiring (gascity-dashboard-2yr)', () => {
   it('renders the "Slung · awaiting agent" group with the lifted item from data.slung_section', async () => {
     const env = syntheticEnvelope();
-    // Mirror the backend overlay: the slung item is LIFTED out of the
-    // tier into slung_section, so the tier no longer contains it.
+    // This test pins ONLY the slung_section → <SlungSection> wiring on
+    // MaintainerPage. The actual lift-out-of-tier behaviour (the backend
+    // overlay removing the item from its tier) is covered by the backend
+    // overlay tests; here the slung PR (7700) is simply placed directly in
+    // slung_section — it is intentionally NOT in env.tiers, mirroring what
+    // the wire looks like AFTER the backend has already lifted it.
     env.slung_section = [
       {
         kind: 'pr',
