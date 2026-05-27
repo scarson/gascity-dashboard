@@ -233,16 +233,21 @@ describe('buildWorkflowSummary', () => {
     assert.equal(lane.rootStoreRef, 'rig:worktree');
   });
 
-  test('derives workflow scope from root_store_ref when explicit scope fields are absent', () => {
+  test('omits query scope when explicit scope fields are absent, even with a root_store_ref (gascity-dashboard-sd9)', () => {
+    // root_store_ref is a STORAGE location, not a query scope. With no explicit
+    // gc.scope_kind/gc.scope_ref, the lane must carry NO query scope so the
+    // deep-link resolves the workflow by id under the city. Deriving the scope
+    // from root_store_ref produced a deep-link the supervisor 404s for
+    // rig-store-backed workflows.
     const summary = buildWorkflowSummary([
       issue({
         id: 'ga-root',
-        title: 'Scoped graph workflow',
+        title: 'Rig-store graph workflow with no explicit scope',
         issue_type: 'molecule',
         status: 'open',
         metadata: {
           ...graphWorkflowMetadata(),
-          'gc.root_store_ref': 'city:racoon-city',
+          'gc.root_store_ref': 'rig:codeprobe',
         },
       }),
       issue({
@@ -257,9 +262,11 @@ describe('buildWorkflowSummary', () => {
     ]);
 
     const lane = summary.lanes[0]!;
-    assert.equal(lane.scopeKind, 'city');
-    assert.equal(lane.scopeRef, 'racoon-city');
-    assert.equal(lane.rootStoreRef, 'city:racoon-city');
+    // No query scope derived from the rig store ref — the bug was scopeKind='rig'.
+    assert.equal(lane.scopeKind, null);
+    assert.equal(lane.scopeRef, null);
+    // rootStoreRef is still surfaced for display.
+    assert.equal(lane.rootStoreRef, 'rig:codeprobe');
   });
 
   test('groups workflow roots and molecule children (M4-c)', () => {

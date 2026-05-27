@@ -273,31 +273,25 @@ function workflowScope(
   const rootStoreRef = metadataString(ordered, 'gc.root_store_ref') || null;
   const rootScopeKind = stringValue(root?.metadata?.['gc.scope_kind']);
   const rootScopeRef = stringValue(root?.metadata?.['gc.scope_ref']);
-  const scopeKind =
-    parseWorkflowScopeKind(rootScopeKind) ??
-    scopeKindFromStoreRef(rootStoreRef);
+  // The query scope (scopeKind/scopeRef) drives the run-detail deep-link, so it
+  // must come ONLY from explicit gc.scope_kind / gc.scope_ref. root_store_ref is
+  // a STORAGE location, not a query scope: deriving the scope from it produces a
+  // deep-link the supervisor's /workflow/{id} endpoint 404s for rig-store-backed
+  // workflows, whose root id actually resolves under the city (gascity-dashboard-sd9).
+  // When explicit scope metadata is absent, leave the scope null so the deep-link
+  // carries no scope and the workflow resolves by id under the city. rootStoreRef
+  // is still surfaced as a display-only field.
+  const scopeKind = parseWorkflowScopeKind(rootScopeKind);
   const scopeRef =
-    rootScopeRef ||
-    scopeRefFromStoreRef(rootStoreRef) ||
-    metadataString(ordered, 'gc.scope_ref') ||
-    null;
+    scopeKind !== null
+      ? rootScopeRef || metadataString(ordered, 'gc.scope_ref') || null
+      : null;
 
   return { scopeKind, scopeRef, rootStoreRef };
 }
 
 function parseWorkflowScopeKind(value: string): WorkflowLane['scopeKind'] {
   return value === 'city' || value === 'rig' ? value : null;
-}
-
-function scopeKindFromStoreRef(rootStoreRef: string | null): WorkflowLane['scopeKind'] {
-  const [kind] = (rootStoreRef ?? '').split(':', 1);
-  return parseWorkflowScopeKind(kind ?? '');
-}
-
-function scopeRefFromStoreRef(rootStoreRef: string | null): string | null {
-  const ref = rootStoreRef ?? '';
-  const colon = ref.indexOf(':');
-  return colon >= 0 && colon < ref.length - 1 ? ref.slice(colon + 1) : null;
 }
 
 function sourceWorkflowRootId(issue: WorkflowIssue): string {
