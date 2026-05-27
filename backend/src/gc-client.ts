@@ -6,6 +6,11 @@ import type {
   GcEventList,
   GcFormulaDetail,
   GcWorkflowSnapshot,
+  SlingInput,
+  SlingResponse,
+  BeadUpdateInput,
+  MailSendInput,
+  MailSendResponse,
   TranscriptTurn,
   WorkflowScopeKind,
 } from 'gas-city-dashboard-shared';
@@ -38,6 +43,11 @@ const DEFAULT_TIMEOUT_MS = (() => {
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : 5_000;
 })();
+
+// Sling does real work upstream (creates a bead, attaches a wisp, dispatches
+// to a rig — ~30s measured on this deployment). 60s gives ~2x headroom,
+// matching the old execGcSling subprocess timeout (gascity-dashboard-mq2).
+const SLING_TIMEOUT_MS = 60_000;
 
 export interface GcClientOptions {
   baseUrl: string;
@@ -156,6 +166,77 @@ export class GcClient {
       throw new Error(`gc supervisor returned ${res.status}`);
     }
     return (await res.json()) as T;
+  }
+
+  /**
+   * POST a JSON body to a city-scoped write endpoint (gascity-dashboard-mq2).
+   * Deliberately NOT coalesced — single-flight is a read-side optimisation;
+   * writes must each hit the supervisor. The `X-GC-Request` header is the
+   * supervisor's anti-CSRF presence check (any non-empty value is accepted).
+   *
+   * `timeoutMs` overrides the read default because writes do real work
+   * (a sling creates a bead, attaches a wisp, dispatches to a rig — ~30s
+   * measured), far longer than a GET. Same redaction contract as
+   * fetchOnce: the thrown message carries only the status, never the URL.
+   */
+  private async postJson<T>(
+    suffix: string,
+    body: unknown,
+    timeoutMs: number,
+  ): Promise<T> {
+    const url = this.cityPath(suffix);
+    const res = await fetch(url, {
+      method: 'POST',
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-GC-Request': 'dashboard',
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(`gc supervisor returned ${res.status}`);
+    }
+    return (await res.json()) as T;
+  }
+
+  /**
+   * `POST /sling` — auto-creates a bead from `input.bead` text and routes it
+   * to `input.target` (gascity-dashboard-mq2; replaces the `gc sling` CLI
+   * subprocess). The caller reads `root_bead_id` off the response to record
+   * slung-state, in place of the old `^Slung <id>` stdout parse.
+   */
+  async sling(input: SlingInput): Promise<SlingResponse> {
+    return this.postJson<SlingResponse>('/sling', input, SLING_TIMEOUT_MS);
+  }
+
+  /**
+   * `POST /bead/{id}/update` — the bead-CLAIM path (gascity-dashboard-mq2;
+   * replaces `gc bd update --status=in_progress --assignee=stephanie`). The
+   * supervisor returns OKResponseBody{status}; the caller ignores the body
+   * (success = 2xx). Unlike sling, this is a fast metadata write, so it uses
+   * the read default timeout. Bead CLOSE + agent NUDGE stay on the CLI (no
+   * reason field / no HTTP route respectively).
+   */
+  async updateBead(id: string, body: BeadUpdateInput): Promise<void> {
+    await this.postJson<{ status?: string }>(
+      `/bead/${encodeURIComponent(id)}/update`,
+      body,
+      this.defaultTimeoutMs,
+    );
+  }
+
+  /**
+   * `POST /mail` — operator mail send (gascity-dashboard-mq2; replaces
+   * `gc mail send ... --from human`). The supervisor returns 201 with the
+   * created Message; the caller reads `id` off the response in place of the
+   * old stdout `Sent <id>` parse. Fast write, so it uses the read default
+   * timeout. `from` is pinned to 'human' by the caller (server.ts), never the
+   * browser — the browser-facing shape has no `from` slot.
+   */
+  async sendMail(body: MailSendInput): Promise<MailSendResponse> {
+    return this.postJson<MailSendResponse>('/mail', body, this.defaultTimeoutMs);
   }
 
   async listSessions(signal?: AbortSignal): Promise<GcSessionList> {

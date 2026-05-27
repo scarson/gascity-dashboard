@@ -225,6 +225,88 @@ export interface BeadActionRequest {
   reason?: string;
 }
 
+// ── Supervisor write wire-shapes (gascity-dashboard-mq2) ─────────────────
+// Request/response bodies for the supervisor's HTTP write endpoints the
+// dashboard adopts in place of `gc` CLI subprocesses. These are the
+// supervisor↔backend contract (mirroring SlingInputBody / SlingResponse in
+// the supervisor's OpenAPI), distinct from the browser↔backend shapes; the
+// GcClient is the only consumer.
+
+/**
+ * Body for `POST /v0/city/{city}/sling`. Only `target` is required
+ * upstream; `bead` carries the free-text bead body (what the `gc sling
+ * <target> <text>` CLI passed positionally). The formula/scope fields are
+ * part of the upstream schema but unused by v1 text-only slings — kept off
+ * this type until the formula-driven follow-up (bead 6fp) needs them.
+ */
+export interface SlingInput {
+  target: string;
+  /** Free-text bead body. */
+  bead?: string;
+}
+
+/**
+ * Response from `POST /v0/city/{city}/sling`. `root_bead_id` is the routed
+ * bead the dashboard records in slung-state (replaces the `^Slung <id>`
+ * stdout parse). Other fields are surfaced by the supervisor but unused
+ * here; typed optional so a schema addition upstream doesn't break parsing.
+ */
+export interface SlingResponse {
+  root_bead_id?: string;
+  bead?: string;
+  workflow_id?: string;
+  target?: string;
+  status?: string;
+}
+
+/**
+ * Body for `POST /v0/city/{city}/bead/{id}/update` (gascity-dashboard-mq2;
+ * replaces the `gc bd update` CLI subprocess on the bead-CLAIM path). Mirrors
+ * the supervisor's `BeadUpdateBody` schema. The dashboard's claim action sets
+ * `status: 'in_progress'` + `assignee: 'stephanie'`; the rest of the upstream
+ * schema (title/description/labels/priority/…) is unused by the dashboard and
+ * left off this type until a use case needs it. NOTE: bead CLOSE deliberately
+ * stays on the CLI — the supervisor's `/bead/{id}/close` endpoint has no reason
+ * field and the dashboard's close-reason UI would silently lose it.
+ */
+export interface BeadUpdateInput {
+  status?: BeadStatus;
+  assignee?: string;
+}
+
+/**
+ * Body for `POST /v0/city/{city}/mail` (gascity-dashboard-mq2; replaces the
+ * `gc mail send` CLI subprocess). Mirrors the supervisor's `MailSendInputBody`.
+ * The server pins `from: 'human'` (gc's canonical operator identity); the
+ * browser-facing shape (`MailComposeRequest`) has no `from` slot, so there is
+ * no path to send-as-someone-else. `to`/`subject` are required upstream.
+ */
+export interface MailSendInput {
+  to: string;
+  subject: string;
+  body: string;
+  from: string;
+  rig?: string;
+}
+
+/**
+ * Response from `POST /v0/city/{city}/mail` (the supervisor's `Message`
+ * schema; returns 201). Only `id` is consumed by the dashboard (surfaced as
+ * `message_id` on the browser-facing `MailSendResult`); the rest is typed
+ * optional so a schema addition upstream doesn't break parsing.
+ */
+export interface MailSendResponse {
+  id: string;
+  from?: string;
+  to?: string;
+  subject?: string;
+  body?: string;
+  created_at?: IsoTimestamp;
+  read?: boolean;
+  thread_id?: string;
+  rig?: string;
+}
+
 // ── Mail (Phase B but type-locked now so Phase A frontend compiles) ──────
 
 export interface GcMailItem {
