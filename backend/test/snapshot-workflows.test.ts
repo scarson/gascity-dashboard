@@ -8,6 +8,7 @@ import {
   createWorkflowsSourceCache,
   fromGcBead,
   MAX_VISIBLE_WORKFLOW_LANES,
+  RECENT_WORKFLOW_FETCH_LIMIT,
   workflowBeadFilter,
 } from '../src/snapshot/collectors/workflows.js';
 import type { WorkflowIssue } from '../src/snapshot/collectors/phaseMapping.js';
@@ -131,20 +132,20 @@ describe('workflowBeadFilter', () => {
 // ── fromGcBead adapter ────────────────────────────────────────────────────
 
 describe('fromGcBead', () => {
-  test('maps standard fields verbatim, falls back to empty updated_at', () => {
-    const adapted = fromGcBead(
-      gcBead({
-        id: 'a',
-        title: 'Implement',
-        assignee: 'alice',
-        updated_at: undefined,
-        metadata: { foo: 'bar' },
-      }),
-    );
+  test('maps standard fields verbatim, falls back to created_at when updated_at is absent', () => {
+    const source = gcBead({
+      id: 'a',
+      title: 'Implement',
+      assignee: 'alice',
+      metadata: { foo: 'bar' },
+    });
+    delete source.updated_at;
+
+    const adapted = fromGcBead(source);
     assert.equal(adapted.id, 'a');
     assert.equal(adapted.title, 'Implement');
     assert.equal(adapted.assignee, 'alice');
-    assert.equal(adapted.updated_at, '');
+    assert.equal(adapted.updated_at, '2026-05-10T19:00:00Z');
     assert.deepEqual(adapted.metadata, { foo: 'bar' });
   });
 
@@ -192,14 +193,102 @@ describe('buildWorkflowSummary', () => {
     ]);
 
     assert.equal(summary.totalActive, 1);
+    assert.deepEqual(summary.census, {
+      status: 'unavailable',
+      error: 'workflow health has not been derived',
+    });
+    assert.deepEqual(summary.lanes[0]?.health, {
+      status: 'unavailable',
+      error: 'workflow health has not been derived',
+    });
     assert.equal(summary.lanes.length, 1);
     const lane = summary.lanes[0]!;
     assert.equal(lane.id, 'ga-root');
     assert.equal(lane.title, 'Adopt PR workflow');
+    assert.deepEqual(lane.formula, {
+      status: 'unavailable',
+      error: 'workflow formula unavailable',
+    });
     assert.equal(lane.phase, 'review');
     assert.deepEqual(lane.activeAssignees, ['workflows.codex-max']);
     assert.deepEqual(lane.statusCounts, { open: 1, in_progress: 1 });
-    assert.equal(lane.updatedAt, '2026-05-10T21:00:00Z');
+    assert.deepEqual(lane.updatedAt, {
+      status: 'available',
+      at: '2026-05-10T21:00:00Z',
+    });
+    assert.deepEqual(lane.progress, {
+      status: 'stage_only',
+      stage: {
+        status: 'available',
+        index: 2,
+        key: 'review',
+        label: 'Review round 3',
+      },
+      error: 'active workflow step unavailable',
+    });
+  });
+
+  test('carries workflow formula as an explicit known state', () => {
+    const summary = buildWorkflowSummary([
+      issue({
+        id: 'ga-root',
+        title: 'Adopt PR workflow',
+        issue_type: 'molecule',
+        status: 'open',
+        metadata: graphWorkflowMetadata({
+          'gc.formula': 'mol-adopt-pr-v2',
+        }),
+      }),
+    ]);
+
+    assert.deepEqual(summary.lanes[0]!.formula, {
+      status: 'known',
+      name: 'mol-adopt-pr-v2',
+    });
+    assert.equal(summary.runCounts.prReview, 1);
+  });
+
+  test('carries active workflow progress as an explicit state', () => {
+    const summary = buildWorkflowSummary([
+      issue({
+        id: 'pr-root',
+        title: 'Adopt PR workflow',
+        issue_type: 'molecule',
+        status: 'open',
+        metadata: graphWorkflowMetadata({
+          'gc.formula': 'mol-adopt-pr-v2',
+        }),
+      }),
+      issue({
+        id: 'pr-review',
+        title: 'Review loop',
+        status: 'in_progress',
+        assignee: 'workflows.codex-max',
+        updated_at: '2026-05-10T21:00:00Z',
+        metadata: {
+          'gc.root_bead_id': 'pr-root',
+          'gc.step_id': 'review-loop',
+          'review-loop.iteration.2': 'active',
+        },
+      }),
+    ]);
+
+    const lane = summary.lanes[0]!;
+    assert.deepEqual(lane.progress, {
+      status: 'active_step',
+      stepId: 'review-loop',
+      stage: {
+        status: 'available',
+        index: 2,
+        key: 'review',
+        label: 'Review loop',
+      },
+      attempt: {
+        status: 'available',
+        value: 2,
+      },
+    });
+    assert.equal(lane.formulaStageResolved, true);
   });
 
   test('carries workflow scope metadata onto lanes for supervisor detail links', () => {
@@ -228,9 +317,12 @@ describe('buildWorkflowSummary', () => {
     ]);
 
     const lane = summary.lanes[0]!;
-    assert.equal(lane.scopeKind, 'rig');
-    assert.equal(lane.scopeRef, 'worktree');
-    assert.equal(lane.rootStoreRef, 'rig:worktree');
+    assert.deepEqual(lane.scope, {
+      status: 'available',
+      kind: 'rig',
+      ref: 'worktree',
+      rootStoreRef: 'rig:worktree',
+    });
   });
 
   test('omits query scope when explicit scope fields are absent, even with a root_store_ref (gascity-dashboard-sd9)', () => {
@@ -262,11 +354,10 @@ describe('buildWorkflowSummary', () => {
     ]);
 
     const lane = summary.lanes[0]!;
-    // No query scope derived from the rig store ref — the bug was scopeKind='rig'.
-    assert.equal(lane.scopeKind, null);
-    assert.equal(lane.scopeRef, null);
-    // rootStoreRef is still surfaced for display.
-    assert.equal(lane.rootStoreRef, 'rig:codeprobe');
+    assert.deepEqual(lane.scope, {
+      status: 'unavailable',
+      error: 'workflow scope metadata unavailable',
+    });
   });
 
   test('groups workflow roots and molecule children (M4-c)', () => {
@@ -396,6 +487,36 @@ describe('buildWorkflowSummary', () => {
     assert.equal(summary.runCounts.blocked, 1);
   });
 
+  test('keeps recently completed graph.v2 workflow runs visible', () => {
+    const summary = buildWorkflowSummary([
+      issue({
+        id: 'done-root',
+        title: 'Completed formula run',
+        status: 'closed',
+        issue_type: 'molecule',
+        updated_at: '2026-05-27T22:00:00Z',
+        metadata: graphWorkflowMetadata({
+          'gc.formula': 'mol-adopt-pr-v2',
+        }),
+      }),
+      issue({
+        id: 'done-review',
+        title: 'Review completed',
+        status: 'closed',
+        updated_at: '2026-05-27T22:01:00Z',
+        metadata: {
+          'gc.root_bead_id': 'done-root',
+          'gc.step_id': 'review-pr',
+        },
+      }),
+    ]);
+
+    assert.equal(summary.lanes.length, 1);
+    assert.equal(summary.lanes[0]!.id, 'done-root');
+    assert.equal(summary.lanes[0]!.phase, 'complete');
+    assert.deepEqual(summary.lanes[0]!.statusCounts, { closed: 2 });
+  });
+
   test('excludes non-graph.v2 molecule groups that cannot open in workflow detail', () => {
     const summary = buildWorkflowSummary([
       issue({
@@ -421,7 +542,7 @@ describe('buildWorkflowSummary', () => {
   // frontend as clickable hrefs. Supervisor bead metadata is the trust
   // boundary; a stored `javascript:` URI would otherwise render as a live
   // link in LaneCard.
-  test('externalUrl rejects non-http(s) protocols (javascript:, data:)', () => {
+  test('external link rejects non-http(s) protocols without hiding the label', () => {
     for (const malicious of [
       'javascript:alert(1)',
       'JAVASCRIPT:alert(1)',
@@ -436,55 +557,190 @@ describe('buildWorkflowSummary', () => {
           id: 'evil-root',
           title: 'malicious url',
           issue_type: 'molecule',
-          metadata: graphWorkflowMetadata({ 'pr_review.pr_url': malicious }),
+          metadata: graphWorkflowMetadata({
+            'pr_review.pr_number': '1',
+            'pr_review.pr_url': malicious,
+          }),
         }),
       ]);
-      assert.equal(
-        summary.lanes[0]!.externalUrl,
-        null,
-        `expected ${malicious} rejected`,
-      );
+      assert.deepEqual(summary.lanes[0]!.external, {
+        status: 'label_only',
+        label: 'PR #1',
+      }, `expected ${malicious} rejected`);
     }
   });
 
-  test('externalUrl preserves http(s) URLs from pr_review.pr_url', () => {
+  test('external link preserves http(s) URLs from pr_review.pr_url', () => {
     const summary = buildWorkflowSummary([
       issue({
         id: 'pr-root',
         title: 'safe pr url',
         issue_type: 'molecule',
         metadata: graphWorkflowMetadata({
+          'pr_review.pr_number': '1',
           'pr_review.pr_url': 'https://github.com/o/r/pull/1',
         }),
       }),
     ]);
-    assert.equal(
-      summary.lanes[0]!.externalUrl,
-      'https://github.com/o/r/pull/1',
-    );
+    assert.deepEqual(summary.lanes[0]!.external, {
+      status: 'available',
+      label: 'PR #1',
+      url: 'https://github.com/o/r/pull/1',
+    });
   });
 
-  test('externalUrl preserves http(s) URLs from bugflow.github_issue_url', () => {
+  test('external link preserves http(s) URLs from bugflow.github_issue_url', () => {
     const summary = buildWorkflowSummary([
       issue({
         id: 'bug-root',
         title: 'safe issue url',
         issue_type: 'molecule',
         metadata: graphWorkflowMetadata({
+          'bugflow.github_issue_number': '2',
           'bugflow.github_issue_url': 'http://github.com/o/r/issues/2',
         }),
       }),
     ]);
-    assert.equal(
-      summary.lanes[0]!.externalUrl,
-      'http://github.com/o/r/issues/2',
-    );
+    assert.deepEqual(summary.lanes[0]!.external, {
+      status: 'available',
+      label: 'Issue #2',
+      url: 'http://github.com/o/r/issues/2',
+    });
   });
 });
 
 // ── createWorkflowsSourceCache (cache integration) ────────────────────────
 
 describe('createWorkflowsSourceCache', () => {
+  test('default loader uses bounded typed queries so completed runs appear without an unbounded all=true scan', async () => {
+    const seenParams: Array<{
+      limit?: number;
+      type?: string;
+      rig?: string;
+      all?: boolean;
+    }> = [];
+    const cache = createWorkflowsSourceCache({
+      gc: {
+        listBeads: async (_signal: AbortSignal | undefined, rawParams: unknown) => {
+          const params = rawParams as {
+            limit?: number;
+            type?: string;
+            rig?: string;
+            all?: boolean;
+          };
+          seenParams.push(params);
+          if (params.all !== true) {
+            return {
+              items: [
+                gcBead({
+                  id: 'open-spec',
+                  title: 'Open child that identifies the rig',
+                  issue_type: 'spec',
+                  metadata: {
+                    'gc.root_bead_id': 'done-root',
+                    'gc.root_store_ref': 'rig:todo-app',
+                  },
+                }),
+              ],
+              total: 1,
+            };
+          }
+          if (params.type === 'task' && params.rig === 'todo-app') {
+            return {
+              items: [
+                gcBead({
+                  id: 'done-root',
+                  title: 'Completed formula run',
+                  status: 'closed',
+                  issue_type: 'task',
+                  metadata: graphWorkflowMetadata({
+                    'gc.root_store_ref': 'rig:todo-app',
+                    'gc.scope_kind': 'rig',
+                    'gc.scope_ref': 'todo-app',
+                  }),
+                }),
+              ],
+              total: 1,
+            };
+          }
+          if (params.type === 'molecule') {
+            return { items: [], total: 0 };
+          }
+          assert.fail(`unexpected listBeads params: ${JSON.stringify(params)}`);
+        },
+      } as never,
+      limit: 77,
+    });
+
+    const result = await cache.get();
+
+    assert.equal(result.status, 'fresh');
+    assert.deepEqual(seenParams, [
+      { limit: 77 },
+      {
+        limit: RECENT_WORKFLOW_FETCH_LIMIT,
+        type: 'task',
+        rig: 'todo-app',
+        all: true,
+      },
+      {
+        limit: RECENT_WORKFLOW_FETCH_LIMIT,
+        type: 'molecule',
+        all: true,
+      },
+    ]);
+    assert.equal(
+      seenParams.some((params) => params.all === true && params.type === undefined),
+      false,
+    );
+    if (result.status === 'fresh') {
+      assert.equal(result.data.lanes[0]?.id, 'done-root');
+    }
+  });
+
+  test('default loader includes recent city-scoped molecule runs without requiring a rig', async () => {
+    const seenParams: unknown[] = [];
+    const cache = createWorkflowsSourceCache({
+      gc: {
+        listBeads: async (_signal: AbortSignal | undefined, params: unknown) => {
+          seenParams.push(params);
+          const typed = params as { all?: boolean; type?: string };
+          if (typed.all === true && typed.type === 'molecule') {
+            return {
+              items: [
+                gcBead({
+                id: 'done-root',
+                title: 'Completed formula run',
+                status: 'closed',
+                issue_type: 'molecule',
+                metadata: graphWorkflowMetadata(),
+              }),
+              ],
+              total: 1,
+            };
+          }
+          return { items: [], total: 0 };
+        },
+      } as never,
+      limit: 77,
+    });
+
+    const result = await cache.get();
+
+    assert.equal(result.status, 'fresh');
+    assert.deepEqual(seenParams, [
+      { limit: 77 },
+      {
+        limit: RECENT_WORKFLOW_FETCH_LIMIT,
+        type: 'molecule',
+        all: true,
+      },
+    ]);
+    if (result.status === 'fresh') {
+      assert.equal(result.data.lanes[0]?.id, 'done-root');
+    }
+  });
+
   test('passes injected load() result through unchanged on success', async () => {
     const summary = buildWorkflowSummary([
       issue({ id: 'a', title: 'Implement the fix' }),

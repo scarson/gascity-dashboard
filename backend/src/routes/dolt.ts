@@ -1,13 +1,15 @@
 import { Router } from 'express';
-import type { DoltNomsTrend } from 'gas-city-dashboard-shared';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import type { DoltNomsTrend, DoltNomsUnavailableReason } from 'gas-city-dashboard-shared';
 import { recordAudit } from '../audit.js';
+import { LOG_COMPONENT, errorMessage, logWarn } from '../logging.js';
 
 // In-memory ring buffer of dolt-noms size samples — 24 h at 10-minute
-// cadence = 144 slots. Sampling is wired but the actual metric source
-// is pending mechanic surgical-ask (filed as a follow-up bead per
-// architect's "don't pull mechanic off th-ks4dw" guard). Once the
-// source lands, swap the `sampleDoltNomsSize()` stub for the real
-// implementation; the ring buffer + endpoint shape don't change.
+// cadence = 144 slots. The sampler reads the configured city root's
+// `.dolt/noms` directory directly. If the dashboard is started without a
+// city path, the endpoint reports unavailable rather than guessing from
+// the dashboard repo's cwd.
 
 const SLOT_COUNT = 144;
 const SAMPLE_INTERVAL_MS = 10 * 60 * 1_000;
@@ -17,65 +19,173 @@ interface RingSlot {
   bytes: number;
 }
 
-const ring: (RingSlot | null)[] = new Array(SLOT_COUNT).fill(null);
-let head = 0;
-let metricSource: string | null = null;
-let metricAvailable = false;
+type DoltNomsAvailability =
+  | { kind: 'available'; source: string }
+  | { kind: 'unavailable'; reason: DoltNomsUnavailableReason };
 
-export function startDoltNomsSampler(): void {
-  // Run once at boot, then on the cadence.
-  void runSample();
-  setInterval(() => {
-    void runSample();
-  }, SAMPLE_INTERVAL_MS).unref();
+export interface DoltNomsTimer {
+  unref(): void;
 }
 
-async function runSample(): Promise<void> {
-  try {
-    const sample = await sampleDoltNomsSize();
-    if (sample !== null) {
-      ring[head] = { ts: new Date().toISOString(), bytes: sample };
-      head = (head + 1) % SLOT_COUNT;
-      metricAvailable = true;
+export interface DoltNomsRuntime {
+  setInterval(callback: () => void, delayMs: number): DoltNomsTimer;
+  clearInterval(timer: DoltNomsTimer): void;
+}
+
+export interface DoltNomsSampler {
+  readonly running: boolean;
+  start(): void;
+  stop(): void;
+  sampleOnce(): Promise<void>;
+  trend(): DoltNomsTrend;
+}
+
+type SamplerTimerState =
+  | { status: 'idle' }
+  | { status: 'scheduled'; timer: DoltNomsTimer };
+
+const nodeRuntime: DoltNomsRuntime = {
+  setInterval: (callback, delayMs) => setInterval(callback, delayMs),
+  clearInterval: (timer) => clearInterval(timer as NodeJS.Timeout),
+};
+
+export interface DoltNomsSample {
+  bytes: number;
+  source: string;
+}
+
+export type DoltNomsSampleResult =
+  | { kind: 'available'; sample: DoltNomsSample }
+  | { kind: 'unavailable'; reason: 'city_path_missing' }
+  | { kind: 'unavailable'; reason: 'city_path_not_absolute'; cityPath: string }
+  | { kind: 'unavailable'; reason: 'noms_directory_missing'; source: string }
+  | { kind: 'unavailable'; reason: 'noms_path_not_directory'; source: string };
+
+export interface DoltNomsSamplerOptions {
+  cityPath: string;
+  sample?: (cityPath: string) => Promise<DoltNomsSampleResult>;
+  runtime?: DoltNomsRuntime;
+  intervalMs?: number;
+  slotCount?: number;
+}
+
+export function createDoltNomsSampler(opts: DoltNomsSamplerOptions): DoltNomsSampler {
+  const sample = opts.sample ?? sampleDoltNomsSize;
+  const runtime = opts.runtime ?? nodeRuntime;
+  const intervalMs = opts.intervalMs ?? SAMPLE_INTERVAL_MS;
+  const slotCount = opts.slotCount ?? SLOT_COUNT;
+  const ring: RingSlot[] = [];
+  let availability: DoltNomsAvailability = {
+    kind: 'unavailable',
+    reason: 'city_path_missing',
+  };
+  let timerState: SamplerTimerState = { status: 'idle' };
+
+  const sampleOnce = async (): Promise<void> => {
+    try {
+      const result = await sample(opts.cityPath);
+      if (result.kind === 'available') {
+        ring.push({ ts: new Date().toISOString(), bytes: result.sample.bytes });
+        if (ring.length > slotCount) ring.shift();
+        availability = { kind: 'available', source: result.sample.source };
+      } else {
+        availability = { kind: 'unavailable', reason: result.reason };
+      }
+    } catch (err) {
+      availability = { kind: 'unavailable', reason: 'sample_failed' };
+      logWarn(LOG_COMPONENT.doltNoms, `sample failed: ${errorMessage(err)}`);
     }
-  } catch {
-    /* sampling errors are non-fatal */
+  };
+
+  return {
+    get running() {
+      return timerState.status === 'scheduled';
+    },
+    start() {
+      if (timerState.status === 'scheduled') return;
+      void sampleOnce();
+      timerState = {
+        status: 'scheduled',
+        timer: runtime.setInterval(() => {
+          void sampleOnce();
+        }, intervalMs),
+      };
+      timerState.timer.unref();
+    },
+    stop() {
+      if (timerState.status === 'idle') return;
+      runtime.clearInterval(timerState.timer);
+      timerState = { status: 'idle' };
+    },
+    sampleOnce,
+    trend() {
+      const samples = ring.map((s) => ({ ts: s.ts, bytes: s.bytes }));
+      return availability.kind === 'available'
+        ? {
+            available: true,
+            samples,
+            source: availability.source,
+          }
+        : {
+            available: false,
+            samples,
+            reason: availability.reason,
+          };
+    },
+  };
+}
+
+export async function sampleDoltNomsSize(cityPath: string): Promise<DoltNomsSampleResult> {
+  if (cityPath.length === 0) return { kind: 'unavailable', reason: 'city_path_missing' };
+  if (!path.isAbsolute(cityPath)) {
+    return { kind: 'unavailable', reason: 'city_path_not_absolute', cityPath };
   }
+  const source = path.join(cityPath, '.dolt', 'noms');
+  try {
+    const stat = await fs.stat(source);
+    if (!stat.isDirectory()) {
+      return { kind: 'unavailable', reason: 'noms_path_not_directory', source };
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { kind: 'unavailable', reason: 'noms_directory_missing', source };
+    }
+    throw err;
+  }
+  return {
+    kind: 'available',
+    sample: {
+      bytes: await directoryByteSize(source),
+      source,
+    },
+  };
 }
 
-/**
- * STUB. Mechanic surgical-ask filed (td-ulgrt6 to come): "expose a
- * dolt-noms metric endpoint or document where to read the disk size."
- * Until that lands this returns null and the endpoint signals
- * available=false with source=null so the UI can render a calm "metric
- * source pending" state instead of fake zeros.
- */
-async function sampleDoltNomsSize(): Promise<number | null> {
-  return null;
+async function directoryByteSize(dir: string): Promise<number> {
+  let total = 0;
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const child = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      total += await directoryByteSize(child);
+    } else if (entry.isFile()) {
+      total += (await fs.stat(child)).size;
+    }
+  }
+  return total;
 }
 
-export function doltRouter(): Router {
+export function doltRouter(sampler: DoltNomsSampler): Router {
   const router = Router();
   router.get('/trend', (_req, res) => {
-    const samples = ring
-      .filter((s): s is RingSlot => s !== null)
-      .map((s) => ({ ts: s.ts, bytes: s.bytes }));
-    const payload: DoltNomsTrend = {
-      samples,
-      source: metricSource,
-      available: metricAvailable,
-    };
+    const payload = sampler.trend();
     void recordAudit({
       type: 'dashboard.fetch',
       endpoint: 'GET /api/dolt-noms/trend',
-      parsed_args: { samples: String(samples.length) },
+      parsed_args: { samples: String(payload.samples.length) },
       duration_ms: 0,
     });
     res.json(payload);
   });
   return router;
-}
-
-export function setDoltNomsSource(source: string | null): void {
-  metricSource = source;
 }

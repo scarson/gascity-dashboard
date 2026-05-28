@@ -31,20 +31,29 @@ function hasNormalisedText(needle: RegExp) {
 }
 
 function renderBar(props: Partial<React.ComponentProps<typeof SelectionActionBar>> = {}) {
+  const actionBarProps: React.ComponentProps<typeof SelectionActionBar> = {
+    count: props.count ?? 2,
+    onSend: props.onSend ?? (() => {}),
+    onSendDraft: props.onSendDraft ?? (() => {}),
+    onClear: props.onClear ?? (() => {}),
+    sending: props.sending ?? null,
+    error: props.error ?? null,
+    success: props.success ?? null,
+  };
   return render(
     <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
-      <SelectionActionBar
-        count={props.count ?? 2}
-        onSend={props.onSend ?? (() => {})}
-        onSendDraft={props.onSendDraft}
-        onClear={props.onClear ?? (() => {})}
-        sending={props.sending ?? false}
-        error={props.error ?? null}
-        success={props.success ?? null}
-      />
+      <SelectionActionBar {...actionBarProps} />
     </MemoryRouter>,
   );
 }
+
+// @ts-expect-error draft dispatch is part of the current action-bar contract, not a legacy optional path.
+const missingDraftDispatchProps: React.ComponentProps<typeof SelectionActionBar> = { count: 1, onSend: () => {}, onClear: () => {}, sending: null, error: null, success: null };
+void missingDraftDispatchProps;
+
+// @ts-expect-error sending must name the active intent; booleans were the removed single-intent contract.
+const booleanSendingProps: React.ComponentProps<typeof SelectionActionBar> = { count: 1, onSend: () => {}, onSendDraft: () => {}, onClear: () => {}, sending: true, error: null, success: null };
+void booleanSendingProps;
 
 describe('SelectionActionBar — success state', () => {
   afterEach(() => {
@@ -279,11 +288,9 @@ describe('SlungLink — inline workflow link for slung items', () => {
   //
   // When the configured target role doesn't map to any running session
   // (sling routed to an agent that's not spawned yet, OR supervisor was
-  // unreachable at sling-write time, OR the entry is a legacy pre-55b
-  // shape with no resolved_session_name field at all), the link must
-  // NOT render as /agents/<role-label> — that's the 404 bug this bead
-  // fixes. Surface an inline error instead so the operator knows the
-  // sling itself succeeded but the link can't drill in yet.
+  // unreachable at sling-write time), the link must NOT render as
+  // /agents/<role-label>. Surface an inline error instead so the operator
+  // knows the sling itself succeeded but the link can't drill in yet.
 
   it('renders inline "no session" error when resolved_session_name is null', () => {
     const { container } = render(
@@ -307,37 +314,6 @@ describe('SlungLink — inline workflow link for slung items', () => {
     expect(container.textContent).toMatch(/no session for chief-of-staff/i);
   });
 
-  it('renders inline "no session" error when resolved_session_name is undefined (legacy entry)', () => {
-    // Legacy pre-55b on-disk entries don't carry resolved_session_name at all.
-    // Treat undefined identically to null — no link, surface the error.
-    const { container } = render(
-      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
-        <SlungLink
-          item={{
-            slung: {
-              slung_at: '2026-05-24T12:00:00.000Z',
-              target: 'chief-of-staff',
-              bead_id: null,
-              // resolved_session_name absent
-            },
-          }}
-        />
-      </MemoryRouter>,
-    );
-    expect(container.querySelector('a')).toBeNull();
-    expect(container.textContent).toMatch(/no session for chief-of-staff/i);
-  });
-
-  // Stale-cache safety: an envelope from a pre-9qs build has slung as
-  // undefined. Loose != null in the component must catch both cases.
-  it('renders nothing when item.slung is undefined (stale cache from pre-field build)', () => {
-    const { container } = render(
-      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
-        <SlungLink item={{ slung: undefined as unknown as null }} />
-      </MemoryRouter>,
-    );
-    expect(container.textContent).toBe('');
-  });
 });
 
 describe('SelectionActionBar — selection counter', () => {
@@ -354,6 +330,7 @@ describe('SelectionActionBar — selection counter', () => {
   it('renders Send and Clear controls', () => {
     renderBar();
     expect(screen.getByRole('button', { name: /send to triage agent/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /send to draft agent/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^clear$/i })).toBeTruthy();
   });
 
@@ -367,22 +344,14 @@ describe('SelectionActionBar — selection counter', () => {
   });
 });
 
-// gascity-dashboard-5xw: the bar now exposes two intent buttons. Triage
-// stays the default (back-compat for callers that haven't migrated);
-// draft is rendered only when onSendDraft is supplied. Keeps existing
-// test contexts working without forcing every callsite to handle both.
+// gascity-dashboard-5xw: the bar exposes the current two-intent contract.
 describe('SelectionActionBar — dual-intent buttons', () => {
   afterEach(() => {
     cleanup();
   });
 
-  it('hides the draft button when onSendDraft is not provided', () => {
+  it('renders the draft button alongside triage', () => {
     renderBar();
-    expect(screen.queryByRole('button', { name: /send to draft agent/i })).toBeNull();
-  });
-
-  it('renders the draft button alongside triage when onSendDraft is provided', () => {
-    renderBar({ onSendDraft: () => {} });
     expect(screen.getByRole('button', { name: /send to triage agent/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /send to draft agent/i })).toBeTruthy();
   });
@@ -395,7 +364,7 @@ describe('SelectionActionBar — dual-intent buttons', () => {
   });
 
   it('disables both intent buttons while sending', () => {
-    renderBar({ onSendDraft: () => {}, sending: true });
+    renderBar({ onSendDraft: () => {}, sending: 'triage' });
     const triage = screen.getByRole('button', { name: /sending/i }) as HTMLButtonElement;
     const draft = screen.getByRole('button', { name: /send to draft agent/i }) as HTMLButtonElement;
     expect(triage.disabled).toBe(true);

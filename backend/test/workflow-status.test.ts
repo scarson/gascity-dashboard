@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type {
   GcWorkflowBead,
   WorkflowExecutionInstance,
+  WorkflowNodeStatus,
 } from 'gas-city-dashboard-shared';
 import {
   aggregateStatus,
@@ -101,11 +102,18 @@ function workflowBead(overrides: Partial<GcWorkflowBead>): GcWorkflowBead {
 }
 
 function executionInstance(
-  status: WorkflowExecutionInstance['status'],
+  status: WorkflowNodeStatus,
 ): WorkflowExecutionInstance {
   return {
-    id: `${status ?? 'unknown'}-instance`,
+    id: `${status}-instance`,
     semanticNodeId: 'node',
+    beadId: `${status}-bead`,
+    iteration: { kind: 'base' },
+    attempt: { kind: 'untracked' },
+    label: 'base',
     status,
+    session: { kind: 'none', reason: 'session_unresolved' },
+    currentIteration: true,
+    historical: false,
   };
 }

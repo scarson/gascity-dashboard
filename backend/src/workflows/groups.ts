@@ -67,21 +67,13 @@ export function groupWorkflowBeads(
     const existing = groupsById.get(semanticNodeId);
     const group =
       existing ??
-      {
-        semanticNodeId,
-        title: displayTitleFor(bead, semanticNodeId),
-        kind: externalKindFor(bead, constructKind),
-        constructKind,
-        scopeRef: meta(bead, 'gc.scope_ref') ?? nonEmpty(bead.scope_ref),
-        loopControlNodeId: loopControlNodeIdFor(bead),
-        beads: [],
-      };
+      buildWorkflowNodeGroup(bead, semanticNodeId, constructKind);
     if (existing && shouldPromoteGroupShape(existing.constructKind, constructKind)) {
       existing.title = displayTitleFor(bead, semanticNodeId);
       existing.kind = externalKindFor(bead, constructKind);
       existing.constructKind = constructKind;
-      existing.scopeRef = meta(bead, 'gc.scope_ref') ?? nonEmpty(bead.scope_ref);
-      existing.loopControlNodeId = loopControlNodeIdFor(bead);
+      assignOptional(existing, 'scopeRef', meta(bead, 'gc.scope_ref') ?? nonEmpty(bead.scope_ref));
+      assignOptional(existing, 'loopControlNodeId', loopControlNodeIdFor(bead));
     }
     group.beads.push(bead);
     if (!existing) groupsById.set(semanticNodeId, group);
@@ -92,6 +84,35 @@ export function groupWorkflowBeads(
     physicalToSemantic,
     badgesByTarget,
   };
+}
+
+function buildWorkflowNodeGroup(
+  bead: GcWorkflowBead,
+  semanticNodeId: string,
+  constructKind: WorkflowNodeGroup['constructKind'],
+): WorkflowNodeGroup {
+  const group: WorkflowNodeGroup = {
+    semanticNodeId,
+    title: displayTitleFor(bead, semanticNodeId),
+    kind: externalKindFor(bead, constructKind),
+    constructKind,
+    beads: [] as GcWorkflowBead[],
+  };
+  assignOptional(group, 'scopeRef', meta(bead, 'gc.scope_ref') ?? nonEmpty(bead.scope_ref));
+  assignOptional(group, 'loopControlNodeId', loopControlNodeIdFor(bead));
+  return group;
+}
+
+function assignOptional<K extends 'scopeRef' | 'loopControlNodeId'>(
+  group: WorkflowNodeGroup,
+  key: K,
+  value: WorkflowNodeGroup[K] | undefined,
+): void {
+  if (value === undefined) {
+    delete group[key];
+    return;
+  }
+  group[key] = value;
 }
 
 function shouldPromoteGroupShape(

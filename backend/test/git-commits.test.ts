@@ -44,7 +44,8 @@ async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
   setAuditLogPath(auditPath);
 
   const app = express();
-  app.use('/api/git', gitRouter({ execGitLog: opts.execGitLog }));
+  const routerOptions = opts.execGitLog === undefined ? {} : { execGitLog: opts.execGitLog };
+  app.use('/api/git', gitRouter(routerOptions));
 
   return new Promise((resolve) => {
     const srv = app.listen(0, '127.0.0.1', () => {

@@ -38,21 +38,31 @@ export interface WorkflowSessionLink {
   sessionId: string;
   sessionName: string;
   assignee: string;
-  rigId?: string;
 }
+
+export type WorkflowIteration =
+  | { kind: 'base' }
+  | { kind: 'loop'; value: number };
+
+export type WorkflowAttempt =
+  | { kind: 'untracked' }
+  | { kind: 'attempt'; value: number };
+
+export type WorkflowSessionAttachment =
+  | { kind: 'attached'; link: WorkflowSessionLink; streamable: boolean }
+  | { kind: 'none'; reason: 'not_started' | 'session_unresolved' };
 
 export interface WorkflowExecutionInstance {
   id: string;
   semanticNodeId: string;
-  beadId?: string;
-  iteration?: number;
-  attempt?: number;
-  label?: string;
-  status?: WorkflowNodeStatus;
-  sessionLink?: WorkflowSessionLink | null;
-  currentIteration?: boolean;
-  historical?: boolean;
-  streamable?: boolean;
+  beadId: string;
+  iteration: WorkflowIteration;
+  attempt: WorkflowAttempt;
+  label: string;
+  status: WorkflowNodeStatus;
+  session: WorkflowSessionAttachment;
+  currentIteration: boolean;
+  historical: boolean;
 }
 
 export interface WorkflowControlBadge {
@@ -68,28 +78,45 @@ export interface WorkflowDisplayNode {
   kind: string;
   constructKind: WorkflowConstructKind;
   status: WorkflowNodeStatus;
-  currentBeadId?: string;
-  scopeRef?: string;
-  loopControlNodeId?: string;
+  currentBeadId: string;
+  scope: WorkflowNodeScope;
   /** False when this semantic node is transcript history only and should not render in the left graph. */
-  visibleInGraph?: boolean;
+  visibleInGraph: boolean;
   /** True when all execution instances are from older loop iterations or stale expansion output. */
-  historicalOnly?: boolean;
-  visibleIteration?: number;
-  iterationCount?: number;
-  hasHistoricalIterations?: boolean;
-  attemptBadge?: string;
-  attemptCount?: number;
-  activeAttempt?: number;
-  visibleExecutionInstanceId?: string;
+  historicalOnly: boolean;
+  iterationSummary: WorkflowIterationSummary;
+  attemptSummary: WorkflowAttemptSummary;
+  visibleExecutionInstanceId: string;
   executionInstances: WorkflowExecutionInstance[];
-  controlBadges?: WorkflowControlBadge[];
+  controlBadges: WorkflowControlBadge[];
 }
+
+export type WorkflowNodeScope =
+  | { kind: 'workflow' }
+  | { kind: 'scoped'; ref: string };
+
+export type WorkflowIterationSummary =
+  | { kind: 'single' }
+  | {
+      kind: 'stacked';
+      visibleIteration: number;
+      iterationCount: number;
+      control: { kind: 'known'; id: string } | { kind: 'unknown' };
+    };
+
+export type WorkflowAttemptSummary =
+  | { kind: 'none' }
+  | {
+      kind: 'tracked';
+      count: number;
+      badge: { kind: 'bounded'; label: string } | { kind: 'count-only' };
+      active: { kind: 'running'; value: number } | { kind: 'idle' };
+    };
 
 export interface WorkflowDisplayEdge {
   from: string;
   to: string;
-  kind?: string;
+  kind: string;
 }
 
 export interface WorkflowDisplayLane {
@@ -100,7 +127,7 @@ export interface WorkflowDisplayLane {
 
 export interface WorkflowRunProgress {
   snapshotVersion: number;
-  snapshotEventSeq?: number | null;
+  snapshotEventSeq: WorkflowSnapshotSequence;
   partial: boolean;
   totalNodeCount: number;
   visibleNodeCount: number;
@@ -121,16 +148,28 @@ export interface WorkflowRunDetail {
   scopeKind: WorkflowScopeKind;
   scopeRef: string;
   title: string;
-  formula: string | null;
-  executionPath: string | null;
+  formula: WorkflowFormula;
+  executionPath: WorkflowExecutionPath;
   snapshotVersion: number;
-  snapshotEventSeq?: number | null;
+  snapshotEventSeq: WorkflowSnapshotSequence;
   partial: boolean;
   progress: WorkflowRunProgress;
   nodes: WorkflowDisplayNode[];
   edges: WorkflowDisplayEdge[];
   lanes: WorkflowDisplayLane[];
 }
+
+export type WorkflowFormula =
+  | { kind: 'known'; name: string }
+  | { kind: 'unavailable'; reason: 'missing_formula_metadata' | 'formula_detail_unavailable' };
+
+export type WorkflowExecutionPath =
+  | { kind: 'known'; path: string }
+  | { kind: 'unavailable'; reason: 'missing_cwd_and_rig_root' };
+
+export type WorkflowSnapshotSequence =
+  | { kind: 'known'; seq: number }
+  | { kind: 'unavailable'; reason: 'supervisor_omitted' };
 
 export type WorkflowDiffKind = 'ok' | 'not_git' | 'path_unknown' | 'error';
 
@@ -147,13 +186,20 @@ export interface WorkflowChangedFile {
   kind: WorkflowChangedFileKind;
 }
 
-export interface WorkflowDiffResponse {
-  kind: WorkflowDiffKind;
-  rootPath: string | null;
+interface WorkflowDiffBase {
+  rootPath: WorkflowDiffRootPath;
   status: string[];
   changedFiles: WorkflowChangedFile[];
   unstagedDiff: string;
   stagedDiff: string;
   truncated: boolean;
-  error?: string;
 }
+
+export type WorkflowDiffResponse =
+  | (WorkflowDiffBase & { kind: 'ok' })
+  | (WorkflowDiffBase & { kind: 'not_git' | 'path_unknown' })
+  | (WorkflowDiffBase & { kind: 'error'; error: string });
+
+export type WorkflowDiffRootPath =
+  | { kind: 'known'; path: string }
+  | { kind: 'unavailable'; reason: 'path_unknown' | 'not_git' | 'error' };

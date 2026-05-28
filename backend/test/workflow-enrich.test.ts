@@ -7,6 +7,7 @@ import {
 import type {
   GcWorkflowSnapshot,
   WorkflowDisplayNode,
+  WorkflowExecutionInstance,
   WorkflowRunDetail,
 } from 'gas-city-dashboard-shared';
 import {
@@ -22,7 +23,10 @@ describe('workflow presentation enrichment fixtures', () => {
     assert.equal(detail.workflowId, 'gvt-nayu');
     assert.equal(detail.scopeKind, 'rig');
     assert.equal(detail.scopeRef, 'dashboard-graphv2-test');
-    assert.equal(detail.formula, null);
+    assert.deepEqual(detail.formula, {
+      kind: 'unavailable',
+      reason: 'missing_formula_metadata',
+    });
     assert.deepEqual(detail.nodes.map((node) => node.id), [
       'gvt-nayu',
       'inspect',
@@ -48,8 +52,8 @@ describe('workflow presentation enrichment fixtures', () => {
     });
 
     assert.equal(detail.workflowId, 'gc-adopt-pr-active');
-    assert.equal(detail.formula, 'mol-adopt-pr-v2');
-    assert.equal(detail.executionPath, '/tmp/gascity/adopt-pr-42');
+    assert.equal(formulaName(detail), 'mol-adopt-pr-v2');
+    assert.equal(executionPath(detail), '/tmp/gascity/adopt-pr-42');
     assert.equal(JSON.stringify(detail).toLowerCase().includes('ralph'), false);
 
     const nodeIds = detail.nodes.map((node) => node.id);
@@ -70,30 +74,30 @@ describe('workflow presentation enrichment fixtures', () => {
 
     const reviewLoop = findNode(detail, 'review-loop');
     assert.equal(reviewLoop.constructKind, 'check-loop');
-    assert.equal(reviewLoop.attemptBadge, '1/999');
+    assert.deepEqual(reviewLoop.attemptSummary, {
+      kind: 'tracked',
+      count: 1,
+      badge: { kind: 'bounded', label: '1/999' },
+      active: { kind: 'idle' },
+    });
 
     const reviewPipeline = findNode(detail, 'review-pipeline');
     assert.equal(reviewPipeline.constructKind, 'expansion');
     assert.equal(reviewPipeline.status, 'active');
-    assert.equal(reviewPipeline.visibleIteration, 2);
-    assert.equal(reviewPipeline.iterationCount, 2);
-    assert.equal(reviewPipeline.hasHistoricalIterations, true);
+    assertStackedIteration(reviewPipeline, 2, 2, 'review-loop');
     assert.equal(reviewPipeline.executionInstances.length, 2);
     assert.equal(reviewPipeline.executionInstances[0]?.historical, true);
-    assert.equal(reviewPipeline.executionInstances[0]?.streamable, false);
+    assert.equal(streamable(reviewPipeline.executionInstances[0]), false);
     assert.equal(reviewPipeline.executionInstances[1]?.currentIteration, true);
-    assert.equal(reviewPipeline.executionInstances[1]?.streamable, true);
-    assert.equal(
-      reviewPipeline.executionInstances[1]?.sessionLink?.sessionId,
-      'gc-session-review-i2',
-    );
+    assert.equal(streamable(reviewPipeline.executionInstances[1]), true);
+    assert.equal(sessionId(reviewPipeline.executionInstances[1]), 'gc-session-review-i2');
     assert.deepEqual(reviewPipeline.controlBadges, [
       { id: 'gc-review-pipeline-scope-check', label: 'scope check', status: 'completed' },
     ]);
 
     const applyFixes = findNode(detail, 'apply-fixes');
     assert.equal(applyFixes.status, 'ready');
-    assert.equal(applyFixes.visibleIteration, 2);
+    assertStackedIteration(applyFixes, 2, 2, 'review-loop');
     assert.equal(applyFixes.executionInstances[0]?.historical, true);
     assert.equal(applyFixes.executionInstances[1]?.currentIteration, true);
 
@@ -114,10 +118,10 @@ describe('workflow presentation enrichment fixtures', () => {
     });
 
     assert.equal(detail.workflowId, 'gc-bug-hunt-complete');
-    assert.equal(detail.formula, 'mol-bug-hunt-v2');
+    assert.equal(formulaName(detail), 'mol-bug-hunt-v2');
     assert.equal(detail.scopeKind, 'rig');
     assert.equal(detail.scopeRef, 'bug-rig');
-    assert.equal(detail.executionPath, '/Users/csells/Code/gascity/bug-rig');
+    assert.equal(executionPath(detail), '/Users/csells/Code/gascity/bug-rig');
 
     const body = findNode(detail, 'body');
     assert.equal(body.constructKind, 'scope');
@@ -126,17 +130,20 @@ describe('workflow presentation enrichment fixtures', () => {
     const prepareHunters = findNode(detail, 'prepare-hunters');
     assert.equal(prepareHunters.constructKind, 'retry');
     assert.equal(prepareHunters.status, 'completed');
-    assert.equal(prepareHunters.attemptBadge, '2/3');
-    assert.equal(prepareHunters.attemptCount, 2);
-    assert.equal(prepareHunters.activeAttempt, undefined);
+    assert.deepEqual(prepareHunters.attemptSummary, {
+      kind: 'tracked',
+      count: 2,
+      badge: { kind: 'bounded', label: '2/3' },
+      active: { kind: 'idle' },
+    });
     assert.equal(prepareHunters.executionInstances.length, 2);
     assert.equal(prepareHunters.executionInstances[0]?.status, 'failed');
     assert.equal(
-      prepareHunters.executionInstances[0]?.sessionLink?.sessionId,
+      sessionId(prepareHunters.executionInstances[0]),
       'gc-session-prepare-a1',
       'failed attempts still need transcript access',
     );
-    assert.equal(prepareHunters.executionInstances[0]?.streamable, false);
+    assert.equal(streamable(prepareHunters.executionInstances[0]), false);
     assert.equal(prepareHunters.executionInstances[1]?.status, 'completed');
 
     const fanout = findNode(detail, 'hunter-fanout');
@@ -146,11 +153,11 @@ describe('workflow presentation enrichment fixtures', () => {
     const skippedHunter = findNode(detail, 'hunter-gemini');
     assert.equal(skippedHunter.constructKind, 'condition');
     assert.equal(skippedHunter.status, 'skipped');
-    assert.equal(skippedHunter.executionInstances[0]?.sessionLink, null);
+    assertNoSession(skippedHunter.executionInstances[0]);
 
     const synthesize = findNode(detail, 'synthesize-findings');
     assert.equal(synthesize.status, 'completed');
-    assert.equal(synthesize.executionInstances[0]?.sessionLink, null);
+    assertNoSession(synthesize.executionInstances[0]);
 
     const root = findNode(detail, 'gc-bug-hunt-complete');
     assert.deepEqual(root.controlBadges, [
@@ -219,16 +226,14 @@ describe('workflow presentation enrichment fixtures', () => {
     const detail = enrichWorkflowRun(historicalOnlyLoopSnapshot(), {});
 
     const oldOnly = findNode(detail, 'old-only-review');
-    assert.equal(oldOnly.loopControlNodeId, 'review-loop');
-    assert.equal(oldOnly.visibleIteration, 1);
+    assertStackedIteration(oldOnly, 1, 1, 'review-loop');
     assert.equal(oldOnly.historicalOnly, true);
     assert.equal(oldOnly.visibleInGraph, false);
     assert.equal(oldOnly.executionInstances[0]?.historical, true);
-    assert.equal(oldOnly.executionInstances[0]?.streamable, false);
+    assert.equal(streamable(oldOnly.executionInstances[0]), false);
 
     const current = findNode(detail, 'current-review');
-    assert.equal(current.loopControlNodeId, 'review-loop');
-    assert.equal(current.visibleIteration, 2);
+    assertStackedIteration(current, 2, 1, 'review-loop');
     assert.equal(current.historicalOnly, false);
     assert.equal(current.visibleInGraph, true);
   });
@@ -357,7 +362,10 @@ describe('workflow presentation enrichment fixtures', () => {
 
     const detail = enrichWorkflowRun(snapshot, {});
 
-    assert.equal(detail.formula, null);
+    assert.deepEqual(detail.formula, {
+      kind: 'unavailable',
+      reason: 'missing_formula_metadata',
+    });
   });
 });
 
@@ -365,6 +373,43 @@ function findNode(detail: WorkflowRunDetail, id: string): WorkflowDisplayNode {
   const node = detail.nodes.find((candidate) => candidate.id === id);
   assert.ok(node, `expected workflow node ${id}`);
   return node;
+}
+
+function formulaName(detail: WorkflowRunDetail): string {
+  assert.equal(detail.formula.kind, 'known');
+  return detail.formula.name;
+}
+
+function executionPath(detail: WorkflowRunDetail): string {
+  assert.equal(detail.executionPath.kind, 'known');
+  return detail.executionPath.path;
+}
+
+function assertStackedIteration(
+  node: WorkflowDisplayNode,
+  visibleIteration: number,
+  iterationCount: number,
+  controlNodeId: string,
+): void {
+  assert.deepEqual(node.iterationSummary, {
+    kind: 'stacked',
+    visibleIteration,
+    iterationCount,
+    control: { kind: 'known', id: controlNodeId },
+  });
+}
+
+function streamable(instance: WorkflowExecutionInstance | undefined): boolean {
+  return instance?.session.kind === 'attached' && instance.session.streamable;
+}
+
+function sessionId(instance: WorkflowExecutionInstance | undefined): string {
+  assert.equal(instance?.session.kind, 'attached');
+  return instance.session.link.sessionId;
+}
+
+function assertNoSession(instance: WorkflowExecutionInstance | undefined): void {
+  assert.equal(instance?.session.kind, 'none');
 }
 
 function formulaOrderGraphSnapshot(edges: {

@@ -43,10 +43,8 @@ interface BuildOpts {
   /**
    * gascity-dashboard-55b: injected supervisor sessions fetcher used by
    * the sling handler to resolve the target role into a concrete
-   * session_name. When omitted, the route gets no listSessions and
-   * persists resolved_session_name=null (legacy / pre-55b behaviour),
-   * which lets the older tests in this file keep their original
-   * assertions while new tests opt in explicitly.
+   * session_name. When omitted, the route cannot resolve the target and
+   * persists resolved_session_name=null.
    */
   listSessions?: () => Promise<readonly GcSession[]>;
   /**
@@ -79,17 +77,18 @@ async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
 
   const app = express();
   app.use(express.json());
+  const routerOptions: Parameters<typeof maintainerRouter>[0] = {
+    repo: 'gastownhall/gascity',
+    cachePath: path.join(tmpDir, 'cache.json'),
+    slingTarget: opts.slingTarget ?? 'mayor',
+    sling,
+  };
+  if (opts.triageTarget !== undefined) routerOptions.triageTarget = opts.triageTarget;
+  if (opts.listSessions !== undefined) routerOptions.listSessions = opts.listSessions;
+  if (opts.fetchTriage !== undefined) routerOptions.fetchTriage = opts.fetchTriage;
   app.use(
     '/api/maintainer',
-    maintainerRouter({
-      repo: 'gastownhall/gascity',
-      cachePath: path.join(tmpDir, 'cache.json'),
-      slingTarget: opts.slingTarget ?? 'mayor',
-      triageTarget: opts.triageTarget,
-      sling,
-      listSessions: opts.listSessions,
-      fetchTriage: opts.fetchTriage,
-    }),
+    maintainerRouter(routerOptions),
   );
 
   return new Promise((resolve) => {
@@ -499,7 +498,7 @@ describe('POST /api/maintainer/sling', { concurrency: false }, () => {
       intent: 'review',
     });
     assert.equal(res.status, 504);
-    assert.equal(res.body.kind, 'timeout');
+    assert.equal(res.body.kind, 'upstream-timeout');
     assert.equal(h.calls.length, 1);
 
     // gascity-dashboard-ur0: timeouts are operationally significant — must
@@ -814,6 +813,7 @@ describe('GET /api/maintainer/triage — slung overlay', { concurrency: false },
       slung_at: '2026-05-23T00:00:00Z',
       target: 'chief-of-staff',
       bead_id: 'gc-stale',
+      resolved_session_name: null,
     });
 
     const env = await fetch(`${h.url}/api/maintainer/triage`).then((r) => r.json()) as MaintainerTriage;
@@ -831,6 +831,7 @@ describe('GET /api/maintainer/triage — slung overlay', { concurrency: false },
       slung_at: '2026-05-23T00:00:00Z',
       target: 'chief-of-staff',
       bead_id: 'gc-orphan',
+      resolved_session_name: null,
     });
 
     const res = await fetch(`${h.url}/api/maintainer/triage`);
@@ -858,16 +859,19 @@ describe('GET /api/maintainer/triage — slung overlay', { concurrency: false },
       slung_at: '2026-05-24T08:00:00Z',
       target: 'chief-of-staff',
       bead_id: 'gc-70',
+      resolved_session_name: null,
     });
     await writeSlungEntry(slungStatePathFor(h), slungKey('pr', 71), {
       slung_at: '2026-05-24T10:00:00Z',
       target: 'chief-of-staff',
       bead_id: 'gc-71',
+      resolved_session_name: null,
     });
     await writeSlungEntry(slungStatePathFor(h), slungKey('pr', 72), {
       slung_at: '2026-05-24T09:00:00Z',
       target: 'chief-of-staff',
       bead_id: 'gc-72',
+      resolved_session_name: null,
     });
 
     const env = await fetch(`${h.url}/api/maintainer/triage`).then((r) => r.json()) as MaintainerTriage;
@@ -911,6 +915,7 @@ describe('GET /api/maintainer/triage — slung overlay', { concurrency: false },
       slung_at: '2026-05-24T00:00:00Z',
       target: 'chief-of-staff',
       bead_id: 'gc-80',
+      resolved_session_name: null,
     });
 
     const env = await fetch(`${h.url}/api/maintainer/triage`).then((r) => r.json()) as MaintainerTriage;
@@ -920,6 +925,21 @@ describe('GET /api/maintainer/triage — slung overlay', { concurrency: false },
       [80],
       'the clustered slung item moved to slung_section',
     );
+  });
+
+  test('corrupt triage cache returns an explicit server error, not an empty envelope', async () => {
+    h = await buildApp();
+    await fs.writeFile(
+      path.join(path.dirname(h.auditPath), 'cache.json'),
+      '{not-json',
+      'utf-8',
+    );
+
+    const res = await fetch(`${h.url}/api/maintainer/triage`);
+    assert.equal(res.status, 500);
+    const body = (await res.json()) as { error?: string; kind?: string };
+    assert.equal(body.kind, 'internal');
+    assert.equal(body.error, 'maintainer triage cache unavailable');
   });
 });
 
@@ -1043,11 +1063,9 @@ describe('POST /api/maintainer/sling — target role resolution (gascity-dashboa
     assert.equal(entry.resolved_session_name, null);
   });
 
-  test('persists resolved_session_name=null when listSessions is not injected (legacy wiring)', async () => {
-    // Backwards-compat: a caller that doesn't pass listSessions keeps
-    // the pre-55b behaviour of no resolution. Production server.ts
-    // always wires it; this guards against accidental regressions in
-    // a downstream consumer that builds the router without it.
+  test('persists resolved_session_name=null when listSessions is not injected', async () => {
+    // Production app assembly wires listSessions. This route-level unit
+    // test keeps the dependency-injection boundary explicit.
     h = await buildApp({ triageTarget: 'chief-of-staff' });
     const res = await postJson(`${h.url}/api/maintainer/sling`, {
       kind: 'pr',

@@ -57,7 +57,7 @@ function projectEdges(
         visible,
         bridgeableHiddenIds,
         physicalToSemantic,
-        inheritedKind: kind,
+        ...(kind !== undefined ? { inheritedKind: kind } : {}),
       });
     }
   }
@@ -108,7 +108,7 @@ function bridgeHiddenEdges({
         visible,
         bridgeableHiddenIds,
         physicalToSemantic,
-        inheritedKind: edgeKind,
+        ...(edgeKind !== undefined ? { inheritedKind: edgeKind } : {}),
         visited,
       });
     }
@@ -123,10 +123,11 @@ function pushEdge(
   kind?: string,
 ): void {
   if (from === to) return;
-  const key = `${from}->${to}:${kind ?? ''}`;
+  const edgeKind = kind ?? 'dependency';
+  const key = `${from}->${to}:${edgeKind}`;
   if (seen.has(key)) return;
   seen.add(key);
-  edges.push(kind ? { from, to, kind } : { from, to });
+  edges.push({ from, to, kind: edgeKind });
 }
 
 function outgoingDeps(deps: GcWorkflowDep[]): Map<string, GcWorkflowDep[]> {

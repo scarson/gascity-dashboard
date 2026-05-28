@@ -18,7 +18,7 @@ import {
 // The chip is a sibling of focusBreaking (FOCUS_KEY) and needsPrOnly
 // (NEEDS_PR_KEY): a typographic Button in the page-header meta strip
 // that, when on, restricts every tier section to items where
-// `triage_assessment == null`. The persistence is via localStorage
+// `triage_assessment === null`. The persistence is via localStorage
 // under 'maintainer:awaitingOnly', same pattern as the siblings.
 //
 // The counts read in the same uppercase-tracked-faint register as the
@@ -82,7 +82,7 @@ describe('filterTierByAwaitingTriage — pure filter helper', () => {
     };
   }
 
-  it('keeps only items with triage_assessment == null in unclustered', () => {
+  it('keeps only items with triage_assessment=null in unclustered', () => {
     const awaiting = mkItem({ kind: 'issue', number: 1, triage_assessment: null });
     const vetted = mkItem({
       kind: 'issue',
@@ -157,17 +157,6 @@ describe('filterTierByAwaitingTriage — pure filter helper', () => {
     expect(filtered.clusters).toEqual([]);
   });
 
-  it('treats triage_assessment=undefined (stale cache) as "awaiting"', () => {
-    // Pre-are envelopes carry no triage_assessment field at all.
-    // Loose == null matches the renderer's loose != null guard so
-    // undefined defaults to awaiting (conservative: surface for
-    // triage rather than silently hide).
-    const a = mkItem({ kind: 'issue', number: 1 });
-    delete (a as { triage_assessment?: TriageAssessment | null }).triage_assessment;
-    const filtered = filterTierByAwaitingTriage(mkSection([a]));
-    expect(filtered.unclustered.map((i) => i.number)).toEqual([1]);
-  });
-
   it('preserves tier identity (regression vs regression_breaking vs stability)', () => {
     const a = mkItem({ kind: 'issue', number: 1, triage_assessment: null });
     const section: TriageTierSection = {
@@ -212,7 +201,7 @@ describe('countTierByVetted — vetted vs awaiting tally', () => {
     expect(countTierByVetted(mkSection([]))).toEqual({ vetted: 0, awaiting: 0 });
   });
 
-  it('counts vetted as items where triage_assessment != null', () => {
+  it('counts vetted as items where triage_assessment is not null', () => {
     const a = mkItem({
       kind: 'issue',
       number: 1,
@@ -226,16 +215,10 @@ describe('countTierByVetted — vetted vs awaiting tally', () => {
     expect(countTierByVetted(mkSection([a, b]))).toEqual({ vetted: 2, awaiting: 0 });
   });
 
-  it('counts awaiting as items where triage_assessment == null', () => {
+  it('counts awaiting as items where triage_assessment is null', () => {
     const a = mkItem({ kind: 'issue', number: 1, triage_assessment: null });
     const b = mkItem({ kind: 'pr', number: 2, triage_assessment: null });
     expect(countTierByVetted(mkSection([a, b]))).toEqual({ vetted: 0, awaiting: 2 });
-  });
-
-  it('treats triage_assessment=undefined (stale cache) as awaiting', () => {
-    const a = mkItem({ kind: 'issue', number: 1 });
-    delete (a as { triage_assessment?: TriageAssessment | null }).triage_assessment;
-    expect(countTierByVetted(mkSection([a]))).toEqual({ vetted: 0, awaiting: 1 });
   });
 
   it('sums across clusters and unclustered', () => {

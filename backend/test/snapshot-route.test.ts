@@ -34,7 +34,7 @@ const SAMPLE_CITY: CityStatusSummary = {
   totalAgents: 3,
   activeSessions: 2,
   suspendedSessions: 0,
-  maxSessions: 100,
+  maxSessions: { status: 'available', value: 100 },
   sessionsByProvider: [{ provider: 'codex', active: 2, total: 3 }],
   rigs: [],
 };
@@ -55,20 +55,23 @@ const SAMPLE_WORKFLOWS: WorkflowSummary = {
   // which always derives a census. With no lanes it is the all-zero census,
   // so the served workflows.data carries this exact value.
   census: {
-    byPhase: {
-      intake: 0,
-      implementation: 0,
-      review: 0,
-      approval: 0,
-      finalization: 0,
-      blocked: 0,
-      complete: 0,
-      active: 0,
+    status: 'available',
+    data: {
+      byPhase: {
+        intake: 0,
+        implementation: 0,
+        review: 0,
+        approval: 0,
+        finalization: 0,
+        blocked: 0,
+        complete: 0,
+        active: 0,
+      },
+      totalInFlight: 0,
+      unverifiable: 0,
+      knownDenominator: 0,
+      thrashing: 0,
     },
-    totalInFlight: 0,
-    unverifiable: 0,
-    knownDenominator: 0,
-    thrashing: 0,
   },
   recentChanges: [],
 };
@@ -89,10 +92,8 @@ interface SpyLoads {
 }
 
 /**
- * Build a SourceCacheMap wired with spy-tracked loaders so tests can
- * assert exactly which caches were re-fetched. github is wired with a
- * throwing loader (the v0 deferred contract — it surfaces as
- * status='error' in the snapshot).
+ * Build a SourceCacheMap wired with spy-tracked loaders so tests can assert
+ * exactly which active snapshot caches were re-fetched.
  */
 function buildCaches(opts: {
   loadCounts: SpyLoads;
@@ -145,13 +146,6 @@ function buildCaches(opts: {
       },
       loadFixture: wireFor.has('workflows') ? fixtureSourceLoader('workflows') : undefined,
     }),
-    github: new SourceCache({
-      source: 'github',
-      ttlMs: 30_000,
-      load: () => {
-        throw new Error('github collector not wired');
-      },
-    }),
   };
 }
 
@@ -192,6 +186,7 @@ describe('GET /api/snapshot', () => {
       const res = await fetch(`${url}/api/snapshot`);
       assert.equal(res.status, 200);
       const body = (await res.json()) as DashboardSnapshot;
+      assert.deepEqual(Object.keys(body.sources).sort(), ['city', 'resources', 'workflows']);
 
       assert.equal(body.sources.city.status, 'fresh');
       assert.deepEqual(body.sources.city.data, SAMPLE_CITY);
@@ -200,10 +195,11 @@ describe('GET /api/snapshot', () => {
       assert.equal(body.sources.resources.status, 'fresh');
       assert.deepEqual(body.sources.resources.data, SAMPLE_RESOURCES);
 
-      // headline composed from city + workflows.
-      assert.equal(body.headline.activeAgents, 2);
-      assert.equal(body.headline.maxAgents, 100);
-      assert.equal(body.headline.activeSessions, 2);
+      // headline composed from city + workflows without nullable sentinels.
+      assert.deepEqual(body.headline.activeAgents, { status: 'available', value: 2 });
+      assert.deepEqual(body.headline.maxAgents, { status: 'available', value: 100 });
+      assert.deepEqual(body.headline.activeSessions, { status: 'available', value: 2 });
+      assert.deepEqual(body.headline.activeWorkflows, { status: 'available', value: 0 });
 
       // generatedAt present and ISO.
       assert.ok(body.generatedAt.endsWith('Z'));
@@ -271,8 +267,24 @@ describe('GET /api/snapshot', () => {
       assert.equal(res.status, 200);
       const body = (await res.json()) as DashboardSnapshot;
       assert.equal(body.sources.city.status, 'error');
-      assert.equal(body.sources.city.data, null);
-      assert.match(body.sources.city.error ?? '', /supervisor unreachable/);
+      assert.equal('data' in body.sources.city, false);
+      assert.match(body.sources.city.error, /supervisor unreachable/);
+      assert.deepEqual(body.headline.activeAgents, {
+        status: 'unavailable',
+        source: 'city',
+        error: 'supervisor unreachable',
+      });
+      assert.deepEqual(body.headline.maxAgents, {
+        status: 'unavailable',
+        source: 'city',
+        error: 'supervisor unreachable',
+      });
+      assert.deepEqual(body.headline.activeSessions, {
+        status: 'unavailable',
+        source: 'city',
+        error: 'supervisor unreachable',
+      });
+      assert.deepEqual(body.headline.activeWorkflows, { status: 'available', value: 0 });
 
       assert.equal(body.sources.resources.status, 'fresh');
       assert.equal(body.sources.workflows.status, 'fresh');
@@ -299,7 +311,7 @@ describe('GET /api/snapshot', () => {
       assert.equal(res.status, 200);
       const body = (await res.json()) as DashboardSnapshot;
       assert.equal(body.sources.city.status, 'fixture');
-      assert.equal(body.sources.city.data?.activeAgents, 12);
+      assert.equal(body.sources.city.data.activeAgents, 12);
     } finally {
       await close();
     }
@@ -368,9 +380,7 @@ describe('POST /api/snapshot/refresh', () => {
       });
       assert.equal(res.status, 200);
 
-      // All wired sources re-fetched. (github throws on load, so its
-      // counter is unrelated — the spy is only on the three wired
-      // collectors.)
+      // All active snapshot sources re-fetched.
       assert.equal(counts.city, 2);
       assert.equal(counts.workflows, 2);
       assert.equal(counts.resources, 2);

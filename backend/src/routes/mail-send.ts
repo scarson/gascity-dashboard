@@ -2,7 +2,12 @@ import { Router } from 'express';
 import type { MailSendResponse } from 'gas-city-dashboard-shared';
 import { GcClient } from '../gc-client.js';
 import { recordAudit } from '../audit.js';
-import { toWireInternal500 } from '../lib/sanitise-error.js';
+import { LOG_COMPONENT } from '../logging.js';
+import {
+  routeUpstreamError,
+  routeValidationError,
+  writeRouteError,
+} from '../route-errors.js';
 
 // WRITE-only mail router. Physically separated from ./mail.ts per the
 // architect's design (security_researcher td-wisp-eb0pn): the handler in
@@ -44,15 +49,15 @@ export function mailSendRouter(opts: MailSendRouterOptions): Router {
     const text = typeof body?.body === 'string' ? body.body : '';
 
     if (!TO_RE.test(to)) {
-      res.status(400).json({ error: 'invalid `to` alias', kind: 'validation' });
+      writeRouteError(res, routeValidationError('invalid `to` alias'));
       return;
     }
     if (subject.length === 0 || subject.length > MAX_SUBJECT) {
-      res.status(400).json({ error: 'subject must be 1–200 chars', kind: 'validation' });
+      writeRouteError(res, routeValidationError('subject must be 1–200 chars'));
       return;
     }
     if (text.length === 0 || text.length > MAX_BODY) {
-      res.status(400).json({ error: `body must be 1–${MAX_BODY} chars`, kind: 'validation' });
+      writeRouteError(res, routeValidationError(`body must be 1–${MAX_BODY} chars`));
       return;
     }
 
@@ -92,13 +97,13 @@ export function mailSendRouter(opts: MailSendRouterOptions): Router {
         },
         duration_ms: Date.now() - startedAt,
       });
-      console.warn(`[mail-send] failed: ${(err as Error).message}`);
-      const wire = toWireInternal500(err, {
-        status: isTimeout ? 504 : 502,
-        error: isTimeout ? 'gc supervisor timed out' : 'gc mail send failed',
-        kind: isTimeout ? 'timeout' : 'upstream',
-      });
-      res.status(wire.status).json(wire.body);
+      writeRouteError(res, routeUpstreamError(err, {
+        component: LOG_COMPONENT.mailSend,
+        operation: 'POST /api/mail-send failed',
+        responseError: 'gc mail send failed',
+        timeoutError: 'gc supervisor timed out',
+        isTimeout: GcClient.isTimeoutError,
+      }));
     }
   });
 

@@ -11,17 +11,16 @@ import type {
   BeadUpdateInput,
   MailSendInput,
   MailSendResponse,
-  TranscriptTurn,
+  SupervisorHealth,
   WorkflowScopeKind,
 } from 'gas-city-dashboard-shared';
-
-interface GcTranscriptResponse {
-  id?: string;
-  template?: string;
-  provider?: string;
-  format?: string;
-  turns?: TranscriptTurn[];
-}
+import createClient, { type Client } from 'openapi-fetch';
+import {
+  gcSupervisorDecoders,
+  type GcDecoder,
+  type GcTranscriptResponse,
+} from './gc-supervisor-decoders.js';
+import type { paths } from './generated/gc-supervisor.js';
 
 // Typed client for the gc supervisor HTTP API. All reads of supervisor
 // state go through here; no other module fetches from supervisor
@@ -49,6 +48,29 @@ const DEFAULT_TIMEOUT_MS = (() => {
 // matching the old execGcSling subprocess timeout (gascity-dashboard-mq2).
 const SLING_TIMEOUT_MS = 60_000;
 
+const SUPERVISOR_PATHS = {
+  bead: '/v0/city/{cityName}/bead/{id}',
+  beads: '/v0/city/{cityName}/beads',
+  events: '/v0/city/{cityName}/events',
+  eventsStream: '/v0/city/{cityName}/events/stream',
+  formulaDetail: '/v0/city/{cityName}/formulas/{name}',
+  health: '/v0/city/{cityName}/health',
+  mail: '/v0/city/{cityName}/mail',
+  sessionStream: '/v0/city/{cityName}/session/{id}/stream',
+  sessions: '/v0/city/{cityName}/sessions',
+  sling: '/v0/city/{cityName}/sling',
+  transcript: '/v0/city/{cityName}/session/{id}/transcript',
+  workflow: '/v0/city/{cityName}/workflow/{workflow_id}',
+} as const satisfies Record<string, keyof paths>;
+
+type SupervisorFetchResult<RawValue> = {
+  response: Response;
+  data?: RawValue;
+  error?: unknown;
+};
+
+type SupervisorPath = keyof paths & string;
+
 export interface GcClientOptions {
   baseUrl: string;
   cityName: string;
@@ -59,9 +81,14 @@ export interface GcClientOptions {
 export class GcClient {
   private readonly defaultTimeoutMs: number;
   private readonly inflight = new Map<string, Promise<unknown>>();
+  private readonly supervisor: Client<paths>;
 
   constructor(private readonly opts: GcClientOptions) {
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.supervisor = createClient<paths>({
+      baseUrl: opts.baseUrl,
+      headers: { Accept: 'application/json' },
+    });
   }
 
   /** Base URL of the gc supervisor (no trailing slash). Used for non-city endpoints (e.g. /v0/health) + frontend CSP connect-src. */
@@ -72,6 +99,10 @@ export class GcClient {
   /** City name this client is scoped to. */
   get cityName(): string {
     return this.opts.cityName;
+  }
+
+  private cityPath(suffix: string): string {
+    return `${this.opts.baseUrl}/v0/city/${encodeURIComponent(this.opts.cityName)}${suffix}`;
   }
 
   /**
@@ -86,37 +117,34 @@ export class GcClient {
     return cause instanceof Error && cause.name === 'TimeoutError';
   }
 
-  private cityPath(suffix: string): string {
-    const url = `${this.opts.baseUrl}/v0/city/${encodeURIComponent(this.opts.cityName)}${suffix}`;
-    return url;
-  }
-
-  private async getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-    // Coalesce concurrent identical GETs. The cache key is the full URL —
-    // different query strings get separate inflight slots (verified by
-    // test). A caller-supplied signal does NOT change the slot: all
-    // coalesced callers ride the same upstream request; if any caller
-    // aborts they get the abort error, but the request itself continues
-    // for the other waiters.
-    const existing = this.inflight.get(url);
+  private async getOperation<RawValue, DecodedValue>(
+    key: string,
+    decoder: GcDecoder<RawValue, DecodedValue>,
+    run: (signal: AbortSignal) => Promise<SupervisorFetchResult<RawValue>>,
+    signal?: AbortSignal,
+    timeoutMs = this.defaultTimeoutMs,
+  ): Promise<DecodedValue> {
+    // Coalesce concurrent identical GETs. The cache key is the generated
+    // operation path plus semantic path/query params. A caller-supplied
+    // signal does NOT change the slot: all coalesced callers ride the same
+    // upstream request; if any caller aborts they get the abort error, but
+    // the request itself continues for the other waiters.
+    const existing = this.inflight.get(key);
     if (existing) {
-      return this.awaitWithSignal(existing as Promise<T>, signal);
+      return this.awaitWithSignal(existing as Promise<DecodedValue>, signal);
     }
 
-    const promise = this.fetchOnce<T>(url);
-    this.inflight.set(url, promise);
+    const promise = this.fetchOnce(run, timeoutMs).then(decoder);
+    this.inflight.set(key, promise);
     // Detach a no-throw cleanup so the slot is released on both settle
-    // paths. Returning the original `promise` (not the .finally chain)
-    // keeps the rejection surface attached to the caller's await — and
-    // the .catch() here prevents the .finally chain from itself becoming
-    // an unhandledRejection if the upstream call throws.
-    promise.finally(() => {
-      if (this.inflight.get(url) === promise) {
-        this.inflight.delete(url);
+    // paths. Returning the original `promise` keeps the rejection surface
+    // attached to the caller's await.
+    const cleanup = () => {
+      if (this.inflight.get(key) === promise) {
+        this.inflight.delete(key);
       }
-    }).catch(() => {
-      /* swallowed; the actual rejection is delivered via the awaited promise above */
-    });
+    };
+    void promise.then(cleanup, cleanup);
     return this.awaitWithSignal(promise, signal);
   }
 
@@ -147,25 +175,52 @@ export class GcClient {
     });
   }
 
-  private async fetchOnce<T>(url: string): Promise<T> {
+  private async fetchOnce<RawValue>(
+    run: (signal: AbortSignal) => Promise<SupervisorFetchResult<RawValue>>,
+    timeoutMs: number,
+  ): Promise<RawValue> {
     // Default timeout only. Caller-supplied signals are handled at the
     // `awaitWithSignal` layer so that one caller's abort does not kill a
     // coalesced fetch shared with other waiters.
-    const timeoutSignal = AbortSignal.timeout(this.defaultTimeoutMs);
-    const res = await fetch(url, {
-      signal: timeoutSignal,
-      // gc supervisor is a localhost service; no cross-origin headers needed.
-      headers: { Accept: 'application/json' },
-    });
-    if (!res.ok) {
-      // gascity-dashboard-ais: route handlers forward this message verbatim
-      // into the 502 details.message field, so the message must not include
-      // the supervisor URL (port + city name = topology leak to the browser).
-      // The status code is enough — the route already labels the failure with
-      // its own error string and kind:'upstream'.
-      throw new Error(`gc supervisor returned ${res.status}`);
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const result = await run(timeoutSignal);
+    if (!result.response.ok) {
+      throw sanitizedSupervisorStatusError(result.response.status);
     }
-    return (await res.json()) as T;
+    if (result.data === undefined) {
+      throw new Error('gc supervisor returned an empty response body');
+    }
+    return result.data;
+  }
+
+  private operationKey(
+    path: SupervisorPath,
+    params: readonly (string | number | boolean | undefined)[] = [],
+  ): string {
+    return JSON.stringify([path, ...params]);
+  }
+
+  private cityPathParams(): { cityName: string } {
+    return { cityName: this.opts.cityName };
+  }
+
+  private cityUrl(
+    path: SupervisorPath,
+    pathParams: Record<string, string>,
+    queryParams: Record<string, string> = {},
+  ): URL {
+    const renderedPath = path.replace(/\{([^}]+)\}/g, (_match, key: string) => {
+      const value = pathParams[key];
+      if (value === undefined) {
+        throw new Error(`missing gc supervisor path parameter ${key}`);
+      }
+      return encodeURIComponent(value);
+    });
+    const url = new URL(`${this.opts.baseUrl}${renderedPath}`);
+    for (const [key, value] of Object.entries(queryParams)) {
+      url.searchParams.set(key, value);
+    }
+    return url;
   }
 
   /**
@@ -245,16 +300,40 @@ export class GcClient {
   }
 
   async listSessions(signal?: AbortSignal): Promise<GcSessionList> {
-    return this.getJson<GcSessionList>(this.cityPath('/sessions'), signal);
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.sessions),
+      gcSupervisorDecoders.listSessions,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.sessions, {
+        params: { path: this.cityPathParams() },
+        signal: upstreamSignal,
+      }),
+      signal,
+    );
   }
 
   async getBead(id: string, signal?: AbortSignal): Promise<GcBead> {
-    return this.getJson<GcBead>(this.cityPath(`/bead/${encodeURIComponent(id)}`), signal);
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.bead, [id]),
+      gcSupervisorDecoders.getBead,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.bead, {
+        params: { path: { ...this.cityPathParams(), id } },
+        signal: upstreamSignal,
+      }),
+      signal,
+    );
   }
 
   async listBeads(
     signal?: AbortSignal,
-    params?: { limit?: number },
+    params?: {
+      limit?: number;
+      status?: string;
+      type?: string;
+      label?: string;
+      assignee?: string;
+      rig?: string;
+      all?: boolean;
+    },
   ): Promise<GcBeadList> {
     // td-7t24i6 (the operator's corrected diagnosis): gc supervisor defaults
     // /beads to limit=50, which is far below the city's working set
@@ -262,34 +341,74 @@ export class GcClient {
     // operates on a 50-item window and the operator sees an undercount.
     // Pass an explicit large limit to cover the working set; the spam
     // filter shrinks back down on the client side.
-    const search = new URLSearchParams();
-    if (params?.limit) search.set('limit', String(params.limit));
-    const qs = search.toString();
-    const path = `/beads${qs.length > 0 ? `?${qs}` : ''}`;
-    return this.getJson<GcBeadList>(this.cityPath(path), signal);
+    const query: {
+      limit?: number;
+      status?: string;
+      type?: string;
+      label?: string;
+      assignee?: string;
+      rig?: string;
+      all?: boolean;
+    } = {};
+    if (params?.limit !== undefined) query.limit = params.limit;
+    if (params?.status !== undefined) query.status = params.status;
+    if (params?.type !== undefined) query.type = params.type;
+    if (params?.label !== undefined) query.label = params.label;
+    if (params?.assignee !== undefined) query.assignee = params.assignee;
+    if (params?.rig !== undefined) query.rig = params.rig;
+    if (params?.all !== undefined) query.all = params.all;
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.beads, [
+        params?.limit,
+        params?.status,
+        params?.type,
+        params?.label,
+        params?.assignee,
+        params?.rig,
+        params?.all,
+      ]),
+      gcSupervisorDecoders.listBeads,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.beads, {
+        params: { path: this.cityPathParams(), query },
+        signal: upstreamSignal,
+      }),
+      signal,
+    );
   }
 
   async listMail(
     signal?: AbortSignal,
     params?: { box?: 'inbox' | 'sent'; alias?: string; limit?: number },
   ): Promise<GcMailList> {
-    // NOTE: per td-h3n2ar diagnosis, gc supervisor's `box` + `alias`
-    // params are silently ignored upstream. We still pass them in case a
-    // future supervisor version starts honoring them — the no-op today is
-    // harmless. The actual sender/recipient filter happens in
-    // routes/mail.ts::filterByBox.
-    const search = new URLSearchParams();
-    if (params?.box) search.set('box', params.box);
-    if (params?.alias) search.set('alias', params.alias);
-    if (params?.limit) search.set('limit', String(params.limit));
-    const qs = search.toString();
-    const path = `/mail${qs.length > 0 ? `?${qs}` : ''}`;
-    return this.getJson<GcMailList>(this.cityPath(path), signal);
+    const query: { limit?: number } = {};
+    if (params?.limit !== undefined) query.limit = params.limit;
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.mail, [
+        params?.box,
+        params?.alias,
+        params?.limit,
+      ]),
+      gcSupervisorDecoders.listMail,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.mail, {
+        params: { path: this.cityPathParams(), query },
+        signal: upstreamSignal,
+      }),
+      signal,
+    );
   }
 
   async listEvents(signal?: AbortSignal, after?: number): Promise<GcEventList> {
-    const path = `/events${after !== undefined ? `?after=${after}` : ''}`;
-    return this.getJson<GcEventList>(this.cityPath(path), signal);
+    const query: { index?: string } = {};
+    if (after !== undefined) query.index = String(after);
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.events, [after]),
+      gcSupervisorDecoders.listEvents,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.events, {
+        params: { path: this.cityPathParams(), query },
+        signal: upstreamSignal,
+      }),
+      signal,
+    );
   }
 
   async getWorkflow(
@@ -297,12 +416,25 @@ export class GcClient {
     signal?: AbortSignal,
     scope?: { scopeKind: WorkflowScopeKind; scopeRef: string },
   ): Promise<GcWorkflowSnapshot> {
-    const search = new URLSearchParams();
-    if (scope?.scopeKind) search.set('scope_kind', scope.scopeKind);
-    if (scope?.scopeRef) search.set('scope_ref', scope.scopeRef);
-    const qs = search.toString();
-    return this.getJson<GcWorkflowSnapshot>(
-      this.cityPath(`/workflow/${encodeURIComponent(workflowId)}${qs.length > 0 ? `?${qs}` : ''}`),
+    const query: { scope_kind?: string; scope_ref?: string } = {};
+    if (scope !== undefined) {
+      query.scope_kind = scope.scopeKind;
+      query.scope_ref = scope.scopeRef;
+    }
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.workflow, [
+        workflowId,
+        scope?.scopeKind,
+        scope?.scopeRef,
+      ]),
+      gcSupervisorDecoders.getWorkflow,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.workflow, {
+        params: {
+          path: { ...this.cityPathParams(), workflow_id: workflowId },
+          query,
+        },
+        signal: upstreamSignal,
+      }),
       signal,
     );
   }
@@ -313,14 +445,62 @@ export class GcClient {
     target: string,
     signal?: AbortSignal,
   ): Promise<GcFormulaDetail> {
-    const search = new URLSearchParams({
+    const query = {
       scope_kind: scope.scopeKind,
       scope_ref: scope.scopeRef,
       target,
-    });
-    return this.getJson<GcFormulaDetail>(
-      this.cityPath(`/formulas/${encodeURIComponent(formulaName)}?${search.toString()}`),
+    };
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.formulaDetail, [
+        formulaName,
+        scope.scopeKind,
+        scope.scopeRef,
+        target,
+      ]),
+      gcSupervisorDecoders.getFormulaDetail,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.formulaDetail, {
+        params: {
+          path: { ...this.cityPathParams(), name: formulaName },
+          query,
+        },
+        signal: upstreamSignal,
+      }),
       signal,
+    );
+  }
+
+  async health(options: {
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {}): Promise<SupervisorHealth> {
+    const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.health, [timeoutMs]),
+      gcSupervisorDecoders.health,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.health, {
+        params: { path: this.cityPathParams() },
+        signal: upstreamSignal,
+      }),
+      options.signal,
+      timeoutMs,
+    );
+  }
+
+  eventsStreamUrl(after?: string): URL {
+    const query = after === undefined || after.length === 0 ? {} : { after };
+    return this.cityUrl(
+      SUPERVISOR_PATHS.eventsStream,
+      this.cityPathParams(),
+      query,
+    );
+  }
+
+  sessionStreamUrl(sessionId: string, after?: string): URL {
+    const query = after === undefined || after.length === 0 ? {} : { after };
+    return this.cityUrl(
+      SUPERVISOR_PATHS.sessionStream,
+      { ...this.cityPathParams(), id: sessionId },
+      query,
     );
   }
 
@@ -332,9 +512,23 @@ export class GcClient {
     sessionId: string,
     signal?: AbortSignal,
   ): Promise<GcTranscriptResponse> {
-    return this.getJson<GcTranscriptResponse>(
-      this.cityPath(`/session/${encodeURIComponent(sessionId)}/transcript`),
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.transcript, [sessionId]),
+      gcSupervisorDecoders.fetchTranscript,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.transcript, {
+        params: { path: { ...this.cityPathParams(), id: sessionId } },
+        signal: upstreamSignal,
+      }),
       signal,
     );
   }
+}
+
+function sanitizedSupervisorStatusError(status: number): Error {
+  // gascity-dashboard-ais: route handlers forward this message verbatim
+  // into the 502 details.message field, so the message must not include
+  // the supervisor URL (port + city name = topology leak to the browser).
+  // The status code is enough: the route already labels the failure with
+  // its own error string and kind:'upstream'.
+  return new Error(`gc supervisor returned ${status}`);
 }

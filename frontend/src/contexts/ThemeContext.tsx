@@ -7,6 +7,11 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import {
+  readBrowserStorage,
+  removeBrowserStorage,
+  writeBrowserStorage,
+} from '../lib/browserStorage';
 
 // Theme is one of three values:
 //   'light'  — operator pinned light, overrides system.
@@ -32,15 +37,14 @@ interface ThemeContextValue {
 }
 
 const STORAGE_KEY = 'gascity:theme';
+const COMPONENT = 'ThemeContext';
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 function readStoredPref(): ThemePref {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw === 'light' || raw === 'dark') return raw;
-  } catch {
-    /* storage may be blocked */
+  const stored = readBrowserStorage('localStorage', STORAGE_KEY, COMPONENT);
+  if (stored.status === 'found' && (stored.value === 'light' || stored.value === 'dark')) {
+    return stored.value;
   }
   return 'system';
 }
@@ -76,14 +80,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const set = useCallback((next: ThemePref) => {
     setPref(next);
-    try {
-      if (next === 'system') {
-        window.localStorage.removeItem(STORAGE_KEY);
-      } else {
-        window.localStorage.setItem(STORAGE_KEY, next);
-      }
-    } catch {
-      /* no-op */
+    if (next === 'system') {
+      removeBrowserStorage('localStorage', STORAGE_KEY, COMPONENT);
+    } else {
+      writeBrowserStorage('localStorage', STORAGE_KEY, next, COMPONENT);
     }
     applyDocumentAttr(next);
   }, []);

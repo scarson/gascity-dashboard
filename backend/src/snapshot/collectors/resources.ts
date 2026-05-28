@@ -10,6 +10,7 @@ import {
 
 import type { ResourceSummary } from 'gas-city-dashboard-shared';
 import { SourceCache } from '../cache.js';
+import { LOG_COMPONENT, errorMessage, logWarn } from '../../logging.js';
 
 // Host-process resource sampler — gascity-dashboard-8nj. Pure node:os +
 // /proc/meminfo; no upstream coupling, so this source never has a
@@ -19,13 +20,13 @@ import { SourceCache } from '../cache.js';
 export const RESOURCE_CACHE_TTL_MS = 30 * 1000;
 
 export interface CollectResourcesOptions {
-  now?: () => Date;
-  vcpuCount?: () => number;
-  loadAverage?: () => [number, number, number];
-  totalMemoryBytes?: () => number;
-  availableMemoryBytes?: () => number;
-  uptimeSeconds?: () => number;
-  meminfoPath?: string;
+  now?: (() => Date) | undefined;
+  vcpuCount?: (() => number) | undefined;
+  loadAverage?: (() => [number, number, number]) | undefined;
+  totalMemoryBytes?: (() => number) | undefined;
+  availableMemoryBytes?: (() => number) | undefined;
+  uptimeSeconds?: (() => number) | undefined;
+  meminfoPath?: string | undefined;
 }
 
 export interface MeminfoSummary {
@@ -34,9 +35,9 @@ export interface MeminfoSummary {
 }
 
 export interface CreateResourcesSourceCacheOptions extends CollectResourcesOptions {
-  load?: () => Promise<ResourceSummary> | ResourceSummary;
-  loadFixture?: () => Promise<ResourceSummary> | ResourceSummary;
-  useFixture?: boolean;
+  load?: (() => Promise<ResourceSummary> | ResourceSummary) | undefined;
+  loadFixture?: (() => Promise<ResourceSummary> | ResourceSummary) | undefined;
+  useFixture?: boolean | undefined;
 }
 
 const defaultMeminfoPath = '/proc/meminfo';
@@ -76,8 +77,7 @@ function logCollectorError(
   // structured logger with path-like field redaction, or a forwarder
   // transform) — NOT here. Per-site redaction is the wrong layer; it forces
   // every log call to remember the policy.
-  const message = err instanceof Error ? err.message : String(err);
-  console.warn(`[snapshot] ${source}.${phase} failed: ${message}`);
+  logWarn(LOG_COMPONENT.snapshot, `${source}.${phase} failed: ${errorMessage(err)}`);
 }
 
 export async function collectResources(

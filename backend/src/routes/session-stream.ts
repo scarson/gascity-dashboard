@@ -1,12 +1,13 @@
 import { Router, type Request, type Response } from 'express';
+import type { GcClient } from '../gc-client.js';
 import { SESSION_ID_RE } from '../lib/sessionId.js';
+import { routeValidationError, writeRouteError } from '../route-errors.js';
 import { lastEventIdFor, proxySupervisorSse } from './sse-proxy.js';
 
 const DEFAULT_HEARTBEAT_MS = 15_000;
 
 export interface SessionStreamRouterOptions {
-  supervisorUrl: string;
-  cityName: string;
+  gc: GcClient;
   heartbeatMs?: number;
 }
 
@@ -17,19 +18,16 @@ export function sessionStreamRouter(opts: SessionStreamRouterOptions): Router {
   router.get('/:id/stream', async (req: Request, res: Response) => {
     const id = req.params.id;
     if (typeof id !== 'string') {
-      res.status(400).json({ error: 'invalid session id', kind: 'validation' });
+      writeRouteError(res, routeValidationError('invalid session id'));
       return;
     }
     if (!SESSION_ID_RE.test(id)) {
-      res.status(400).json({ error: 'invalid session id', kind: 'validation' });
+      writeRouteError(res, routeValidationError('invalid session id'));
       return;
     }
 
-    const upstream = new URL(
-      `${opts.supervisorUrl}/v0/city/${encodeURIComponent(opts.cityName)}/session/${encodeURIComponent(id)}/stream`,
-    );
     const lastEventId = lastEventIdFor(req);
-    if (lastEventId) upstream.searchParams.set('after', lastEventId);
+    const upstream = opts.gc.sessionStreamUrl(id, lastEventId ?? undefined);
 
     await proxySupervisorSse(req, res, {
       upstream,

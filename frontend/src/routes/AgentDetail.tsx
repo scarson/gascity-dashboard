@@ -10,9 +10,11 @@ import { LiveSessionPeek, isSessionStreamable } from '../components/LiveSessionP
 import { StatusBadge, type StatusTone } from '../components/StatusBadge';
 import { RelatedEntities } from '../components/RelatedEntities';
 import { useViewingAs } from '../contexts/ViewingAsContext';
+import { useAbortableVisibleRefresh } from '../hooks/useAbortableVisibleRefresh';
 import { useGcEventRefresh } from '../hooks/useGcEvents';
 import { useEntityLinks } from '../hooks/useEntityLinks';
 import { formatRelative } from '../hooks/time';
+import { useVisibleInterval } from '../hooks/useVisibleInterval';
 
 // Read-only drilldown for a single agent. Route: /agents/:slug where
 // slug resolves against session_name, alias, then id (see sessionSlug).
@@ -46,10 +48,6 @@ export function AgentDetailPage() {
   const [viewingBeadId, setViewingBeadId] = useState<string | null>(null);
 
   const [now, setNow] = useState(() => Date.now());
-
-  const [chatItems, setChatItems] = useState<GcMailItem[] | null>(null);
-  const [chatLoading, setChatLoading] = useState(false);
-  const [chatError, setChatError] = useState<string | null>(null);
 
   const [directivesPrompt, setDirectivesPrompt] = useState<string | null>(null);
   const [directivesLoading, setDirectivesLoading] = useState(false);
@@ -92,26 +90,9 @@ export function AgentDetailPage() {
     void refreshBeads();
   }, [refreshSessions, refreshBeads]);
 
-  useEffect(() => {
-    const tick = setInterval(() => {
-      if (!document.hidden) void refreshSessions();
-    }, SESSIONS_REFRESH_MS);
-    return () => clearInterval(tick);
-  }, [refreshSessions]);
-
-  useEffect(() => {
-    const tick = setInterval(() => {
-      if (!document.hidden) void refreshBeads();
-    }, BEADS_REFRESH_MS);
-    return () => clearInterval(tick);
-  }, [refreshBeads]);
-
-  useEffect(() => {
-    const tick = setInterval(() => {
-      if (!document.hidden) setNow(Date.now());
-    }, 5_000);
-    return () => clearInterval(tick);
-  }, []);
+  useVisibleInterval(() => void refreshSessions(), SESSIONS_REFRESH_MS);
+  useVisibleInterval(() => void refreshBeads(), BEADS_REFRESH_MS);
+  useVisibleInterval(() => setNow(Date.now()), 5_000);
 
   useGcEventRefresh(['session.', 'bead.'], () => {
     void refreshSessions();
@@ -160,10 +141,7 @@ export function AgentDetailPage() {
   }, [session, beads]);
 
   // Chat thread: wide /api/mail box=all fetch, client-side filter for
-  // messages between operator and this agent. AbortController guard per
-  // tick prevents a stale response overwriting a fresher one — fetch
-  // ordering matters here because messages render chronologically and
-  // an out-of-order overwrite can make a just-arrived message vanish.
+  // messages between operator and this agent.
   const agentAliases = useMemo<ReadonlyArray<string>>(() => {
     if (session === null) return [];
     const out = new Set<string>();
@@ -178,52 +156,25 @@ export function AgentDetailPage() {
     [viewingAs.alias],
   );
 
-  useEffect(() => {
-    if (session === null) return;
-    let cancelled = false;
-    let controller = new AbortController();
-    const aliasParam = viewingAs.alias;
+  const loadChatItems = useCallback(async (): Promise<GcMailItem[]> => {
+    const { items } = await api.listMail('all', viewingAs.alias);
+    return items;
+  }, [viewingAs.alias]);
 
-    const tickOnce = async () => {
-      controller.abort();
-      controller = new AbortController();
-      const localController = controller;
-      setChatLoading(true);
-      try {
-        // box='all' makes the alias query param a no-op upstream
-        // (see backend/src/routes/mail.ts) — pass the operator alias as
-        // a safe default. Client-side filter narrows to operator↔agent.
-        const { items } = await api.listMail('all', aliasParam);
-        if (cancelled || localController.signal.aborted) return;
-        setChatItems(items);
-        setChatError(null);
-      } catch (err) {
-        if (cancelled || localController.signal.aborted) return;
-        const msg =
-          err instanceof ApiClientError
-            ? `${err.status} ${err.message}`
-            : err instanceof Error
-              ? err.message
-              : 'mail failed';
-        setChatError(msg);
-      } finally {
-        if (!cancelled && !localController.signal.aborted) {
-          setChatLoading(false);
-        }
-      }
-    };
+  const chatState = useAbortableVisibleRefresh({
+    enabled: session !== null,
+    intervalMs: CHAT_REFRESH_MS,
+    load: loadChatItems,
+    formatError: formatApiError,
+  });
 
-    void tickOnce();
-    const interval = setInterval(() => {
-      if (!document.hidden) void tickOnce();
-    }, CHAT_REFRESH_MS);
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      clearInterval(interval);
-    };
-  }, [session, viewingAs.alias]);
+  const chatLoading = chatState.status === 'loading';
+  const chatError =
+    chatState.status === 'failed'
+      ? chatState.error
+      : chatState.status === 'ready' && chatState.error.length > 0
+        ? chatState.error
+        : null;
 
   // Directives: lazy-fetch the agent's composed prompt via `gc prime`.
   // Cached for the lifetime of the page (no auto-refresh); operator can
@@ -251,7 +202,10 @@ export function AgentDetailPage() {
           : err instanceof Error
             ? err.message
             : 'directives fetch failed';
-      setDirectivesError({ status, kind, message });
+      const directivesError: { status?: number; kind?: string; message: string } = { message };
+      if (status !== undefined) directivesError.status = status;
+      if (kind !== undefined) directivesError.kind = kind;
+      setDirectivesError(directivesError);
       setDirectivesPrompt(null);
       setDirectivesAliasFetched(primeAlias);
     } finally {
@@ -274,7 +228,7 @@ export function AgentDetailPage() {
   const links = useEntityLinks(session?.id ?? null);
 
   const chatMessages = useMemo<ReadonlyArray<GcMailItem>>(() => {
-    if (chatItems === null) return [];
+    const chatItems = chatState.status === 'ready' ? chatState.data : [];
     const agents = new Set(agentAliases);
     const operators = new Set(operatorAliases);
     const filtered = chatItems.filter((m) => {
@@ -291,7 +245,7 @@ export function AgentDetailPage() {
       return filtered.slice(filtered.length - CHAT_MAX_MESSAGES);
     }
     return filtered;
-  }, [chatItems, agentAliases, operatorAliases]);
+  }, [chatState, agentAliases, operatorAliases]);
 
   if (sessions === null) {
     return (
@@ -350,8 +304,8 @@ export function AgentDetailPage() {
             <StatusBadge
               tone={tone}
               label={session.state}
-              trailing={session.attached ? 'att' : undefined}
-              title={session.reason ? `reason: ${session.reason}` : undefined}
+              {...(session.attached ? { trailing: 'att' } : {})}
+              {...(session.reason ? { title: `reason: ${session.reason}` } : {})}
             />
             <span className="text-fg-faint">·</span>
             <code className="text-fg-muted">{session.template ?? '—'}</code>
@@ -425,7 +379,7 @@ export function AgentDetailPage() {
 
       <ChatThread
         messages={chatMessages}
-        loading={chatLoading && chatItems === null}
+        loading={chatLoading}
         error={chatError}
         now={now}
       />
@@ -660,6 +614,12 @@ function Directives({
   );
 }
 
+function formatApiError(err: unknown): string {
+  if (err instanceof ApiClientError) return `${err.status} ${err.message}`;
+  if (err instanceof Error) return err.message;
+  return 'mail failed';
+}
+
 function stateTone(state: GcSessionState): StatusTone {
   switch (state) {
     case 'active':
@@ -682,4 +642,3 @@ function stateTone(state: GcSessionState): StatusTone {
       return 'neutral';
   }
 }
-

@@ -5,7 +5,10 @@ import type {
   CityStatusSummary,
   GcSessionList,
   ResourceSummary,
+  SourceAvailableState,
+  SourceState,
   WorkflowLane,
+  WorkflowLaneHealth,
   WorkflowPhase,
   WorkflowSummary,
 } from 'gas-city-dashboard-shared';
@@ -25,20 +28,46 @@ import {
 function lane(partial: Partial<WorkflowLane> & { id: string }): WorkflowLane {
   return {
     title: partial.id,
-    formula: null,
-    externalUrl: null,
-    externalLabel: null,
+    formula: { status: 'unavailable', error: 'workflow formula unavailable in test' },
+    scope: { status: 'unavailable', error: 'not scoped in test' },
+    external: { status: 'unavailable', error: 'external unavailable in test' },
     phase: 'review' as WorkflowPhase,
     phaseLabel: 'review',
     statusCounts: {},
     activeAssignees: [],
-    updatedAt: '2026-05-25T00:00:00.000Z',
+    updatedAt: {
+      status: 'available',
+      at: '2026-05-25T00:00:00.000Z',
+    },
     stages: [],
-    activeStepId: null,
-    activeStepAttempt: null,
-    activeStageIndex: null,
+    progress: {
+      status: 'unavailable',
+      error: 'workflow progress unavailable in test',
+    },
     formulaStageResolved: false,
+    health: { status: 'unavailable', error: 'workflow health has not been derived' },
     ...partial,
+  };
+}
+
+function activeProgress(
+  stepId: string,
+  stageIndex: number,
+  attempt: number,
+): WorkflowLane['progress'] {
+  return {
+    status: 'active_step',
+    stepId,
+    stage: {
+      status: 'available',
+      index: stageIndex,
+      key: `stage-${stageIndex}`,
+      label: `Stage ${stageIndex}`,
+    },
+    attempt: {
+      status: 'available',
+      value: attempt,
+    },
   };
 }
 
@@ -47,7 +76,7 @@ const SAMPLE_CITY: CityStatusSummary = {
   totalAgents: 1,
   activeSessions: 1,
   suspendedSessions: 0,
-  maxSessions: null,
+  maxSessions: { status: 'unavailable', source: 'city', error: 'not configured in test' },
   sessionsByProvider: [],
   rigs: [],
 };
@@ -65,23 +94,11 @@ function fresh<T>(source: 'city' | 'resources' | 'workflows', data: T): SourceCa
   return new SourceCache<T>({ source, ttlMs: 60_000, sanitizeErrorMessage: null, load: () => data });
 }
 
-function throwing<T>(source: 'github'): SourceCache<T> {
-  return new SourceCache<T>({
-    source,
-    ttlMs: 30_000,
-    sanitizeErrorMessage: null,
-    load: () => {
-      throw new Error(`${source} not wired`);
-    },
-  });
-}
-
 function buildCaches(workflows: WorkflowSummary): SourceCacheMap {
   return {
     city: fresh('city', SAMPLE_CITY),
     resources: fresh('resources', SAMPLE_RESOURCES),
     workflows: fresh('workflows', workflows),
-    github: throwing('github'),
   };
 }
 
@@ -91,8 +108,15 @@ function summary(lanes: WorkflowLane[]): WorkflowSummary {
     runCounts: { total: lanes.length, visible: lanes.length, prReview: 0, designReview: 0, bugfix: 0, blocked: 0, other: 0 },
     lanes,
     recentChanges: [],
-    census: null,
+    census: { status: 'unavailable', error: 'workflow health has not been derived' },
   };
+}
+
+function requireAvailableHealth(lane: WorkflowLane | undefined): WorkflowLaneHealth {
+  assert.ok(lane, 'expected lane to exist');
+  assert.equal(lane.health.status, 'available');
+  if (lane.health.status !== 'available') assert.fail('expected available lane health');
+  return lane.health.data;
 }
 
 const CONFIG = {
@@ -109,8 +133,7 @@ describe('health engine wiring on /api/snapshot', () => {
         id: 'known-lane',
         formulaStageResolved: true,
         activeAssignees: ['mayor'],
-        activeStepId: 'review-loop',
-        activeStageIndex: 2,
+        progress: activeProgress('review-loop', 2, 1),
       }),
       lane({ id: 'inferred-lane', formulaStageResolved: false, activeAssignees: ['nobody'] }),
     ];
@@ -137,26 +160,86 @@ describe('health engine wiring on /api/snapshot', () => {
     });
 
     const snap = await service.getSnapshot();
+    assertSourceAvailable(snap.sources.workflows);
     const wf = snap.sources.workflows.data;
-    assert.ok(wf);
 
     const known = wf.lanes.find((l) => l.id === 'known-lane');
     const inferred = wf.lanes.find((l) => l.id === 'inferred-lane');
 
-    assert.equal(known?.health?.phaseConfidence, 'known');
-    assert.equal(known?.health?.sessionResolved, true);
-    assert.equal(known?.health?.sessionActivity, 'tool_use');
-    assert.equal(known?.health?.stuckNodeId, 'review-loop');
+    const knownHealth = requireAvailableHealth(known);
+    assert.equal(knownHealth.phaseConfidence, 'known');
+    assert.equal(knownHealth.session.status, 'resolved');
+    assert.deepEqual(knownHealth.stuckNode, {
+      status: 'available',
+      id: 'review-loop',
+    });
+    assert.deepEqual(knownHealth.session, {
+      status: 'resolved',
+      lastActive: {
+        status: 'available',
+        at: '2026-05-25T00:30:00.000Z',
+      },
+      running: {
+        status: 'available',
+        value: true,
+      },
+      activity: {
+        status: 'available',
+        value: 'tool_use',
+      },
+    });
 
-    assert.equal(inferred?.health?.phaseConfidence, 'inferred');
-    assert.equal(inferred?.health?.sessionResolved, false);
+    const inferredHealth = requireAvailableHealth(inferred);
+    assert.equal(inferredHealth.phaseConfidence, 'inferred');
+    assert.deepEqual(inferredHealth.session, {
+      status: 'unresolved',
+      error: 'workflow session unresolved',
+    });
 
     assert.deepEqual(wf.census, {
-      byPhase: { intake: 0, implementation: 0, review: 2, approval: 0, finalization: 0, blocked: 0, complete: 0, active: 0 },
-      totalInFlight: 2,
-      unverifiable: 1,
-      knownDenominator: 1,
-      thrashing: 0,
+      status: 'available',
+      data: {
+        byPhase: { intake: 0, implementation: 0, review: 2, approval: 0, finalization: 0, blocked: 0, complete: 0, active: 0 },
+        totalInFlight: 2,
+        unverifiable: 1,
+        knownDenominator: 1,
+        thrashing: 0,
+      },
+    });
+  });
+
+  test('headline active workflow count excludes completed runs that remain visible', async () => {
+    const completed = lane({
+      id: 'completed-run',
+      phase: 'complete',
+      phaseLabel: 'complete',
+      statusCounts: { closed: 1 },
+      stages: [
+        { key: 'intake', label: 'Intake', status: 'complete' },
+        { key: 'implementation', label: 'Implementation', status: 'complete' },
+        { key: 'review', label: 'Review', status: 'complete' },
+        { key: 'approval', label: 'Approval', status: 'complete' },
+        { key: 'finalization', label: 'Finalization', status: 'complete' },
+      ],
+    });
+    const service = createSnapshotService({
+      caches: buildCaches(summary([completed])),
+      sessions: fresh<GcSessionList>('city', { items: [] }),
+      config: CONFIG,
+    });
+
+    const snap = await service.getSnapshot();
+
+    assertSourceAvailable(snap.sources.workflows);
+    assert.equal(snap.sources.workflows.data.runCounts.total, 1);
+    assert.equal(snap.sources.workflows.data.census.status, 'available');
+    if (snap.sources.workflows.data.census.status !== 'available') {
+      assert.fail('expected available workflow census');
+    }
+    assert.equal(snap.sources.workflows.data.census.data.totalInFlight, 0);
+    assert.deepEqual(snap.headline.activeWorkflows, {
+      status: 'available',
+      value: 0,
     });
   });
 
@@ -180,13 +263,24 @@ describe('health engine wiring on /api/snapshot', () => {
     });
 
     const snap = await service.getSnapshot();
+    assertSourceAvailable(snap.sources.workflows);
     const wf = snap.sources.workflows.data;
-    assert.ok(wf);
     // Snapshot still served (no 500), lanes intact, but unverifiable.
     assert.equal(snap.sources.workflows.status, 'fresh');
-    assert.equal(wf.lanes[0]?.health?.phaseConfidence, 'inferred');
-    assert.equal(wf.lanes[0]?.health?.sessionResolved, false);
-    assert.equal(wf.census?.unverifiable, 1);
-    assert.equal(wf.census?.knownDenominator, 0);
+    const health = requireAvailableHealth(wf.lanes[0]);
+    assert.equal(health.phaseConfidence, 'inferred');
+    assert.deepEqual(health.session, {
+      status: 'unresolved',
+      error: 'workflow session list unavailable',
+    });
+    assert.equal(wf.census.status, 'available');
+    assert.equal(wf.census.data.unverifiable, 1);
+    assert.equal(wf.census.data.knownDenominator, 0);
   });
 });
+
+function assertSourceAvailable<T>(
+  state: SourceState<T>,
+): asserts state is SourceAvailableState<T> {
+  assert.notEqual(state.status, 'error');
+}

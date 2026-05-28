@@ -3,7 +3,9 @@ import type { GitCommit, GitView } from 'gas-city-dashboard-shared';
 import { execGitLog as defaultExecGitLog, ExecError } from '../exec.js';
 import type { ExecResult } from '../exec.js';
 import { recordAudit } from '../audit.js';
-import { toWireExecError, toWireInternal500 } from '../lib/sanitise-error.js';
+import { toWireExecError } from '../lib/sanitise-error.js';
+import { LOG_COMPONENT, logWarn } from '../logging.js';
+import { routeInternalError, writeRouteError } from '../route-errors.js';
 
 // Hardcoded enum of `git log` invocations. Anything outside this set is
 // rejected at the validator — the operator cannot pass arbitrary
@@ -55,21 +57,17 @@ export function gitRouter(opts: GitRouterOptions = {}): Router {
         // so the per-kind branch is here for completeness with the
         // sibling routes in this directory.
         if (err.kind === 'spawn') {
-          console.warn(`[git] /api/git/commits spawn failed: ${err.message}`);
+          logWarn(LOG_COMPONENT.git, `/api/git/commits spawn failed: ${err.message}`);
         }
         const wire = toWireExecError(err, err.kind === 'timeout' ? 504 : 500);
         res.status(wire.status).json(wire.body);
         return;
       }
-      // gascity-dashboard-473: mirror the ayr sr6 redaction on the
-      // catch-all 500. Raw err.message can embed OS detail.
-      console.warn(`[git] /api/git/commits failed: ${(err as Error).message}`);
-      const wire = toWireInternal500(err, {
-        status: 500,
-        error: 'internal error',
-        kind: 'internal',
-      });
-      res.status(wire.status).json(wire.body);
+      writeRouteError(res, routeInternalError(err, {
+        component: LOG_COMPONENT.git,
+        operation: '/api/git/commits failed',
+        responseError: 'internal error',
+      }));
     }
   });
 
@@ -85,14 +83,15 @@ function parseGitLog(stdout: string): GitCommit[] {
     if (parts.length < 6) continue;
     const [sha, shortSha, author, date, refs, subject] = parts;
     if (!sha || !shortSha || !author || !date) continue;
-    items.push({
+    const commit: GitCommit = {
       sha,
       short_sha: shortSha,
       author,
       date,
-      refs: refs && refs.length > 0 ? refs : undefined,
       subject: subject ?? '',
-    });
+    };
+    if (refs && refs.length > 0) commit.refs = refs;
+    items.push(commit);
   }
   return items;
 }

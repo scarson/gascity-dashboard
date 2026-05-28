@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { LOG_COMPONENT, errorMessage, logWarn } from '../logging.js';
 
 // Shared backend-side SSE proxy. The browser opens an EventSource against
 // this server (same origin as /api/*); this helper opens an upstream fetch
@@ -52,8 +53,11 @@ export async function proxySupervisorSse(
       signal: ctrl.signal,
       headers: { accept: 'text/event-stream' },
     });
-  } catch {
+  } catch (err) {
     if (heartbeat) clearInterval(heartbeat);
+    if (!ctrl.signal.aborted) {
+      logWarn(LOG_COMPONENT.sse, `supervisor SSE fetch failed: ${errorMessage(err)}`);
+    }
     if (res.headersSent) {
       writeUpstreamFailure(res, opts.unreachableMessage);
       return;
@@ -65,7 +69,7 @@ export async function proxySupervisorSse(
   }
 
   if (!upstreamRes.ok) {
-    upstreamRes.body?.cancel().catch(() => undefined);
+    await cancelUpstreamBody(upstreamRes);
     if (heartbeat) clearInterval(heartbeat);
     writeUpstreamFailure(res, `gc supervisor returned ${upstreamRes.status}`);
     return;
@@ -100,14 +104,16 @@ export async function proxySupervisorSse(
         if (res.writableEnded || res.destroyed) break;
       }
     }
-  } catch {
-    // Upstream errored or client disconnected. Cleanup below owns closure.
+  } catch (err) {
+    if (!ctrl.signal.aborted && !res.destroyed) {
+      logWarn(LOG_COMPONENT.sse, `supervisor SSE stream failed: ${errorMessage(err)}`);
+    }
   } finally {
     if (heartbeat) clearInterval(heartbeat);
     try {
       reader.releaseLock();
-    } catch {
-      // ignore
+    } catch (err) {
+      logWarn(LOG_COMPONENT.sse, `failed to release SSE reader lock: ${errorMessage(err)}`);
     }
     ctrl.abort();
     if (!res.writableEnded) res.end();
@@ -138,4 +144,13 @@ function writeUpstreamFailure(res: Response, error: string): void {
     return;
   }
   res.status(502).json({ error, kind: 'upstream' });
+}
+
+async function cancelUpstreamBody(upstreamRes: globalThis.Response): Promise<void> {
+  if (!upstreamRes.body) return;
+  try {
+    await upstreamRes.body.cancel();
+  } catch (err) {
+    logWarn(LOG_COMPONENT.sse, `failed to cancel SSE upstream body: ${errorMessage(err)}`);
+  }
 }

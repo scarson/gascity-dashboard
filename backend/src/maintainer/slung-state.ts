@@ -1,15 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { SlungState, TriageKind } from 'gas-city-dashboard-shared';
+import { LOG_COMPONENT, errorMessage, logWarn } from '../logging.js';
 
 // Active sling state persistence (gascity-dashboard-9qs).
 //
 // JSON map keyed by `kind:number`. Single-repo scope: this dashboard
-// runs against one Gas City fork at a time (see CLAUDE.md), and the
-// slung-state file lives in the same directory as the maintainer
-// envelope cache, so the directory itself carries the repo scope. A
-// future multi-repo extension would prefix keys with `repo:` (out of
-// scope for v1).
+// runs against one Gas City fork at a time, and the slung-state file lives
+// in the same directory as the maintainer envelope cache, so the directory
+// itself carries the repo scope.
 //
 // Atomic tmp+rename mirrors backend/src/maintainer/storage.ts. An
 // in-process Promise-chain mutex serialises read-modify-write so two
@@ -18,7 +17,7 @@ import type { SlungState, TriageKind } from 'gas-city-dashboard-shared';
 // the tmp+rename is the correctness guarantee against torn writes.
 //
 // Read failures (missing file, malformed JSON, wrong top-level shape)
-// return an empty map plus a console.warn — never throw. This file is
+// return an empty map plus an operational warning — never throw. This file is
 // derived bookkeeping; a corrupt copy must not break the maintainer
 // view's serve path.
 
@@ -38,13 +37,13 @@ export async function readSlungState(statePath: string): Promise<SlungStateMap> 
     const raw = await fs.readFile(statePath, 'utf-8');
     const parsed = JSON.parse(raw) as unknown;
     if (!isValidStateMap(parsed)) {
-      console.warn(`[maintainer] slung-state at ${statePath} failed shape check; ignoring`);
+      logWarn(LOG_COMPONENT.maintainer, `slung-state at ${statePath} failed shape check; ignoring`);
       return {};
     }
     return parsed;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    console.warn(`[maintainer] slung-state read failed: ${(err as Error).message}`);
+    logWarn(LOG_COMPONENT.maintainer, `slung-state read failed: ${errorMessage(err)}`);
     return {};
   }
 }
@@ -106,14 +105,9 @@ function isValidStateMap(v: unknown): v is SlungStateMap {
     if (typeof e.slung_at !== 'string') return false;
     if (typeof e.target !== 'string') return false;
     if (e.bead_id !== null && typeof e.bead_id !== 'string') return false;
-    // gascity-dashboard-55b: resolved_session_name is OPTIONAL on disk.
-    // Pre-55b entries don't carry it; the field defaults to null at
-    // read time so the renderer surfaces the inline 'no session for
-    // role X' error instead of building a 404-bound link from the
-    // raw `target` role label. Accept null, string, or absent;
-    // reject any other type to stay strict on the wire shape.
+    // Current writers always persist the field. Missing means this is not the
+    // slung-state shape the dashboard renders.
     if (
-      e.resolved_session_name !== undefined &&
       e.resolved_session_name !== null &&
       typeof e.resolved_session_name !== 'string'
     ) {

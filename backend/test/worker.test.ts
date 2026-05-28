@@ -11,7 +11,12 @@ import type {
   TriageKind,
   TriageTier,
 } from 'gas-city-dashboard-shared';
-import { runRefresh } from '../src/maintainer/worker.js';
+import {
+  createMaintainerRefresher,
+  type RefresherRuntime,
+  type RefresherTimer,
+  runRefresh,
+} from '../src/maintainer/worker.js';
 import { readCache } from '../src/maintainer/storage.js';
 import {
   readSlungState,
@@ -118,11 +123,13 @@ describe('runRefresh — slung-state purge for vetted items', () => {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'gastown-vetted',
+      resolved_session_name: null,
     });
     await writeSlungEntry(slungStatePath, slungKey('issue', 2), {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'gastown-pending',
+      resolved_session_name: null,
     });
 
     const vetted = makeItem('pr', 1, { triage_assessment: vettedAssessment });
@@ -145,8 +152,8 @@ describe('runRefresh — slung-state purge for vetted items', () => {
 
     // Cache was still written — the purge is a side-effect, not a gate.
     const cached = await readCache(cachePath);
-    assert.ok(cached);
-    assert.equal(cached?.repo, 'test/test');
+    assert.equal(cached.status, 'ready');
+    if (cached.status === 'ready') assert.equal(cached.envelope.repo, 'test/test');
   });
 
   test('walks clustered + unclustered items across all tiers', async () => {
@@ -156,11 +163,13 @@ describe('runRefresh — slung-state purge for vetted items', () => {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'a',
+      resolved_session_name: null,
     });
     await writeSlungEntry(slungStatePath, slungKey('issue', 20), {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'b',
+      resolved_session_name: null,
     });
 
     const clusteredVetted = makeItem('pr', 10, {
@@ -215,6 +224,7 @@ describe('runRefresh — slung-state purge for vetted items', () => {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'a',
+      resolved_session_name: null,
     });
 
     const stillPending = makeItem('pr', 1, { triage_assessment: null });
@@ -239,6 +249,7 @@ describe('runRefresh — slung-state purge for vetted items', () => {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'a',
+      resolved_session_name: null,
     });
 
     const fetchTriage = async (): Promise<MaintainerTriage> => {
@@ -257,6 +268,155 @@ describe('runRefresh — slung-state purge for vetted items', () => {
     const state = await readSlungState(slungStatePath);
     assert.ok(state['pr:1'], 'failed refresh must not purge slung-state');
     const cached = await readCache(cachePath);
-    assert.equal(cached, null);
+    assert.deepEqual(cached, { status: 'missing' });
   });
 });
+
+describe('createMaintainerRefresher', () => {
+  test('owns timers per instance and clears them on stop', () => {
+    const scheduler = new FakeRefresherRuntime();
+    const refresher = createMaintainerRefresher(
+      {
+        repo: 'test/test',
+        cachePath,
+        slungStatePath,
+        intervalMs: 60_000,
+        fetchTriage: async () => makeEnvelope([]),
+      },
+      scheduler,
+    );
+
+    assert.equal(refresher.running, false);
+    refresher.start();
+    assert.equal(refresher.running, true);
+    assert.equal(scheduler.activeTimeoutCount(), 1);
+    assert.equal(scheduler.activeIntervalCount(), 2);
+
+    refresher.start();
+    assert.equal(scheduler.activeTimeoutCount(), 1, 'start is idempotent');
+    assert.equal(scheduler.activeIntervalCount(), 2, 'start does not duplicate intervals');
+
+    refresher.stop();
+    assert.equal(refresher.running, false);
+    assert.equal(scheduler.activeTimeoutCount(), 0);
+    assert.equal(scheduler.activeIntervalCount(), 0);
+  });
+
+  test('does not overlap maintainer refresh runs when a tick fires while one is active', async () => {
+    const scheduler = new FakeRefresherRuntime();
+    const firstRefresh = deferred<MaintainerTriage>();
+    const secondRefresh = deferred<MaintainerTriage>();
+    const refreshes = [firstRefresh, secondRefresh];
+    let fetchCalls = 0;
+    const refresher = createMaintainerRefresher(
+      {
+        repo: 'test/test',
+        cachePath,
+        slungStatePath,
+        intervalMs: 60_000,
+        fetchTriage: () => {
+          const refresh = refreshes[fetchCalls];
+          assert.ok(refresh, `unexpected fetch call ${fetchCalls + 1}`);
+          fetchCalls += 1;
+          return refresh.promise;
+        },
+      },
+      scheduler,
+    );
+
+    refresher.start();
+    scheduler.fireInterval(1);
+    scheduler.fireInterval(1);
+
+    assert.equal(fetchCalls, 1, 'second refresh tick must not start another run');
+
+    firstRefresh.resolve(makeEnvelope([], 'test/first'));
+    await firstRefresh.promise;
+    await waitUntil(async () => (await readCache(cachePath)).status === 'ready');
+
+    scheduler.fireInterval(1);
+    assert.equal(fetchCalls, 2, 'a later tick can run after the first refresh settles');
+
+    secondRefresh.resolve(makeEnvelope([], 'test/second'));
+    await secondRefresh.promise;
+    await waitUntil(async () => {
+      const cached = await readCache(cachePath);
+      return cached.status === 'ready' && cached.envelope.repo === 'test/second';
+    });
+    refresher.stop();
+  });
+});
+
+class FakeRefresherRuntime implements RefresherRuntime {
+  readonly startupDelayMs = 5_000;
+  readonly heartbeatIntervalMs = 30_000;
+  private nextId = 1;
+  private readonly timeouts: FakeTimer[] = [];
+  private readonly intervals: FakeTimer[] = [];
+
+  setTimeout(callback: () => void, delayMs: number): RefresherTimer {
+    const timer = new FakeTimer(this.nextId, callback, delayMs);
+    this.nextId += 1;
+    this.timeouts.push(timer);
+    return timer;
+  }
+
+  setInterval(callback: () => void, delayMs: number): RefresherTimer {
+    const timer = new FakeTimer(this.nextId, callback, delayMs);
+    this.nextId += 1;
+    this.intervals.push(timer);
+    return timer;
+  }
+
+  clearTimeout(timer: RefresherTimer): void {
+    (timer as FakeTimer).cleared = true;
+  }
+
+  clearInterval(timer: RefresherTimer): void {
+    (timer as FakeTimer).cleared = true;
+  }
+
+  activeTimeoutCount(): number {
+    return this.timeouts.filter((timer) => !timer.cleared).length;
+  }
+
+  activeIntervalCount(): number {
+    return this.intervals.filter((timer) => !timer.cleared).length;
+  }
+
+  fireInterval(index: number): void {
+    const timer = this.intervals[index];
+    assert.ok(timer, `missing interval ${index}`);
+    assert.equal(timer.cleared, false, `interval ${index} was cleared`);
+    timer.callback();
+  }
+
+}
+
+class FakeTimer implements RefresherTimer {
+  cleared = false;
+  constructor(
+    readonly id: number,
+    readonly callback: () => void,
+    readonly delayMs: number,
+  ) {}
+
+  unref(): void {}
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+async function waitUntil(predicate: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail('condition was not met before timeout');
+}

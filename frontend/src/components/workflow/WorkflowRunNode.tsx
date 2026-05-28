@@ -25,9 +25,14 @@ const STATUS_LABEL: Record<WorkflowNodeStatus, string> = {
 export function WorkflowRunNode({ node, selected, onToggle }: WorkflowRunNodeProps) {
   const shapeClass = shapeClassFor(node.constructKind);
   const statusClass = statusClassFor(node.status);
-  const history = node.hasHistoricalIterations && node.visibleIteration !== undefined
-    ? `${node.iterationCount ?? 1} iterations, showing ${node.visibleIteration}`
-    : null;
+  const history =
+    node.iterationSummary.kind === 'stacked'
+      ? `${node.iterationSummary.iterationCount} iterations, showing ${node.iterationSummary.visibleIteration}`
+      : null;
+  const attemptLabel =
+    node.attemptSummary.kind === 'tracked' && node.attemptSummary.badge.kind === 'bounded'
+      ? ` · attempt ${node.attemptSummary.badge.label}`
+      : '';
 
   return (
     <button
@@ -45,7 +50,7 @@ export function WorkflowRunNode({ node, selected, onToggle }: WorkflowRunNodePro
           <p className="text-body text-fg leading-snug">{node.title}</p>
           <p className="mt-1 text-label uppercase tracking-wider text-fg-faint">
             {node.constructKind.replace(/-/g, ' ')}
-            {node.attemptBadge ? ` · attempt ${node.attemptBadge}` : ''}
+            {attemptLabel}
           </p>
         </div>
         <span className={`text-label uppercase tracking-wider shrink-0 ${statusClass}`}>
@@ -62,7 +67,7 @@ export function WorkflowRunNode({ node, selected, onToggle }: WorkflowRunNodePro
           stacked history: {history}
         </p>
       )}
-      {node.controlBadges && node.controlBadges.length > 0 && (
+      {node.controlBadges.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {node.controlBadges.map((badge) => (
             <span

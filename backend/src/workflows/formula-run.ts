@@ -7,9 +7,12 @@ import type {
   WorkflowDisplayEdge,
   WorkflowDisplayLane,
   WorkflowDisplayNode,
+  WorkflowExecutionPath,
+  WorkflowFormula,
   WorkflowNodeStatus,
   WorkflowRunProgress,
   WorkflowScopeKind,
+  WorkflowSnapshotSequence,
 } from 'gas-city-dashboard-shared';
 import { meta } from './bead-fields.js';
 import { applyDisplayNodeStates } from './display-state.js';
@@ -61,8 +64,8 @@ export interface RunningFormulaRun {
   scopeKind: WorkflowScopeKind;
   scopeRef: string;
   title: string;
-  formula: string | null;
-  executionPath: string | null;
+  formula: WorkflowFormula;
+  executionPath: WorkflowExecutionPath;
   root?: GcWorkflowBead;
   beads: GcWorkflowBead[];
   nodeGroups: WorkflowNodeGroup[];
@@ -109,8 +112,14 @@ export function buildRunningFormulaRun(
   const edges = buildWorkflowDisplayEdges(input.raw, physicalToSemantic, rawNodes);
   const nodes = applyDisplayNodeStates(rawNodes, edges);
   const progress = buildWorkflowRunProgress(input.raw, nodes, edges);
+  const formula = workflowFormulaState(input.root, input.formulaDetail);
+  const executionPath = resolveWorkflowExecutionPath(
+    input.root,
+    input.beads,
+    input.rigRoot,
+  );
 
-  return {
+  const run: RunningFormulaRun = {
     raw: input.raw,
     workflowId: input.workflowId,
     rootBeadId: input.rootBeadId,
@@ -119,15 +128,8 @@ export function buildRunningFormulaRun(
     scopeKind: input.scopeKind,
     scopeRef: input.scopeRef,
     title: input.root?.title.trim() || input.workflowId,
-    formula: input.root
-      ? workflowFormula(input.root) ?? input.formulaDetail?.name ?? null
-      : input.formulaDetail?.name ?? null,
-    executionPath: resolveWorkflowExecutionPath(
-      input.root,
-      input.beads,
-      input.rigRoot,
-    ),
-    root: input.root,
+    formula,
+    executionPath,
     beads: input.beads,
     nodeGroups: groups,
     physicalToSemantic,
@@ -140,10 +142,24 @@ export function buildRunningFormulaRun(
     lanes: buildWorkflowDisplayLanes(nodes),
     progress,
   };
+  if (input.root !== undefined) run.root = input.root;
+  return run;
 }
 
 function workflowFormula(root: GcWorkflowBead): string | null {
   return meta(root, 'gc.formula') ?? null;
+}
+
+function workflowFormulaState(
+  root: GcWorkflowBead | undefined,
+  formulaDetail: GcFormulaDetail | null | undefined,
+): WorkflowFormula {
+  const name = root ? workflowFormula(root) ?? formulaDetail?.name : formulaDetail?.name;
+  if (name) return { kind: 'known', name };
+  return {
+    kind: 'unavailable',
+    reason: formulaDetail === null ? 'formula_detail_unavailable' : 'missing_formula_metadata',
+  };
 }
 
 function buildWorkflowRunProgress(
@@ -151,7 +167,7 @@ function buildWorkflowRunProgress(
   nodes: readonly WorkflowDisplayNode[],
   edges: readonly WorkflowDisplayEdge[],
 ): WorkflowRunProgress {
-  const visibleNodes = nodes.filter((node) => node.visibleInGraph !== false);
+  const visibleNodes = nodes.filter((node) => node.visibleInGraph);
   const streamableSessionIds = new Set<string>();
   let executionInstanceCount = 0;
   let sessionLinkCount = 0;
@@ -160,20 +176,19 @@ function buildWorkflowRunProgress(
   for (const node of nodes) {
     for (const instance of node.executionInstances) {
       executionInstanceCount += 1;
-      if (instance.sessionLink !== null && instance.sessionLink !== undefined) {
+      if (instance.session.kind === 'attached') {
         sessionLinkCount += 1;
       }
-      if (instance.streamable === true && instance.sessionLink) {
+      if (instance.session.kind === 'attached' && instance.session.streamable) {
         streamableSessionCount += 1;
-        streamableSessionIds.add(instance.sessionLink.sessionId);
+        streamableSessionIds.add(instance.session.link.sessionId);
       }
     }
   }
 
   return {
     snapshotVersion: raw.snapshot_version,
-    snapshotEventSeq:
-      typeof raw.snapshot_event_seq === 'number' ? raw.snapshot_event_seq : null,
+    snapshotEventSeq: workflowSnapshotSequence(raw.snapshot_event_seq),
     partial: raw.partial,
     totalNodeCount: nodes.length,
     visibleNodeCount: visibleNodes.length,
@@ -185,6 +200,12 @@ function buildWorkflowRunProgress(
     statusCounts: countNodeStatuses(visibleNodes),
     allStatusCounts: countNodeStatuses(nodes),
   };
+}
+
+function workflowSnapshotSequence(raw: number | null | undefined): WorkflowSnapshotSequence {
+  return typeof raw === 'number'
+    ? { kind: 'known', seq: raw }
+    : { kind: 'unavailable', reason: 'supervisor_omitted' };
 }
 
 function countNodeStatuses(

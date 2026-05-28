@@ -2,6 +2,12 @@ import { Router } from 'express';
 import type { GcMailItem } from 'gas-city-dashboard-shared';
 import { GcClient } from '../gc-client.js';
 import { recordAudit } from '../audit.js';
+import { LOG_COMPONENT } from '../logging.js';
+import {
+  routeUpstreamError,
+  routeValidationError,
+  writeRouteError,
+} from '../route-errors.js';
 
 // READ-only mail router. The architect (security_researcher td-wisp-eb0pn)
 // requires PHYSICAL SEPARATION from the send path — see ./mail-send.ts.
@@ -65,21 +71,12 @@ export function mailRouter(gc: GcClient): Router {
         duration_ms: 0,
       });
     } catch (err) {
-      if (GcClient.isTimeoutError(err)) {
-        res.status(504).json({
-          error: 'gc supervisor did not respond in time',
-          kind: 'upstream-timeout',
-        });
-        return;
-      }
-      // gascity-dashboard-ayr: mirror the sr6 redaction. err.message
-      // from fetch-level failures embeds OS detail (ECONNREFUSED, host:port,
-      // interface names); details.name (Error class) is the only safe
-      // channel for the browser. journalctl keeps the full message.
-      console.warn(`[mail] /api/mail failed: ${(err as Error).message}`);
-      res
-        .status(502)
-        .json({ error: 'failed to list mail', kind: 'upstream', details: { name: (err as Error).name ?? 'Error' } });
+      writeRouteError(res, routeUpstreamError(err, {
+        component: LOG_COMPONENT.mail,
+        operation: '/api/mail failed',
+        responseError: 'failed to list mail',
+        isTimeout: GcClient.isTimeoutError,
+      }));
     }
   });
 
@@ -89,7 +86,7 @@ export function mailRouter(gc: GcClient): Router {
   router.get('/threads/:id', async (req, res) => {
     const threadId = req.params.id;
     if (typeof threadId !== 'string' || threadId.length === 0 || threadId.length > 128) {
-      res.status(400).json({ error: 'invalid thread id', kind: 'validation' });
+      writeRouteError(res, routeValidationError('invalid thread id'));
       return;
     }
     const rawAlias = typeof req.query.alias === 'string' ? req.query.alias : 'stephanie';
@@ -120,19 +117,12 @@ export function mailRouter(gc: GcClient): Router {
         duration_ms: 0,
       });
     } catch (err) {
-      if (GcClient.isTimeoutError(err)) {
-        res.status(504).json({
-          error: 'gc supervisor did not respond in time',
-          kind: 'upstream-timeout',
-        });
-        return;
-      }
-      // gascity-dashboard-ayr: same redaction rationale as the list-mail
-      // handler above. err.name only on the wire; full message in journal.
-      console.warn(`[mail] /api/mail/threads/:id failed: ${(err as Error).message}`);
-      res
-        .status(502)
-        .json({ error: 'failed to load thread', kind: 'upstream', details: { name: (err as Error).name ?? 'Error' } });
+      writeRouteError(res, routeUpstreamError(err, {
+        component: LOG_COMPONENT.mail,
+        operation: '/api/mail/threads/:id failed',
+        responseError: 'failed to load thread',
+        isTimeout: GcClient.isTimeoutError,
+      }));
     }
   });
 

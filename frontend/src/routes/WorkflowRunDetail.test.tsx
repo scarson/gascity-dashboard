@@ -446,37 +446,53 @@ function detailWithRebaseAttempts(): WorkflowRunDetail {
       if (node.id !== 'rebase-check') return node;
       return {
         ...node,
-        attemptBadge: '2/3',
-        attemptCount: 2,
-        activeAttempt: undefined,
+        attemptSummary: {
+          kind: 'tracked',
+          count: 2,
+          badge: { kind: 'bounded', label: '2/3' },
+          active: { kind: 'idle' },
+        },
+        visibleExecutionInstanceId: 'gc-rebase-check-a2',
         executionInstances: [
           {
             id: 'gc-rebase-check-a1',
             semanticNodeId: 'rebase-check',
             beadId: 'gc-rebase-check-a1',
-            attempt: 1,
+            iteration: { kind: 'base' },
+            attempt: { kind: 'attempt', value: 1 },
             label: 'attempt 1',
             status: 'failed',
-            streamable: false,
-            sessionLink: {
-              sessionId: 'gc-session-rebase-a1',
-              sessionName: 'rebase-attempt-1',
-              assignee: 'codex',
+            session: {
+              kind: 'attached',
+              streamable: false,
+              link: {
+                sessionId: 'gc-session-rebase-a1',
+                sessionName: 'rebase-attempt-1',
+                assignee: 'codex',
+              },
             },
+            currentIteration: true,
+            historical: false,
           },
           {
             id: 'gc-rebase-check-a2',
             semanticNodeId: 'rebase-check',
             beadId: 'gc-rebase-check-a2',
-            attempt: 2,
+            iteration: { kind: 'base' },
+            attempt: { kind: 'attempt', value: 2 },
             label: 'attempt 2',
             status: 'completed',
-            streamable: false,
-            sessionLink: {
-              sessionId: 'gc-session-rebase-a2',
-              sessionName: 'rebase-attempt-2',
-              assignee: 'codex',
+            session: {
+              kind: 'attached',
+              streamable: false,
+              link: {
+                sessionId: 'gc-session-rebase-a2',
+                sessionName: 'rebase-attempt-2',
+                assignee: 'codex',
+              },
             },
+            currentIteration: true,
+            historical: false,
           },
         ],
       };

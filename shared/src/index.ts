@@ -410,8 +410,8 @@ export interface SystemHealth {
     cpu_count: number;
     uptime_sec: number;
   };
-  /** gc supervisor's own /v0/health response, when reachable. */
-  supervisor: SupervisorHealth | null;
+  /** gc supervisor's own city health probe. */
+  supervisor: SupervisorHealthState;
 }
 
 export interface SupervisorHealth {
@@ -421,18 +421,41 @@ export interface SupervisorHealth {
   uptime_sec: number;
 }
 
+export type SupervisorHealthState =
+  | {
+      status: 'available';
+      data: SupervisorHealth;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
+
 export interface DoltNomsSample {
   ts: IsoTimestamp;
   bytes: number;
 }
 
-export interface DoltNomsTrend {
-  /** Up to 144 samples (24 h at 10-min cadence). */
-  samples: DoltNomsSample[];
-  /** Null when the metric source isn't wired yet (mechanic surgical-ask td-ulgrt6). */
-  source: string | null;
-  available: boolean;
-}
+export type DoltNomsUnavailableReason =
+  | 'city_path_missing'
+  | 'city_path_not_absolute'
+  | 'noms_directory_missing'
+  | 'noms_path_not_directory'
+  | 'sample_failed';
+
+export type DoltNomsTrend =
+  | {
+      available: true;
+      /** Up to 144 samples (24 h at 10-min cadence). */
+      samples: DoltNomsSample[];
+      source: string;
+    }
+  | {
+      available: false;
+      /** Historical samples, if the source became unavailable after sampling. */
+      samples: DoltNomsSample[];
+      reason: DoltNomsUnavailableReason;
+    };
 
 // ── Events (SSE; Phase C wires; type-locked early) ──────────────────────
 
@@ -553,9 +576,7 @@ export interface SlungState {
    *  knows which role the work was sent to, regardless of which session
    *  actually picked it up. */
   target: string;
-  /** Bead id parsed from `gc sling` stdout when present. Persisted for
-   *  forward-compat with a future per-bead drill-in; not rendered in v1
-   *  (the AgentDetail page surfaces the bead list naturally). */
+  /** Bead id parsed from `gc sling` stdout when present. */
   bead_id: string | null;
   /**
    * Concrete supervisor session identifier the `target` role resolved
@@ -573,16 +594,10 @@ export interface SlungState {
    *   - no running session carried the role (sling routed to a not-yet-spawned agent)
    *   - listSessions failed at sling time (sling itself succeeded)
    *
-   * Optional (rather than `: string | null`) because pre-55b on-disk
-   * entries don't carry this field at all. Readers MUST treat
-   * undefined and null identically — the renderer surfaces an inline
-   * 'no session for role X' error in both cases rather than
-   * constructing a 404-bound link to the raw `target` role label.
-   * Post-55b writers ALWAYS persist the field (null when resolution
-   * failed), so the undefined-on-disk shape only appears for legacy
-   * entries that survive across the upgrade.
+   * Null means the sling succeeded but no running session could be resolved
+   * for the target role at write time.
    */
-  resolved_session_name?: string | null;
+  resolved_session_name: string | null;
 }
 
 export interface ContributorStat {

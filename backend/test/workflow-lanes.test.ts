@@ -21,14 +21,22 @@ describe('workflow display lanes', () => {
 });
 
 function node(id: string, scopeRef?: string): WorkflowDisplayNode {
-  return {
+  const displayNode: WorkflowDisplayNode = {
     id,
     semanticNodeId: id,
     title: id,
     kind: 'step',
     constructKind: 'step',
     status: 'ready',
-    scopeRef,
+    currentBeadId: id,
+    scope: scopeRef === undefined ? { kind: 'workflow' } : { kind: 'scoped', ref: scopeRef },
+    visibleInGraph: true,
+    historicalOnly: false,
+    iterationSummary: { kind: 'single' },
+    attemptSummary: { kind: 'none' },
+    visibleExecutionInstanceId: id,
     executionInstances: [],
+    controlBadges: [],
   };
+  return displayNode;
 }

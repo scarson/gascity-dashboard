@@ -1,6 +1,5 @@
 import type {
   GcBead,
-  GcBeadList,
   WorkflowChange,
   WorkflowLane,
   WorkflowRunCounts,
@@ -39,6 +38,7 @@ import {
 
 export const WORKFLOWS_CACHE_TTL_MS = 60 * 1000;
 export const WORKFLOWS_FETCH_LIMIT = 1_000;
+export const RECENT_WORKFLOW_FETCH_LIMIT = 80;
 export const MAX_VISIBLE_WORKFLOW_LANES = 8;
 const RECENT_CHANGES_CAP = 12;
 
@@ -86,17 +86,18 @@ export function workflowBeadFilter(bead: GcBead): boolean {
  */
 export function fromGcBead(bead: GcBead): WorkflowIssue {
   const parent = stringValue(bead.metadata?.['gc.parent_bead_id']) || undefined;
-  return {
+  const issue: WorkflowIssue = {
     id: bead.id,
     title: bead.title,
-    description: bead.description,
     status: bead.status,
     issue_type: bead.issue_type,
-    assignee: bead.assignee,
-    updated_at: bead.updated_at ?? '',
-    parent,
-    metadata: bead.metadata,
+    updated_at: bead.updated_at ?? bead.closed_at ?? bead.created_at,
   };
+  if (bead.description !== undefined) issue.description = bead.description;
+  if (bead.assignee !== undefined) issue.assignee = bead.assignee;
+  if (parent !== undefined) issue.parent = parent;
+  if (bead.metadata !== undefined) issue.metadata = bead.metadata;
+  return issue;
 }
 
 // ── Lane builder ──────────────────────────────────────────────────────────
@@ -127,8 +128,8 @@ export function buildWorkflowSummary(issues: WorkflowIssue[]): WorkflowSummary {
     recentChanges: recentChanges(laneIssues),
     // census is engine-derived (gascity-dashboard-3ax) — the lane builder
     // has no session data and no phaseConfidence yet. deriveWorkflowHealth
-    // fills it in the snapshot read path.
-    census: null,
+    // replaces this state in the snapshot read path.
+    census: workflowCensusUnavailable(),
   };
 }
 
@@ -172,11 +173,12 @@ function runCounts(lanes: WorkflowLane[], visible: number): WorkflowRunCounts {
 }
 
 function runKind(
-  formula: string | null,
+  formula: WorkflowLane['formula'],
 ): 'prReview' | 'designReview' | 'bugfix' | 'other' {
-  if (formula === 'mol-adopt-pr-v2') return 'prReview';
-  if (formula === 'mol-design-review-v2') return 'designReview';
-  if (formula === 'mol-bug-report-flow-v2' || formula === 'mol-bug-report-implementation-v2') {
+  const formulaName = workflowFormulaName(formula);
+  if (formulaName === 'mol-adopt-pr-v2') return 'prReview';
+  if (formulaName === 'mol-design-review-v2') return 'designReview';
+  if (formulaName === 'mol-bug-report-flow-v2' || formulaName === 'mol-bug-report-implementation-v2') {
     return 'bugfix';
   }
   return 'other';
@@ -186,12 +188,10 @@ function workflowLane(rootId: string, issues: WorkflowIssue[]): WorkflowLane {
   const phase = mapWorkflowPhase(issues);
   const updatedAt = latestUpdatedAt(issues);
   const formula = workflowFormula(issues);
-  const stages = stageProgress(phase, formula, issues);
+  const formulaName = workflowFormulaName(formula);
+  const stages = stageProgress(phase, formulaName, issues);
   const foundStageIndex = stages.findIndex((s) => s.status === 'active');
   const activeStage = foundStageIndex >= 0 ? stages[foundStageIndex] : undefined;
-  // Null (not -1) when no stage is active, matching the WorkflowLane field
-  // contract the engine's "graph position flat" check reads.
-  const activeStageIndex = foundStageIndex >= 0 ? foundStageIndex : null;
 
   // Engine inputs for the workflow-health derivation (gascity-dashboard-3ax).
   // activeStepId is the raw gc.step_id of the in-progress primary step — the
@@ -203,42 +203,37 @@ function workflowLane(rootId: string, issues: WorkflowIssue[]): WorkflowLane {
     (i) => isPrimaryStepIssue(i) && i.status === 'in_progress',
   );
   const activeStepId = latestStepId(primaryInProgress);
-  const activeStepAttempt = activeStepId
-    ? reviewRoundForIssues(stepIssues(issues, activeStepId))
-    : null;
+  const progress = workflowProgress(stages, foundStageIndex, activeStepId, issues);
 
   // Provenance for phaseConfidence (gascity-dashboard-3ax): stages came from
   // a recognised formula AND the active gc.step_id mapped into one of them.
   // Distinguishes a real formula-driven phase from the generic 5-stage
   // fallback / the includes('blocked') sniff (PRD §6 / R2). The engine ANDs
   // this with session-resolution.
-  const formulaStages = stagesForFormula(formula);
+  const formulaStages = stagesForFormula(formulaName);
   const formulaStageResolved =
     formulaStages.length > 0 &&
-    activeStepId !== null &&
-    formulaStages.some((s) => s.steps.includes(activeStepId));
+    progress.status === 'active_step' &&
+    formulaStages.some((s) => s.steps.includes(progress.stepId));
   const scope = workflowScope(rootId, issues);
 
-  return {
+  const lane: WorkflowLane = {
     id: rootId,
     title: displayTitle(rootId, issues),
     formula,
-    scopeKind: scope.scopeKind,
-    scopeRef: scope.scopeRef,
-    rootStoreRef: scope.rootStoreRef,
-    externalUrl: externalUrl(issues),
-    externalLabel: externalLabel(issues),
+    scope,
+    external: externalReference(issues),
     phase: phase.phase,
-    phaseLabel: formula ? (activeStage?.label ?? phase.label) : phase.label,
+    phaseLabel: formula.status === 'known' ? (activeStage?.label ?? phase.label) : phase.label,
     statusCounts: statusCounts(issues),
     activeAssignees: activeAssignees(issues),
     updatedAt,
     stages,
-    activeStepId,
-    activeStepAttempt,
-    activeStageIndex,
+    progress,
     formulaStageResolved,
+    health: workflowHealthUnavailable(),
   };
+  return lane;
 }
 
 function workflowRootId(issue: WorkflowIssue): string {
@@ -265,12 +260,12 @@ function workflowRootId(issue: WorkflowIssue): string {
 function workflowScope(
   rootId: string,
   issues: WorkflowIssue[],
-): Pick<WorkflowLane, 'scopeKind' | 'scopeRef' | 'rootStoreRef'> {
+): WorkflowScopeInfo {
   const root = issues.find((i) => i.id === rootId);
   const ordered = root
     ? [root, ...issues.filter((issue) => issue !== root)]
     : issues;
-  const rootStoreRef = metadataString(ordered, 'gc.root_store_ref') || null;
+  const rootStoreRef = metadataString(ordered, 'gc.root_store_ref');
   const rootScopeKind = stringValue(root?.metadata?.['gc.scope_kind']);
   const rootScopeRef = stringValue(root?.metadata?.['gc.scope_ref']);
   // The query scope (scopeKind/scopeRef) drives the run-detail deep-link, so it
@@ -287,11 +282,36 @@ function workflowScope(
       ? rootScopeRef || metadataString(ordered, 'gc.scope_ref') || null
       : null;
 
-  return { scopeKind, scopeRef, rootStoreRef };
+  if (scopeKind !== null && scopeRef !== null) {
+    return {
+      status: 'available',
+      kind: scopeKind,
+      ref: scopeRef,
+      rootStoreRef: rootStoreRef || `${scopeKind}:${scopeRef}`,
+    };
+  }
+
+  return {
+    status: 'unavailable',
+    error: 'workflow scope metadata unavailable',
+  };
 }
 
-function parseWorkflowScopeKind(value: string): WorkflowLane['scopeKind'] {
+type WorkflowScopeInfo = WorkflowLane['scope'];
+
+function parseWorkflowScopeKind(value: string): 'city' | 'rig' | null {
   return value === 'city' || value === 'rig' ? value : null;
+}
+
+function scopeKindFromStoreRef(rootStoreRef: string | null): 'city' | 'rig' | null {
+  const [kind] = (rootStoreRef ?? '').split(':', 1);
+  return parseWorkflowScopeKind(kind ?? '');
+}
+
+function scopeRefFromStoreRef(rootStoreRef: string | null): string | null {
+  const ref = rootStoreRef ?? '';
+  const colon = ref.indexOf(':');
+  return colon >= 0 && colon < ref.length - 1 ? ref.slice(colon + 1) : null;
 }
 
 function sourceWorkflowRootId(issue: WorkflowIssue): string {
@@ -338,13 +358,15 @@ function activeAssignees(issues: WorkflowIssue[]): string[] {
   ).sort();
 }
 
-function latestUpdatedAt(issues: WorkflowIssue[]): string | null {
-  return (
-    issues
-      .map((i) => i.updated_at)
-      .filter(Boolean)
-      .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null
-  );
+function latestUpdatedAt(issues: WorkflowIssue[]): WorkflowLane['updatedAt'] {
+  const at = issues
+    .map((i) => i.updated_at)
+    .filter(Boolean)
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
+
+  return at === undefined
+    ? { status: 'unavailable', error: 'workflow update time unavailable' }
+    : { status: 'available', at };
 }
 
 function recentChanges(issues: WorkflowIssue[]): WorkflowChange[] {
@@ -629,6 +651,58 @@ function latestStepId(issues: WorkflowIssue[]): string | null {
   );
 }
 
+function workflowProgress(
+  stages: WorkflowStage[],
+  activeStageIndex: number,
+  activeStepId: string | null,
+  issues: WorkflowIssue[],
+): WorkflowLane['progress'] {
+  const stage = workflowStagePosition(stages, activeStageIndex);
+  if (activeStepId !== null) {
+    return {
+      status: 'active_step',
+      stepId: activeStepId,
+      stage,
+      attempt: workflowStepAttempt(issues, activeStepId),
+    };
+  }
+
+  if (stage.status === 'available') {
+    return {
+      status: 'stage_only',
+      stage,
+      error: 'active workflow step unavailable',
+    };
+  }
+
+  return { status: 'unavailable', error: 'workflow progress unavailable' };
+}
+
+function workflowStagePosition(
+  stages: WorkflowStage[],
+  activeStageIndex: number,
+): Extract<WorkflowLane['progress'], { status: 'active_step' }>['stage'] {
+  const stage = stages[activeStageIndex];
+  return stage === undefined
+    ? { status: 'unavailable', error: 'active workflow stage unavailable' }
+    : {
+        status: 'available',
+        index: activeStageIndex,
+        key: stage.key,
+        label: stage.label,
+      };
+}
+
+function workflowStepAttempt(
+  issues: WorkflowIssue[],
+  stepId: string,
+): Extract<WorkflowLane['progress'], { status: 'active_step' }>['attempt'] {
+  const value = reviewRoundForIssues(stepIssues(issues, stepId));
+  return value === null
+    ? { status: 'unavailable', error: 'workflow step attempt unavailable' }
+    : { status: 'available', value };
+}
+
 function stepIssues(issues: WorkflowIssue[], step: string): WorkflowIssue[] {
   return issues.filter(
     (i) => stringValue(i.metadata?.['gc.step_id']) === step,
@@ -641,18 +715,36 @@ function isPrimaryStepIssue(issue: WorkflowIssue): boolean {
 }
 
 function compareLanes(a: WorkflowLane, b: WorkflowLane): number {
-  const aTime = a.updatedAt ? Date.parse(a.updatedAt) : 0;
-  const bTime = b.updatedAt ? Date.parse(b.updatedAt) : 0;
+  const aTime = a.updatedAt.status === 'available' ? Date.parse(a.updatedAt.at) : 0;
+  const bTime = b.updatedAt.status === 'available' ? Date.parse(b.updatedAt.at) : 0;
   return bTime - aTime || a.id.localeCompare(b.id);
 }
 
-function workflowFormula(issues: WorkflowIssue[]): string | null {
-  return (
+function workflowFormula(issues: WorkflowIssue[]): WorkflowLane['formula'] {
+  const name =
     metadataString(issues, 'pr_review.workflow_formula') ||
     metadataString(issues, 'gc.formula') ||
     issues.map((i) => i.title).find((t) => t.startsWith('mol-')) ||
-    null
-  );
+    null;
+  return name === null
+    ? { status: 'unavailable', error: 'workflow formula unavailable' }
+    : { status: 'known', name };
+}
+
+function workflowFormulaName(formula: WorkflowLane['formula']): string | null {
+  return formula.status === 'known' ? formula.name : null;
+}
+
+function externalReference(issues: WorkflowIssue[]): WorkflowLane['external'] {
+  const label = externalLabel(issues);
+  const url = externalUrl(issues);
+  if (label !== null && url !== null) {
+    return { status: 'available', label, url };
+  }
+  if (label !== null) {
+    return { status: 'label_only', label };
+  }
+  return { status: 'unavailable', error: 'external reference unavailable' };
 }
 
 function externalUrl(issues: WorkflowIssue[]): string | null {
@@ -700,20 +792,34 @@ export function emptyWorkflowSummary(): WorkflowSummary {
     },
     lanes: [],
     recentChanges: [],
-    census: null,
+    census: workflowCensusUnavailable(),
+  };
+}
+
+function workflowCensusUnavailable(): WorkflowSummary['census'] {
+  return {
+    status: 'unavailable',
+    error: 'workflow health has not been derived',
+  };
+}
+
+function workflowHealthUnavailable(): WorkflowLane['health'] {
+  return {
+    status: 'unavailable',
+    error: 'workflow health has not been derived',
   };
 }
 
 export interface CreateWorkflowsSourceCacheOptions {
   /** Live source for beads. Required unless `load` is injected directly. */
-  gc?: GcClient;
+  gc?: GcClient | undefined;
   /** Per-call fetch cap. Defaults to WORKFLOWS_FETCH_LIMIT. */
-  limit?: number;
-  now?: () => Date;
-  loadFixture?: () => Promise<WorkflowSummary> | WorkflowSummary;
-  useFixture?: boolean;
+  limit?: number | undefined;
+  now?: (() => Date) | undefined;
+  loadFixture?: (() => Promise<WorkflowSummary> | WorkflowSummary) | undefined;
+  useFixture?: boolean | undefined;
   /** Test seam: override the loader entirely (bypasses gc + filter + adapter). */
-  load?: () => Promise<WorkflowSummary> | WorkflowSummary;
+  load?: (() => Promise<WorkflowSummary> | WorkflowSummary) | undefined;
 }
 
 export function createWorkflowsSourceCache(
@@ -748,9 +854,65 @@ function buildDefaultLoad(
   }
   const limit = options.limit ?? WORKFLOWS_FETCH_LIMIT;
   return async () => {
-    const list: GcBeadList = await gc.listBeads(undefined, { limit });
-    const filtered = list.items.filter(workflowBeadFilter);
+    const items = await loadWorkflowBeads(gc, limit);
+    const filtered = items.filter(workflowBeadFilter);
     const adapted = filtered.map(fromGcBead);
     return buildWorkflowSummary(adapted);
   };
+}
+
+async function loadWorkflowBeads(
+  gc: GcClient,
+  limit: number,
+): Promise<GcBead[]> {
+  const active = await gc.listBeads(undefined, { limit });
+  const rigNames = workflowRigNames(active.items);
+  const recentLists = await Promise.all([
+    ...rigNames.map((rig) =>
+      gc.listBeads(undefined, {
+        limit: RECENT_WORKFLOW_FETCH_LIMIT,
+        type: 'task',
+        rig,
+        all: true,
+      }),
+    ),
+    gc.listBeads(undefined, {
+      limit: RECENT_WORKFLOW_FETCH_LIMIT,
+      type: 'molecule',
+      all: true,
+    }),
+  ]);
+
+  return uniqueBeads([
+    ...active.items,
+    ...recentLists.flatMap((list) => list.items),
+  ]);
+}
+
+function workflowRigNames(beads: readonly GcBead[]): string[] {
+  const names = new Set<string>();
+  for (const bead of beads) {
+    const rootStoreRef = stringValue(bead.metadata?.['gc.root_store_ref']);
+    const storeKind = scopeKindFromStoreRef(rootStoreRef);
+    const storeRef = scopeRefFromStoreRef(rootStoreRef);
+    if (storeKind === 'rig' && storeRef !== null) {
+      names.add(storeRef);
+      continue;
+    }
+
+    const scopeKind = parseWorkflowScopeKind(stringValue(bead.metadata?.['gc.scope_kind']));
+    const scopeRef = stringValue(bead.metadata?.['gc.scope_ref']);
+    if (scopeKind === 'rig' && scopeRef.length > 0) {
+      names.add(scopeRef);
+    }
+  }
+  return Array.from(names).sort();
+}
+
+function uniqueBeads(beads: readonly GcBead[]): GcBead[] {
+  const byId = new Map<string, GcBead>();
+  for (const bead of beads) {
+    if (!byId.has(bead.id)) byId.set(bead.id, bead);
+  }
+  return Array.from(byId.values());
 }

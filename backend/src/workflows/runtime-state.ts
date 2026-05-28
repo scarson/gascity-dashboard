@@ -48,15 +48,16 @@ function mergeWorkflowBead(
   if (!runtime) return bead;
   const status = nonEmpty(runtime.status) ?? bead.status;
   const assignee = nonEmpty(runtime.assignee) ?? bead.assignee;
-  return {
+  const merged: GcWorkflowBead = {
     ...bead,
     status,
-    assignee,
     metadata: {
       ...bead.metadata,
       ...presentationMetadata(runtime.metadata),
     },
   };
+  if (assignee !== undefined) merged.assignee = assignee;
+  return merged;
 }
 
 function presentationMetadata(metadata: GcBead['metadata']): Record<string, string> {

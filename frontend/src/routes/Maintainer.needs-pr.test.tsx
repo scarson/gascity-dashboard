@@ -12,8 +12,8 @@ import { IssueRow, filterTierByNeedsPr } from './Maintainer';
 //
 // The filter helper (filterTierByNeedsPr) is a pure transform on a
 // TriageTierSection: it returns a section containing ONLY issue items
-// where !has_in_flight_pr, with PRs dropped entirely (the filter is
-// issue-focused per the bead).
+// where `has_in_flight_pr === false`, with PRs dropped entirely (the
+// filter is issue-focused per the bead).
 
 function mkItem(overrides: Partial<TriageItem> & { kind: 'pr' | 'issue'; number: number }): TriageItem {
   return {
@@ -110,27 +110,6 @@ describe('IssueRow — needs-PR indicator', () => {
     expect(screen.getByText(/needs PR/i)).toBeTruthy();
   });
 
-  it('falls back to has_in_flight_pr=false when the field is undefined (stale cache from pre-omv build)', () => {
-    // An envelope cached by a build pre-dating this field has
-    // has_in_flight_pr=undefined. The conservative default surfaces
-    // "needs PR" so work isn't hidden until the next refresh writes
-    // a fresh envelope.
-    const item = mkItem({
-      kind: 'issue',
-      number: 42,
-    });
-    // Strip the field to simulate a pre-omv cached item.
-    delete (item as { has_in_flight_pr?: boolean }).has_in_flight_pr;
-    render(
-      <IssueRow
-        item={item}
-        hasInListChildren={false}
-        selection={new Set()}
-        onToggleSelect={null}
-      />,
-    );
-    expect(screen.getByText(/needs PR/i)).toBeTruthy();
-  });
 });
 
 describe('filterTierByNeedsPr — pure filter helper', () => {
@@ -142,7 +121,7 @@ describe('filterTierByNeedsPr — pure filter helper', () => {
     };
   }
 
-  it('keeps only issues with !has_in_flight_pr in unclustered', () => {
+  it('keeps only issues with has_in_flight_pr=false in unclustered', () => {
     const a = mkItem({ kind: 'issue', number: 1, has_in_flight_pr: false });
     const b = mkItem({ kind: 'issue', number: 2, has_in_flight_pr: true });
     const filtered = filterTierByNeedsPr(mkSection([a, b]));
@@ -190,13 +169,6 @@ describe('filterTierByNeedsPr — pure filter helper', () => {
     const filtered = filterTierByNeedsPr(mkSection([a, b]));
     expect(filtered.unclustered).toEqual([]);
     expect(filtered.clusters).toEqual([]);
-  });
-
-  it('treats has_in_flight_pr=undefined (stale cache) as "needs PR"', () => {
-    const a = mkItem({ kind: 'issue', number: 1 });
-    delete (a as { has_in_flight_pr?: boolean }).has_in_flight_pr;
-    const filtered = filterTierByNeedsPr(mkSection([a]));
-    expect(filtered.unclustered.map((i) => i.number)).toEqual([1]);
   });
 
   it('preserves tier identity (regression vs regression_breaking vs stability)', () => {

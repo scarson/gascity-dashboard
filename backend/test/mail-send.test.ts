@@ -271,7 +271,7 @@ describe('POST /api/mail-send', { concurrency: false }, () => {
       body: 'y',
     });
     assert.equal(res.status, 504);
-    assert.equal(res.body.kind, 'timeout');
+    assert.equal(res.body.kind, 'upstream-timeout');
     assert.equal(h.calls.length, 1);
   });
 

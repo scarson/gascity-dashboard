@@ -41,8 +41,8 @@ export function workflowSessionLinkFor(
   bead: GcWorkflowBead,
   status: WorkflowNodeStatus,
   context: WorkflowSessionLinkContext = {},
-): WorkflowSessionLink | null {
-  if (status === 'pending' || status === 'ready') return null;
+): WorkflowSessionLink | undefined {
+  if (status === 'pending' || status === 'ready') return undefined;
   const assignee = nonEmpty(bead.assignee);
   const sessionId =
     meta(bead, 'session_id') ??
@@ -52,16 +52,12 @@ export function workflowSessionLinkFor(
     meta(bead, 'session_name') ??
     assignee ??
     sessionId;
-  const rawLink =
-    sessionId || sessionName
-      ? {
-          sessionId: sessionId ?? sessionName ?? '',
-          sessionName: sessionName ?? sessionId ?? '',
-          assignee: assignee ?? sessionName ?? sessionId ?? '',
-          rigId: meta(bead, 'rig_id'),
-        }
-      : null;
-  if (!rawLink) return null;
+  if (!sessionId && !sessionName) return undefined;
+  const rawLink: WorkflowSessionLink = {
+    sessionId: sessionId ?? sessionName ?? '',
+    sessionName: sessionName ?? sessionId ?? '',
+    assignee: assignee ?? sessionName ?? sessionId ?? '',
+  };
   return resolveWorkflowSessionLink(rawLink, context.sessionIndex);
 }
 
@@ -119,7 +115,6 @@ function linkForSession(
       nonEmpty(session.title) ||
       nonEmpty(session.session_name) ||
       session.id,
-    rigId: nonEmpty(session.rig) ?? rawLink.rigId,
   };
 }
 

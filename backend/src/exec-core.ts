@@ -1,0 +1,140 @@
+import { spawn } from 'node:child_process';
+
+export const MAX_BYTES = 100 * 1024;
+export const MAX_BYTES_LARGE = 2 * 1024 * 1024;
+export const MAX_WORKFLOW_DIFF_BYTES = 512 * 1024;
+const MAX_CONCURRENT = 4;
+
+export const AGENT_ALIAS_RE = /^[a-z][a-z0-9_./-]{1,63}$/i;
+
+export interface ExecResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+  durationMs: number;
+}
+
+export class ExecError extends Error {
+  constructor(message: string, public readonly kind: 'validation' | 'timeout' | 'spawn') {
+    super(message);
+    this.name = 'ExecError';
+  }
+}
+
+function cleanEnv(): NodeJS.ProcessEnv {
+  const home = process.env.HOME ?? '/tmp';
+  const path =
+    process.env.ADMIN_PATH ?? `${home}/.local/bin:/usr/local/bin:/usr/bin:/bin`;
+  const env: NodeJS.ProcessEnv = {
+    PATH: path,
+    HOME: home,
+    LANG: 'C.UTF-8',
+    NO_COLOR: '1',
+  };
+  if (process.env.GITHUB_TOKEN !== undefined) {
+    env.GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+  }
+  return env;
+}
+
+let runningCount = 0;
+const waiting: Array<() => void> = [];
+
+function acquireSlot(): Promise<void> {
+  return new Promise((resolve) => {
+    const tryAcquire = () => {
+      if (runningCount < MAX_CONCURRENT) {
+        runningCount += 1;
+        resolve();
+      } else {
+        waiting.push(tryAcquire);
+      }
+    };
+    tryAcquire();
+  });
+}
+
+function releaseSlot(): void {
+  runningCount -= 1;
+  const next = waiting.shift();
+  if (next) next();
+}
+
+export async function runExec(
+  cmd: string,
+  args: string[],
+  timeoutMs: number,
+  maxBytes: number = MAX_BYTES,
+): Promise<ExecResult> {
+  await acquireSlot();
+  try {
+    return await spawnExec(cmd, args, timeoutMs, maxBytes);
+  } finally {
+    releaseSlot();
+  }
+}
+
+function spawnExec(
+  cmd: string,
+  args: string[],
+  timeoutMs: number,
+  maxBytes: number,
+): Promise<ExecResult> {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    let stdout = '';
+    let stderr = '';
+    let truncated = false;
+    let timedOut = false;
+
+    const child = spawn(cmd, args, {
+      shell: false,
+      timeout: timeoutMs,
+      env: cleanEnv(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (stdout.length + chunk.length > maxBytes) {
+        const remaining = Math.max(0, maxBytes - stdout.length);
+        stdout += chunk.toString('utf-8', 0, remaining);
+        truncated = true;
+        child.kill('SIGTERM');
+      } else {
+        stdout += chunk.toString('utf-8');
+      }
+    });
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (stderr.length + chunk.length <= MAX_BYTES) {
+        stderr += chunk.toString('utf-8');
+      }
+    });
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeoutMs + 500);
+
+    child.on('error', (err: Error) => {
+      clearTimeout(timer);
+      reject(new ExecError(`spawn failed: ${err.message}`, 'spawn'));
+    });
+
+    child.on('close', (code: number | null) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        reject(new ExecError(`exec timed out after ${timeoutMs}ms`, 'timeout'));
+        return;
+      }
+      resolve({
+        exitCode: code ?? -1,
+        stdout,
+        stderr,
+        truncated,
+        durationMs: Date.now() - start,
+      });
+    });
+  });
+}

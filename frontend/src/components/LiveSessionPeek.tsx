@@ -4,6 +4,7 @@ import { StatusBadge, type StatusTone } from './StatusBadge';
 import {
   useSessionStream,
   type SessionStreamConnState,
+  type SessionStreamProgress,
 } from '../hooks/useSessionStream';
 import { formatRelative } from '../hooks/time';
 
@@ -38,8 +39,11 @@ export function LiveSessionPeek({
   showBadge = true,
   showCaption = false,
 }: LiveSessionPeekProps) {
-  const { result, loading, error, streamState } = useSessionStream(sessionId, stream);
-  const badge = streamBadge(streamState);
+  const sessionState = useSessionStream(sessionId, stream);
+  const result = sessionState.status === 'ready' ? sessionState.result : null;
+  const loading = sessionState.status === 'loading';
+  const error = sessionState.status === 'failed' ? sessionState.error : null;
+  const badge = streamBadge(sessionState.stream);
 
   const captionParts: string[] = [];
   if (showCaption && result) {
@@ -55,7 +59,7 @@ export function LiveSessionPeek({
           <StatusBadge
             tone={badge.tone}
             label={badge.label}
-            title={`Session stream: ${streamState}`}
+            title={`Session stream: ${sessionState.stream.status}`}
             className="text-label uppercase tracking-wider"
           />
         </div>
@@ -71,17 +75,20 @@ export function LiveSessionPeek({
 }
 
 /** Maps the SSE connection state to a status badge tone + label. */
-export function streamBadge(state: SessionStreamConnState): {
+export function streamBadge(stream: SessionStreamProgress | SessionStreamConnState): {
   tone: StatusTone;
   label: string;
 } {
-  switch (state) {
+  const status = typeof stream === 'string' ? stream : stream.status;
+  switch (status) {
     case 'open':
       return { tone: 'ok', label: 'live' };
     case 'connecting':
       return { tone: 'warn', label: 'connecting' };
     case 'closed':
       return { tone: 'stuck', label: 'offline' };
+    case 'degraded':
+      return { tone: 'warn', label: 'degraded' };
     case 'idle':
       return { tone: 'neutral', label: 'snapshot' };
   }

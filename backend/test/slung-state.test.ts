@@ -53,6 +53,7 @@ describe('readSlungState', () => {
         slung_at: '2026-05-24T12:00:00.000Z',
         target: 'chief-of-staff',
         bead_id: 'gastown-abc',
+        resolved_session_name: null,
       },
     };
     await fs.writeFile(statePath, JSON.stringify(seed), 'utf-8');
@@ -71,6 +72,23 @@ describe('readSlungState', () => {
     const state = await readSlungState(statePath);
     assert.deepEqual(state, {});
   });
+
+  test('returns empty map when an entry omits resolved_session_name', async () => {
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({
+        'pr:1': {
+          slung_at: '2026-05-24T12:00:00.000Z',
+          target: 'chief-of-staff',
+          bead_id: null,
+        },
+      }),
+      'utf-8',
+    );
+
+    const state = await readSlungState(statePath);
+    assert.deepEqual(state, {});
+  });
 });
 
 describe('writeSlungEntry', () => {
@@ -79,6 +97,7 @@ describe('writeSlungEntry', () => {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'gastown-abc',
+      resolved_session_name: null,
     });
     const state = await readSlungState(statePath);
     assert.deepEqual(state, {
@@ -86,6 +105,7 @@ describe('writeSlungEntry', () => {
         slung_at: '2026-05-24T12:00:00.000Z',
         target: 'chief-of-staff',
         bead_id: 'gastown-abc',
+        resolved_session_name: null,
       },
     });
   });
@@ -95,11 +115,13 @@ describe('writeSlungEntry', () => {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'gastown-abc',
+      resolved_session_name: null,
     });
     await writeSlungEntry(statePath, slungKey('issue', 5), {
       slung_at: '2026-05-24T12:01:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'gastown-def',
+      resolved_session_name: null,
     });
     const state = await readSlungState(statePath);
     assert.equal(Object.keys(state).length, 2);
@@ -112,11 +134,13 @@ describe('writeSlungEntry', () => {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'gastown-abc',
+      resolved_session_name: null,
     });
     await writeSlungEntry(statePath, slungKey('pr', 1), {
       slung_at: '2026-05-24T13:00:00.000Z',
       target: 'project-lead',
       bead_id: 'gastown-xyz',
+      resolved_session_name: 'project-lead-session',
     });
     const state = await readSlungState(statePath);
     assert.equal(state['pr:1']?.target, 'project-lead');
@@ -130,16 +154,19 @@ describe('writeSlungEntry', () => {
         slung_at: '2026-05-24T12:00:00.000Z',
         target: 'chief-of-staff',
         bead_id: 'gastown-a',
+        resolved_session_name: null,
       }),
       writeSlungEntry(statePath, slungKey('pr', 2), {
         slung_at: '2026-05-24T12:00:00.000Z',
         target: 'chief-of-staff',
         bead_id: 'gastown-b',
+        resolved_session_name: null,
       }),
       writeSlungEntry(statePath, slungKey('issue', 3), {
         slung_at: '2026-05-24T12:00:00.000Z',
         target: 'chief-of-staff',
         bead_id: 'gastown-c',
+        resolved_session_name: null,
       }),
     ]);
     const state = await readSlungState(statePath);
@@ -154,6 +181,7 @@ describe('writeSlungEntry', () => {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: null,
+      resolved_session_name: null,
     });
     const state = await readSlungState(statePath);
     assert.equal(state['pr:1']?.bead_id, null);
@@ -166,16 +194,19 @@ describe('purgeSlungKeys', () => {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'a',
+      resolved_session_name: null,
     });
     await writeSlungEntry(statePath, slungKey('pr', 2), {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'b',
+      resolved_session_name: null,
     });
     await writeSlungEntry(statePath, slungKey('issue', 3), {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'c',
+      resolved_session_name: null,
     });
     await purgeSlungKeys(statePath, ['pr:2']);
     const state = await readSlungState(statePath);
@@ -196,6 +227,7 @@ describe('purgeSlungKeys', () => {
       slung_at: '2026-05-24T12:00:00.000Z',
       target: 'chief-of-staff',
       bead_id: 'a',
+      resolved_session_name: null,
     });
     await purgeSlungKeys(statePath, ['pr:999', 'issue:999']);
     const state = await readSlungState(statePath);

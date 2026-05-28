@@ -14,6 +14,12 @@ import { meta, nonEmpty } from '../workflows/bead-fields.js';
 import { enrichWorkflowRun, UnsupportedWorkflowError } from '../workflows/enrich.js';
 import { readWorkflowGitDiff } from '../workflows/diff.js';
 import { mergeWorkflowRuntimeState } from '../workflows/runtime-state.js';
+import { LOG_COMPONENT, errorMessage, logWarn } from '../logging.js';
+import {
+  routeUpstreamError,
+  routeValidationError,
+  writeRouteError,
+} from '../route-errors.js';
 
 export interface WorkflowsRouterOptions {
   rigRoot?: string;
@@ -28,7 +34,7 @@ export function workflowsRouter(
   router.get('/:workflowId/diff', async (req, res) => {
     const parsed = parseWorkflowRequest(req.params.workflowId, req.query);
     if (!parsed.ok) {
-      res.status(400).json({ error: parsed.error, kind: 'validation' });
+      writeRouteError(res, routeValidationError(parsed.error));
       return;
     }
     try {
@@ -37,9 +43,7 @@ export function workflowsRouter(
         parsed.workflowId,
         parsed.scope ?? defaultWorkflowScope(gc.cityName),
       );
-      const detail = enrichWorkflowRun(raw, {
-        rigRoot: opts.rigRoot,
-      });
+      const detail = enrichWorkflowRun(raw, enrichOptions(opts));
       const diff = await readWorkflowGitDiff(detail.executionPath);
       res.json(diff);
     } catch (err) {
@@ -50,7 +54,7 @@ export function workflowsRouter(
   router.get('/:workflowId', async (req, res) => {
     const parsed = parseWorkflowRequest(req.params.workflowId, req.query);
     if (!parsed.ok) {
-      res.status(400).json({ error: parsed.error, kind: 'validation' });
+      writeRouteError(res, routeValidationError(parsed.error));
       return;
     }
     try {
@@ -65,11 +69,7 @@ export function workflowsRouter(
         raw,
         parsed.scope ?? defaultWorkflowScope(gc.cityName),
       );
-      const detail = enrichWorkflowRun(raw, {
-        rigRoot: opts.rigRoot,
-        sessions,
-        formulaDetail,
-      });
+      const detail = enrichWorkflowRun(raw, enrichOptions(opts, sessions, formulaDetail));
       // Top-level `partial` is the authoritative "this view is degraded" signal:
       // it unions supervisor-snapshot incompleteness (detail.progress.partial)
       // with dashboard-side enrichment gaps (failed runtime bead reads or a
@@ -101,7 +101,7 @@ async function getWorkflowFormulaDetail(
   try {
     return await gc.getFormulaDetail(formula, scope, target);
   } catch (err) {
-    console.warn(`[workflows] failed to fetch formula detail for ${formula}: ${(err as Error).message}`);
+    logWarn(LOG_COMPONENT.workflows, `failed to fetch formula detail for ${formula}: ${errorMessage(err)}`);
     return null;
   }
 }
@@ -113,7 +113,7 @@ async function getWorkflowSessions(
     const list = await gc.listSessions();
     return { sessions: Array.isArray(list.items) ? list.items : [], partial: false };
   } catch (err) {
-    console.warn(`[workflows] failed to fetch sessions for workflow detail: ${(err as Error).message}`);
+    logWarn(LOG_COMPONENT.workflows, `failed to fetch sessions for workflow detail: ${errorMessage(err)}`);
     return { sessions: [], partial: true };
   }
 }
@@ -149,8 +149,9 @@ async function getWorkflowWithRuntimeState(
     else failed += 1;
   }
   if (failed > 0) {
-    console.warn(
-      `[workflows] ${failed}/${ids.length} runtime bead reads failed for ${workflowId}; serving partial runtime state`,
+    logWarn(
+      LOG_COMPONENT.workflows,
+      `${failed}/${ids.length} runtime bead reads failed for ${workflowId}; serving partial runtime state`,
     );
   }
   return { raw: mergeWorkflowRuntimeState(raw, runtime), partial: failed > 0 };
@@ -209,18 +210,30 @@ function parseWorkflowRequest(
   if (rawScopeRef !== undefined && !SCOPE_REF_RE.test(rawScopeRef)) {
     return { ok: false, error: 'invalid scope ref' };
   }
-  const scope =
-    scopeKind !== undefined && rawScopeRef !== undefined
-      ? {
-          scopeKind,
-          scopeRef: rawScopeRef,
-        }
-      : undefined;
-  return { ok: true, workflowId, scope };
+  if (scopeKind !== undefined && rawScopeRef !== undefined) {
+    return { ok: true, workflowId, scope: { scopeKind, scopeRef: rawScopeRef } };
+  }
+  return { ok: true, workflowId };
 }
 
 function defaultWorkflowScope(cityName: string): { scopeKind: WorkflowScopeKind; scopeRef: string } {
   return { scopeKind: 'city', scopeRef: cityName };
+}
+
+function enrichOptions(
+  opts: WorkflowsRouterOptions,
+  sessions?: readonly GcSession[],
+  formulaDetail?: GcFormulaDetail | null,
+): {
+  rigRoot?: string;
+  sessions?: readonly GcSession[];
+  formulaDetail?: GcFormulaDetail | null;
+} {
+  return {
+    ...(opts.rigRoot !== undefined ? { rigRoot: opts.rigRoot } : {}),
+    ...(sessions !== undefined ? { sessions } : {}),
+    ...(formulaDetail !== undefined ? { formulaDetail } : {}),
+  };
 }
 
 function writeWorkflowError(
@@ -232,22 +245,11 @@ function writeWorkflowError(
     res.status(422).json({ error: err.message, kind: 'unsupported' });
     return;
   }
-  if (GcClient.isTimeoutError(err)) {
-    res.status(504).json({
-      error: 'gc supervisor did not respond in time',
-      kind: 'upstream-timeout',
-    });
-    return;
-  }
-  const message = err instanceof Error ? err.message : '';
-  if (/\b404\b/.test(message)) {
-    res.status(404).json({ error: 'workflow not found', kind: 'not_found' });
-    return;
-  }
-  console.warn(`[workflows] ${fallbackMessage}: ${message}`);
-  res.status(502).json({
-    error: fallbackMessage,
-    kind: 'upstream',
-    details: { name: err instanceof Error ? err.name : 'Error' },
-  });
+  writeRouteError(res, routeUpstreamError(err, {
+    component: LOG_COMPONENT.workflows,
+    operation: fallbackMessage,
+    responseError: fallbackMessage,
+    isTimeout: GcClient.isTimeoutError,
+    notFound: { error: 'workflow not found', kind: 'not_found' },
+  }));
 }

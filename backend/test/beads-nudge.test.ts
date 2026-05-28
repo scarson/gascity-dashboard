@@ -80,7 +80,10 @@ async function buildApp(opts: BuildOpts = {}): Promise<AppHandle> {
     durationMs: 13,
   });
   const execBeadAction: BeadActionStub = async (beadId, action, reason, cityPath) => {
-    calls.push({ beadId, action, reason, cityPath });
+    const call: StubCall = { beadId, action };
+    if (reason !== undefined) call.reason = reason;
+    if (cityPath !== undefined) call.cityPath = cityPath;
+    calls.push(call);
     return (opts.execBeadAction ?? defaultStub)(beadId, action, reason, cityPath);
   };
   const defaultUpdate: UpdateBeadStub = async () => {};
@@ -158,7 +161,6 @@ describe('POST /api/beads/:id/{claim,close,nudge}', { concurrency: false }, () =
     assert.deepEqual(h.calls[0], {
       beadId: 'td-wisp-abc123',
       action: 'nudge',
-      reason: undefined,
       cityPath: TEST_CITY_PATH,
     });
 

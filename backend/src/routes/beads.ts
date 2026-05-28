@@ -8,7 +8,14 @@ import {
 } from '../exec.js';
 import type { ExecResult } from '../exec.js';
 import { recordAudit } from '../audit.js';
-import { toWireExecError, toWireInternal500 } from '../lib/sanitise-error.js';
+import { toWireExecError } from '../lib/sanitise-error.js';
+import { LOG_COMPONENT, errorMessage, logWarn } from '../logging.js';
+import {
+  routeInternalError,
+  routeUpstreamError,
+  routeValidationError,
+  writeRouteError,
+} from '../route-errors.js';
 
 import { BEAD_ID_RE } from '../lib/beadId.js';
 
@@ -86,23 +93,12 @@ export function beadsRouter(
         fetch_limit: BEADS_FETCH_LIMIT,
       });
     } catch (err) {
-      if (GcClient.isTimeoutError(err)) {
-        res.status(504).json({
-          error: 'gc supervisor did not respond in time',
-          kind: 'upstream-timeout',
-        });
-        return;
-      }
-      // gascity-dashboard-ayr: mirror the sr6 redaction. err.message from
-      // fetch-level failures embeds OS detail (ECONNREFUSED, host:port);
-      // details.name (Error class) is the only safe channel for the browser.
-      console.warn(`[beads] /api/beads failed: ${(err as Error).message}`);
-      const wire = toWireInternal500(err, {
-        status: 502,
-        error: 'failed to list beads',
-        kind: 'upstream',
-      });
-      res.status(wire.status).json(wire.body);
+      writeRouteError(res, routeUpstreamError(err, {
+        component: LOG_COMPONENT.beads,
+        operation: '/api/beads failed',
+        responseError: 'failed to list beads',
+        isTimeout: GcClient.isTimeoutError,
+      }));
     }
   });
 
@@ -111,7 +107,7 @@ export function beadsRouter(
   router.get('/:id', async (req, res) => {
     const id = req.params.id;
     if (!BEAD_ID_RE.test(id)) {
-      res.status(400).json({ error: 'invalid bead id', kind: 'validation' });
+      writeRouteError(res, routeValidationError('invalid bead id'));
       return;
     }
     try {
@@ -119,7 +115,12 @@ export function beadsRouter(
       res.json(bead);
     } catch (err) {
       if (GcClient.isTimeoutError(err)) {
-        res.status(504).json({ error: 'gc supervisor did not respond in time', kind: 'upstream-timeout' });
+        writeRouteError(res, routeUpstreamError(err, {
+          component: LOG_COMPONENT.beads,
+          operation: '/api/beads/:id failed',
+          responseError: 'failed to fetch bead',
+          isTimeout: GcClient.isTimeoutError,
+        }));
         return;
       }
       const msg = (err as Error).message;
@@ -136,7 +137,8 @@ export function beadsRouter(
             res.json(hit);
             return;
           }
-        } catch {
+        } catch (fallbackErr) {
+          logWarn(LOG_COMPONENT.beads, `/api/beads/:id list fallback failed: ${errorMessage(fallbackErr)}`);
           // fall through to the 404 below
         }
         res.status(404).json({ error: 'bead not found', kind: 'not_found' });
@@ -145,14 +147,13 @@ export function beadsRouter(
       // gascity-dashboard-ayr: same redaction rationale as the list-beads
       // handler above. err.name only on the wire; msg already holds the
       // full message from the 404-fallback extraction at the top of the
-      // catch block — log it for journalctl, don't ship it to the browser.
-      console.warn(`[beads] /api/beads/:id failed: ${msg}`);
-      const wire = toWireInternal500(err, {
-        status: 502,
-        error: 'failed to fetch bead',
-        kind: 'upstream',
-      });
-      res.status(wire.status).json(wire.body);
+      // catch block — log it, don't ship it to the browser.
+      writeRouteError(res, routeUpstreamError(err, {
+        component: LOG_COMPONENT.beads,
+        operation: '/api/beads/:id failed',
+        responseError: 'failed to fetch bead',
+        isTimeout: GcClient.isTimeoutError,
+      }));
     }
   });
 
@@ -209,13 +210,13 @@ async function runBeadClaim(
       },
       duration_ms: Date.now() - startedAt,
     });
-    console.warn(`[beads] /api/beads/:id/claim failed: ${(err as Error).message}`);
-    const wire = toWireInternal500(err, {
-      status: isTimeout ? 504 : 502,
-      error: isTimeout ? 'gc supervisor timed out' : 'failed to claim bead',
-      kind: isTimeout ? 'upstream-timeout' : 'upstream',
-    });
-    res.status(wire.status).json(wire.body);
+    writeRouteError(res, routeUpstreamError(err, {
+      component: LOG_COMPONENT.beads,
+      operation: '/api/beads/:id/claim failed',
+      responseError: 'failed to claim bead',
+      timeoutError: 'gc supervisor timed out',
+      isTimeout: GcClient.isTimeoutError,
+    }));
   }
 }
 
@@ -228,7 +229,7 @@ async function runBeadAction(
   cityPath: string,
 ): Promise<void> {
   if (!BEAD_ID_RE.test(beadId)) {
-    res.status(400).json({ error: 'invalid bead id', kind: 'validation' });
+    writeRouteError(res, routeValidationError('invalid bead id'));
     return;
   }
   try {
@@ -244,11 +245,12 @@ async function runBeadAction(
       // gascity-dashboard-i0b: do NOT echo raw stderr on the wire. gc's
       // stderr is implementation-defined and can embed host paths / socket
       // paths / ENOENT. Mirror the i53 (agents.ts) + 473 catch-arm pattern:
-      // stderr stays server-side in console.warn for journalctl; the wire
+      // stderr stays server-side in the operational log; the wire
       // carries kind + a fixed message plus details:{name} for shape parity
       // with the catch-all 500.
-      console.warn(
-        `[beads] runBeadAction ${action} non-zero exit ${result.exitCode}: ${result.stderr}`,
+      logWarn(
+        LOG_COMPONENT.beads,
+        `runBeadAction ${action} non-zero exit ${result.exitCode}: ${result.stderr}`,
       );
       res.status(502).json({
         error: `gc command failed with exit ${result.exitCode}`,
@@ -268,21 +270,16 @@ async function runBeadAction(
       // through. journalctl retains the full message via the source-side
       // ExecError instantiation.
       if (err.kind === 'spawn') {
-        console.warn(`[beads] runBeadAction spawn failed: ${err.message}`);
+        logWarn(LOG_COMPONENT.beads, `runBeadAction spawn failed: ${err.message}`);
       }
       const wire = toWireExecError(err, status);
       res.status(wire.status).json(wire.body);
       return;
     }
-    // gascity-dashboard-473: mirror the ayr sr6 redaction. Raw err.message
-    // from unexpected throws can embed OS detail; details.name (Error
-    // class) is the only safe channel for the browser.
-    console.warn(`[beads] runBeadAction failed: ${(err as Error).message}`);
-    const wire = toWireInternal500(err, {
-      status: 500,
-      error: 'internal error',
-      kind: 'internal',
-    });
-    res.status(wire.status).json(wire.body);
+    writeRouteError(res, routeInternalError(err, {
+      component: LOG_COMPONENT.beads,
+      operation: 'runBeadAction failed',
+      responseError: 'internal error',
+    }));
   }
 }

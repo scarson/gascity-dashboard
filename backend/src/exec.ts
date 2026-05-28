@@ -1,10 +1,20 @@
-import { spawn } from 'node:child_process';
-
 // Param schemas — every privileged exec validates its args against these.
 // SESSION_ID_RE lives in lib/sessionId.ts now that peek is HTTP, not exec.
 // BEAD_ID_RE is shared with routes/beads.ts via lib/beadId.ts so any prefix
 // the read side accepts the write side can act on (gascity-dashboard-bwp).
 import { BEAD_ID_RE } from './lib/beadId.js';
+import {
+  AGENT_ALIAS_RE,
+  ExecError,
+  MAX_BYTES,
+  MAX_BYTES_LARGE,
+  MAX_WORKFLOW_DIFF_BYTES,
+  runExec,
+  type ExecResult,
+} from './exec-core.js';
+
+export { AGENT_ALIAS_RE, ExecError };
+export type { ExecResult };
 
 // Whitelisted-only shell-exec wrapper. Every privileged invocation in the
 // app routes through this — there is intentionally no general-purpose
@@ -17,175 +27,6 @@ import { BEAD_ID_RE } from './lib/beadId.js';
 //   - Timeout (10-30s) + output cap (100KB).
 //   - Concurrency cap (semaphore).
 //   - Bead-id / agent-alias param schemas enforced.
-
-const MAX_BYTES = 100 * 1024;
-// Larger ceiling for calls whose payload size is server-controlled (e.g.
-// `gh ... --json <enumerated fields> --limit <N>`). Still capped — a
-// 2MB hard ceiling prevents a runaway from filling memory while leaving
-// generous headroom for repos with hundreds of long-labeled items.
-const MAX_BYTES_LARGE = 2 * 1024 * 1024;
-const MAX_WORKFLOW_DIFF_BYTES = 512 * 1024;
-const MAX_CONCURRENT = 4;
-// Agent alias / `gc sling` target validator.
-//
-// The char class deliberately permits `/` and `.` because gc treats the
-// target as a *qualified name*, not a flat alias. Per gascity upstream
-// (internal/config/config.go::QualifiedName / ParseQualifiedName), the
-// canonical forms are:
-//   - "mayor"                            (flat alias)
-//   - "gastown.mayor"                    (binding-qualified alias)
-//   - "hello-world/polecat"              (rig-qualified alias)
-//   - "hello-world/gastown.polecat"      (rig + binding qualified)
-//
-// gc's ParseQualifiedName splits on the LAST `/` and looks the result up
-// in the city config — the target is never resolved as a filesystem path.
-// Pathological inputs like "a/../b" pass this regex but fail at gc's
-// config lookup with `target_resolve_failed`; there is no path traversal
-// surface because nothing on gc's side `open()`s the target string.
-//
-// Combined with the `shell: false` discipline in runExec (so values
-// are positional argv, never interpolated into a shell string) and the
-// 64-char length cap, the practical attack surface for this regex is
-// limited to "submit a syntactically valid qualified name that doesn't
-// resolve" — which is indistinguishable from a typo.
-//
-// Audited under gascity-dashboard-uyo (Phase 4 security-reviewer
-// follow-up to wave-8nj). Do NOT tighten without first checking that
-// no env (MAINTAINER_SLING_TARGET / MAINTAINER_TRIAGE_TARGET) or
-// request payload uses the rig-qualified form.
-export const AGENT_ALIAS_RE = /^[a-z][a-z0-9_./-]{1,63}$/i;
-
-function cleanEnv(): NodeJS.ProcessEnv {
-  const home = process.env.HOME ?? '/tmp';
-  // PATH explicitly includes ~/.local/bin because that's where `gc` lives
-  // on the operator's host. Override via ADMIN_PATH env if a future
-  // install moves it.
-  const path =
-    process.env.ADMIN_PATH ?? `${home}/.local/bin:/usr/local/bin:/usr/bin:/bin`;
-  const env: NodeJS.ProcessEnv = {
-    PATH: path,
-    HOME: home,
-    LANG: 'C.UTF-8',
-    // Force color-off on every spawned subprocess. Belt-and-suspenders for
-    // line-anchored stdout parsing (e.g. BEAD_ID_RE on `gc sling` output):
-    // a future gc release that forces ANSI even when stdout isn't a TTY
-    // would otherwise prefix the "Slung <id>" line with an SGR escape and
-    // break the `^Slung` match silently. NO_COLOR is the cross-tool
-    // standard (https://no-color.org); gc/gh/git all honour it.
-    NO_COLOR: '1',
-  };
-  // gh CLI's active auth method on this host is GITHUB_TOKEN (per `gh
-  // auth status`). Pass it through so execGhIssueList / execGhPrList
-  // can talk to api.github.com under the clean-env discipline. Still an
-  // allowlist — every other env var is dropped.
-  if (process.env.GITHUB_TOKEN !== undefined) {
-    env.GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-  }
-  return env;
-}
-
-let runningCount = 0;
-const waiting: Array<() => void> = [];
-
-function acquireSlot(): Promise<void> {
-  return new Promise((resolve) => {
-    const tryAcquire = () => {
-      if (runningCount < MAX_CONCURRENT) {
-        runningCount += 1;
-        resolve();
-      } else {
-        waiting.push(tryAcquire);
-      }
-    };
-    tryAcquire();
-  });
-}
-
-function releaseSlot(): void {
-  runningCount -= 1;
-  const next = waiting.shift();
-  if (next) next();
-}
-
-export interface ExecResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-  truncated: boolean;
-  durationMs: number;
-}
-
-export class ExecError extends Error {
-  constructor(message: string, public readonly kind: 'validation' | 'timeout' | 'spawn') {
-    super(message);
-    this.name = 'ExecError';
-  }
-}
-
-function runExec(
-  cmd: string,
-  args: string[],
-  timeoutMs: number,
-  maxBytes: number = MAX_BYTES,
-): Promise<ExecResult> {
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    let stdout = '';
-    let stderr = '';
-    let truncated = false;
-    let timedOut = false;
-
-    const child = spawn(cmd, args, {
-      shell: false,
-      timeout: timeoutMs,
-      env: cleanEnv(),
-      // Cut off stdin so the child can't block on prompts.
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      if (stdout.length + chunk.length > maxBytes) {
-        const remaining = Math.max(0, maxBytes - stdout.length);
-        stdout += chunk.toString('utf-8', 0, remaining);
-        truncated = true;
-        child.kill('SIGTERM');
-      } else {
-        stdout += chunk.toString('utf-8');
-      }
-    });
-
-    child.stderr?.on('data', (chunk: Buffer) => {
-      if (stderr.length + chunk.length <= MAX_BYTES) {
-        stderr += chunk.toString('utf-8');
-      }
-    });
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGKILL');
-    }, timeoutMs + 500);
-
-    child.on('error', (err: Error) => {
-      clearTimeout(timer);
-      reject(new ExecError(`spawn failed: ${err.message}`, 'spawn'));
-    });
-
-    child.on('close', (code: number | null) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        reject(new ExecError(`exec timed out after ${timeoutMs}ms`, 'timeout'));
-        return;
-      }
-      resolve({
-        exitCode: code ?? -1,
-        stdout,
-        stderr,
-        truncated,
-        durationMs: Date.now() - start,
-      });
-    });
-  });
-}
 
 // Strip ANSI / OSC / control chars from peek output. Per
 // security_researcher's regex spec. Server-side strip happens BEFORE the
@@ -254,12 +95,7 @@ export async function execBeadAction(
     args.push('nudge', beadId);
     if (cityArg) args.push(cityArg);
   }
-  await acquireSlot();
-  try {
-    return await runExec('gc', args, 15_000);
-  } finally {
-    releaseSlot();
-  }
+  return runExec('gc', args, 15_000);
 }
 
 /**
@@ -297,12 +133,7 @@ export async function execAgentPrime(
     args.push(`--city=${cityPath}`);
   }
   args.push(alias);
-  await acquireSlot();
-  try {
-    return await runExec('gc', args, 10_000);
-  } finally {
-    releaseSlot();
-  }
+  return runExec('gc', args, 10_000);
 }
 
 // Mail send moved to GcClient.sendMail (HTTP POST /mail with from:'human')
@@ -359,12 +190,7 @@ export async function execGitLog(view: string): Promise<ExecResult> {
   if (!args) {
     throw new ExecError('unknown git view', 'validation');
   }
-  await acquireSlot();
-  try {
-    return await runExec('git', ['-C', GIT_REPO_PATH, ...args], 10_000);
-  } finally {
-    releaseSlot();
-  }
+  return runExec('git', ['-C', GIT_REPO_PATH, ...args], 10_000);
 }
 
 type WorkflowGitView = 'root' | 'status' | 'diff' | 'diff-cached';
@@ -389,17 +215,12 @@ export async function execWorkflowGit(
     throw new ExecError('invalid workflow cwd', 'validation');
   }
   const args = WORKFLOW_GIT_VIEWS[view];
-  await acquireSlot();
-  try {
-    return await runExec(
-      'git',
-      ['-C', cwd, ...args],
-      5_000,
-      view === 'diff' || view === 'diff-cached' ? MAX_WORKFLOW_DIFF_BYTES : MAX_BYTES,
-    );
-  } finally {
-    releaseSlot();
-  }
+  return runExec(
+    'git',
+    ['-C', cwd, ...args],
+    5_000,
+    view === 'diff' || view === 'diff-cached' ? MAX_WORKFLOW_DIFF_BYTES : MAX_BYTES,
+  );
 }
 
 function isValidWorkflowCwd(cwd: string): boolean {
@@ -447,28 +268,23 @@ export async function execGhIssueList(
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
     throw new ExecError('invalid limit (1..1000)', 'validation');
   }
-  await acquireSlot();
-  try {
-    return await runExec(
-      'gh',
-      [
-        'issue',
-        'list',
-        '--repo',
-        repo,
-        '--state',
-        'open',
-        '--json',
-        GH_ISSUE_FIELDS,
-        '--limit',
-        String(limit),
-      ],
-      30_000,
-      MAX_BYTES_LARGE,
-    );
-  } finally {
-    releaseSlot();
-  }
+  return runExec(
+    'gh',
+    [
+      'issue',
+      'list',
+      '--repo',
+      repo,
+      '--state',
+      'open',
+      '--json',
+      GH_ISSUE_FIELDS,
+      '--limit',
+      String(limit),
+    ],
+    30_000,
+    MAX_BYTES_LARGE,
+  );
 }
 
 /**
@@ -488,28 +304,23 @@ export async function execGhIssueListAll(
   if (!Number.isInteger(limit) || limit < 1 || limit > 10000) {
     throw new ExecError('invalid limit (1..10000)', 'validation');
   }
-  await acquireSlot();
-  try {
-    return await runExec(
-      'gh',
-      [
-        'issue',
-        'list',
-        '--repo',
-        repo,
-        '--state',
-        'all',
-        '--json',
-        'number,author,state',
-        '--limit',
-        String(limit),
-      ],
-      60_000,
-      MAX_BYTES_LARGE,
-    );
-  } finally {
-    releaseSlot();
-  }
+  return runExec(
+    'gh',
+    [
+      'issue',
+      'list',
+      '--repo',
+      repo,
+      '--state',
+      'all',
+      '--json',
+      'number,author,state',
+      '--limit',
+      String(limit),
+    ],
+    60_000,
+    MAX_BYTES_LARGE,
+  );
 }
 
 /**
@@ -527,28 +338,23 @@ export async function execGhPrListAll(
   if (!Number.isInteger(limit) || limit < 1 || limit > 10000) {
     throw new ExecError('invalid limit (1..10000)', 'validation');
   }
-  await acquireSlot();
-  try {
-    return await runExec(
-      'gh',
-      [
-        'pr',
-        'list',
-        '--repo',
-        repo,
-        '--state',
-        'all',
-        '--json',
-        'number,author,state',
-        '--limit',
-        String(limit),
-      ],
-      60_000,
-      MAX_BYTES_LARGE,
-    );
-  } finally {
-    releaseSlot();
-  }
+  return runExec(
+    'gh',
+    [
+      'pr',
+      'list',
+      '--repo',
+      repo,
+      '--state',
+      'all',
+      '--json',
+      'number,author,state',
+      '--limit',
+      String(limit),
+    ],
+    60_000,
+    MAX_BYTES_LARGE,
+  );
 }
 
 /**
@@ -564,28 +370,23 @@ export async function execGhPrList(
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
     throw new ExecError('invalid limit (1..1000)', 'validation');
   }
-  await acquireSlot();
-  try {
-    return await runExec(
-      'gh',
-      [
-        'pr',
-        'list',
-        '--repo',
-        repo,
-        '--state',
-        'open',
-        '--json',
-        GH_PR_FIELDS,
-        '--limit',
-        String(limit),
-      ],
-      30_000,
-      MAX_BYTES_LARGE,
-    );
-  } finally {
-    releaseSlot();
-  }
+  return runExec(
+    'gh',
+    [
+      'pr',
+      'list',
+      '--repo',
+      repo,
+      '--state',
+      'open',
+      '--json',
+      GH_PR_FIELDS,
+      '--limit',
+      String(limit),
+    ],
+    30_000,
+    MAX_BYTES_LARGE,
+  );
 }
 
 export { sanitiseTerminalOutput };

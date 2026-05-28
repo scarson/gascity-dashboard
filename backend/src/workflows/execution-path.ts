@@ -1,11 +1,14 @@
-import type { GcWorkflowBead } from 'gas-city-dashboard-shared';
+import type {
+  GcWorkflowBead,
+  WorkflowExecutionPath,
+} from 'gas-city-dashboard-shared';
 import { meta, nonEmpty } from './bead-fields.js';
 
 export function resolveWorkflowExecutionPath(
   root: GcWorkflowBead | undefined,
   beads: GcWorkflowBead[],
   rigRoot?: string,
-): string | null {
+): WorkflowExecutionPath {
   const candidates = [
     ...executionWorkDirs(root),
     ...beads.flatMap((bead) => executionWorkDirs(bead)),
@@ -13,7 +16,10 @@ export function resolveWorkflowExecutionPath(
     ...beads.flatMap((bead) => rigRoots(bead)),
     nonEmpty(rigRoot),
   ];
-  return candidates.find((candidate) => candidate !== undefined) ?? null;
+  const path = candidates.find((candidate) => candidate !== undefined);
+  return path === undefined
+    ? { kind: 'unavailable', reason: 'missing_cwd_and_rig_root' }
+    : { kind: 'known', path };
 }
 
 function executionWorkDirs(bead: GcWorkflowBead | undefined): Array<string | undefined> {

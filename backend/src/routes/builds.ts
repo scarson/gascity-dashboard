@@ -2,6 +2,7 @@ import { Router } from 'express';
 import fs from 'node:fs/promises';
 import type { DeployRecord, DeployStatus } from 'gas-city-dashboard-shared';
 import { recordAudit } from '../audit.js';
+import { LOG_COMPONENT, errorMessage, logWarn } from '../logging.js';
 
 const DEFAULT_LOG_PATH = process.env.HOME ? `${process.env.HOME}/.dev-deploy-log` : '.dev-deploy-log';
 const DEFAULT_MARKER_PATH = process.env.HOME ? `${process.env.HOME}/.dev-deploy-FAILED` : '.dev-deploy-FAILED';
@@ -52,15 +53,19 @@ export function buildsRouter(cfg: BuildsConfig = {}): Router {
           detail: rest,
         });
       }
-    } catch {
-      /* file may not exist on a fresh checkout — return empty */
+    } catch (err) {
+      if (!isMissingFile(err)) {
+        logWarn(LOG_COMPONENT.builds, `failed to read deploy log: ${errorMessage(err)}`);
+      }
     }
     let failedMarker = false;
     try {
       await fs.access(markerPath);
       failedMarker = true;
-    } catch {
-      /* marker absent — clean state */
+    } catch (err) {
+      if (!isMissingFile(err)) {
+        logWarn(LOG_COMPONENT.builds, `failed to read deploy failure marker: ${errorMessage(err)}`);
+      }
     }
     void recordAudit({
       type: 'dashboard.fetch',
@@ -72,6 +77,14 @@ export function buildsRouter(cfg: BuildsConfig = {}): Router {
   });
 
   return router;
+}
+
+function isMissingFile(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
 }
 
 function classify(rest: string): DeployStatus {

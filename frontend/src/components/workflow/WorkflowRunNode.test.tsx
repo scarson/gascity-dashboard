@@ -55,6 +55,27 @@ function nodeFor(constructKind: WorkflowConstructKind): WorkflowDisplayNode {
     kind: constructKind,
     constructKind,
     status: 'pending',
-    executionInstances: [],
+    currentBeadId: `sample-${constructKind}`,
+    scope: { kind: 'workflow' },
+    visibleInGraph: true,
+    historicalOnly: false,
+    iterationSummary: { kind: 'single' },
+    attemptSummary: { kind: 'none' },
+    visibleExecutionInstanceId: `sample-${constructKind}`,
+    executionInstances: [
+      {
+        id: `sample-${constructKind}`,
+        semanticNodeId: `sample-${constructKind}`,
+        beadId: `sample-${constructKind}`,
+        iteration: { kind: 'base' },
+        attempt: { kind: 'untracked' },
+        label: 'base',
+        status: 'pending',
+        session: { kind: 'none', reason: 'not_started' },
+        currentIteration: true,
+        historical: false,
+      },
+    ],
+    controlBadges: [],
   };
 }

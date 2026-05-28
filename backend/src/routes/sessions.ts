@@ -4,6 +4,12 @@ import { GcClient } from '../gc-client.js';
 import { sanitiseTerminalOutput } from '../exec.js';
 import { recordAudit } from '../audit.js';
 import { SESSION_ID_RE } from '../lib/sessionId.js';
+import { LOG_COMPONENT } from '../logging.js';
+import {
+  routeUpstreamError,
+  routeValidationError,
+  writeRouteError,
+} from '../route-errors.js';
 
 const PER_TURN_CAP = 16 * 1024;
 const TOTAL_CAP = 256 * 1024;
@@ -93,22 +99,12 @@ export function sessionsRouter(
       const { items } = await raceWithTimeout(gc.listSessions(), sessionsTimeoutMs);
       res.json({ items });
     } catch (err) {
-      if (GcClient.isTimeoutError(err)) {
-        res.status(504).json({
-          error: 'gc supervisor did not respond in time',
-          kind: 'upstream-timeout',
-        });
-        return;
-      }
-      // gascity-dashboard-sr6: do NOT forward err.message to the browser.
-      // Fetch-level failures (ECONNREFUSED, DNS errors) embed OS detail
-      // (interface names, ports, file paths) that leaks topology even on a
-      // 127.0.0.1-only deployment. Surface the error's class name only;
-      // server-side log retains full fidelity for ops debugging.
-      console.warn(`[sessions] /api/sessions failed: ${(err as Error).message}`);
-      res
-        .status(502)
-        .json({ error: 'failed to list sessions', kind: 'upstream', details: { name: (err as Error).name ?? 'Error' } });
+      writeRouteError(res, routeUpstreamError(err, {
+        component: LOG_COMPONENT.sessions,
+        operation: '/api/sessions failed',
+        responseError: 'failed to list sessions',
+        isTimeout: GcClient.isTimeoutError,
+      }));
     }
   });
 
@@ -122,13 +118,13 @@ export function sessionsRouter(
   router.post('/:id/peek', async (req, res) => {
     const id = req.params.id;
     if (!SESSION_ID_RE.test(id)) {
-      res.status(400).json({ error: 'invalid session id', kind: 'validation' });
+      writeRouteError(res, routeValidationError('invalid session id'));
       return;
     }
     const start = Date.now();
     try {
       const raw = await gc.fetchTranscript(id);
-      const result = buildTranscriptResult(id, raw.turns ?? [], raw);
+      const result = buildTranscriptResult(id, raw.turns, raw);
       void recordAudit({
         type: 'dashboard.fetch',
         endpoint: 'POST /api/sessions/:id/peek',
@@ -137,21 +133,12 @@ export function sessionsRouter(
       });
       res.json(result);
     } catch (err) {
-      if (GcClient.isTimeoutError(err)) {
-        res.status(504).json({
-          error: 'gc supervisor did not respond in time',
-          kind: 'upstream-timeout',
-        });
-        return;
-      }
-      // Same rationale as the list-sessions handler above: peek goes
-      // through the same fetch path, so the same topology-leak class
-      // (ECONNREFUSED / DNS) applies. Class name only to the browser;
-      // server-side log retains full fidelity for ops debugging.
-      console.warn(`[sessions] /api/sessions/:id/peek failed: ${(err as Error).message}`);
-      res
-        .status(502)
-        .json({ error: 'failed to fetch transcript', kind: 'upstream', details: { name: (err as Error).name ?? 'Error' } });
+      writeRouteError(res, routeUpstreamError(err, {
+        component: LOG_COMPONENT.sessions,
+        operation: '/api/sessions/:id/peek failed',
+        responseError: 'failed to fetch transcript',
+        isTimeout: GcClient.isTimeoutError,
+      }));
     }
   });
 
@@ -185,14 +172,15 @@ function buildTranscriptResult(
     turns.push({ role: typeof turn.role === 'string' ? turn.role : 'unknown', text: cleaned });
     totalChars += cleaned.length;
   }
-  return {
+  const result: TranscriptResult = {
     session_id: sessionId,
-    template: raw.template,
-    provider: raw.provider,
-    format: raw.format,
     turns,
     total_chars: totalChars,
     captured_at: new Date().toISOString(),
     truncated,
   };
+  if (raw.template !== undefined) result.template = raw.template;
+  if (raw.provider !== undefined) result.provider = raw.provider;
+  if (raw.format !== undefined) result.format = raw.format;
+  return result;
 }

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 // 'self' covers it and deployment only needs one port reachable from
 // the browser.
 
-export type GcEventConnState = 'connecting' | 'open' | 'closed';
+export type GcEventConnState = 'connecting' | 'open' | 'degraded' | 'closed';
 
 /**
  * Subscribe to gc events. When an event whose type starts with any of
@@ -66,9 +66,14 @@ export function useGcEventRefresh(
     };
 
     const connect = () => {
+      const EventSourceCtor = globalThis.EventSource;
+      if (typeof EventSourceCtor !== 'function') {
+        setState('closed');
+        return;
+      }
       // Same-origin path; the browser will send Last-Event-ID automatically
       // on reconnect, and the backend proxy forwards it to upstream.
-      es = new EventSource('/api/events/stream');
+      es = new EventSourceCtor('/api/events/stream');
       setState('connecting');
       es.onopen = () => {
         if (cancelled) return;
@@ -87,10 +92,15 @@ export function useGcEventRefresh(
         try {
           parsed = JSON.parse(msg.data) as { type?: string };
         } catch {
+          setState('degraded');
           return;
         }
         const t = parsed?.type;
-        if (typeof t !== 'string') return;
+        if (typeof t !== 'string') {
+          setState('degraded');
+          return;
+        }
+        setState('open');
         for (const prefix of prefixes) {
           if (t.startsWith(prefix)) {
             scheduleMatch();

@@ -69,6 +69,16 @@ function buildApp(fakeUrl: string): { app: express.Express } {
   return { app };
 }
 
+function validSession(id: string) {
+  return {
+    id,
+    template: 'codex',
+    state: 'running',
+    created_at: '2026-01-01T00:00:00.000Z',
+    attached: false,
+  };
+}
+
 async function startApp(app: express.Express): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((resolve) => {
     const srv = app.listen(0, '127.0.0.1', () => {
@@ -503,7 +513,7 @@ describe('routes: upstream timeout -> HTTP 504', () => {
     }
   });
 
-  test('GET /api/system/system returns 200 with supervisor=null when supervisor returns non-OK', async () => {
+  test('GET /api/system/system returns 200 with explicit unavailable supervisor state when supervisor returns non-OK', async () => {
     fake.setHandler((_req, res) => {
       res.statusCode = 500;
       res.end('broken');
@@ -513,8 +523,13 @@ describe('routes: upstream timeout -> HTTP 504', () => {
     try {
       const res = await fetch(`${url}/api/system/system`);
       assert.equal(res.status, 200);
-      const body = (await res.json()) as { supervisor: unknown };
-      assert.equal(body.supervisor, null);
+      const body = (await res.json()) as {
+        supervisor: { status: string; error: string };
+      };
+      assert.deepEqual(body.supervisor, {
+        status: 'unavailable',
+        error: 'supervisor health unavailable',
+      });
     } finally {
       await close();
     }
@@ -524,7 +539,7 @@ describe('routes: upstream timeout -> HTTP 504', () => {
     fake.setHandler((_req, res) => {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: [{ id: 'td-foo' }] }));
+      res.end(JSON.stringify({ items: [validSession('td-foo')] }));
     });
     const { app } = buildApp(fake.baseUrl);
     const { url, close } = await startApp(app);
@@ -767,7 +782,7 @@ describe('sessionsRouter timeout bound', () => {
     fake.setHandler((_req, res) => {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: [{ id: 'gc-abc' }] }));
+      res.end(JSON.stringify({ items: [validSession('gc-abc')] }));
     });
     const gc = new GcClient({
       baseUrl: fake.baseUrl,

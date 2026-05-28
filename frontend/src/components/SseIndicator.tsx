@@ -16,7 +16,14 @@ export type SseState = GcEventConnState;
 
 export function SseIndicator({ state }: { state: GcEventConnState }) {
   const tone: StatusTone =
-    state === 'open' ? 'ok' : state === 'connecting' ? 'warn' : 'stuck';
-  const label = state === 'open' ? 'live' : state === 'connecting' ? 'connecting' : 'offline';
+    state === 'open' ? 'ok' : state === 'connecting' || state === 'degraded' ? 'warn' : 'stuck';
+  const label =
+    state === 'open'
+      ? 'live'
+      : state === 'connecting'
+        ? 'connecting'
+        : state === 'degraded'
+          ? 'degraded'
+          : 'offline';
   return <StatusBadge tone={tone} label={label} title={`SSE stream: ${state}`} />;
 }

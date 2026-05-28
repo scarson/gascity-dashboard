@@ -2,49 +2,50 @@ import { useEffect, useState } from 'react';
 import type { TranscriptResult, TranscriptTurn } from 'gas-city-dashboard-shared';
 import { api } from '../api/client';
 
-interface SessionStreamState {
-  result: TranscriptResult | null;
-  loading: boolean;
-  error: string | null;
-  streamState: SessionStreamConnState;
-}
+export type SessionStreamProgress =
+  | { status: 'idle' }
+  | { status: 'connecting' }
+  | { status: 'open' }
+  | { status: 'closed' }
+  | { status: 'degraded'; error: string };
 
-export type SessionStreamConnState = 'idle' | 'connecting' | 'open' | 'closed';
+export type SessionStreamConnState = SessionStreamProgress['status'];
+
+export type SessionStreamState =
+  | { status: 'idle'; stream: { status: 'idle' } }
+  | { status: 'loading'; stream: { status: 'idle' } | { status: 'connecting' } }
+  | { status: 'failed'; error: string; stream: { status: 'idle' } }
+  | { status: 'ready'; result: TranscriptResult; stream: SessionStreamProgress };
 
 export function useSessionStream(
   sessionId: string | null,
   stream: boolean,
 ): SessionStreamState {
   const [state, setState] = useState<SessionStreamState>({
-    result: null,
-    loading: false,
-    error: null,
-    streamState: 'idle',
+    status: 'idle',
+    stream: { status: 'idle' },
   });
 
   useEffect(() => {
     if (!sessionId) {
-      setState({ result: null, loading: false, error: null, streamState: 'idle' });
+      setState({ status: 'idle', stream: { status: 'idle' } });
       return;
     }
     let cancelled = false;
     let source: EventSource | null = null;
     const canStream = stream && typeof EventSource !== 'undefined';
     setState({
-      result: null,
-      loading: true,
-      error: null,
-      streamState: canStream ? 'connecting' : 'idle',
+      status: 'loading',
+      stream: { status: canStream ? 'connecting' : 'idle' },
     });
 
     api.peekSession(sessionId).then(
       (result) => {
         if (cancelled) return;
         setState({
+          status: 'ready',
           result,
-          loading: false,
-          error: null,
-          streamState: canStream ? 'connecting' : 'idle',
+          stream: { status: canStream ? 'connecting' : 'idle' },
         });
         if (canStream) {
           source = new EventSource(api.sessionStreamUrl(sessionId), {
@@ -52,32 +53,40 @@ export function useSessionStream(
           });
           source.onopen = () => {
             if (cancelled) return;
-            setState((current) => ({ ...current, streamState: 'open' }));
+            setState((current) =>
+              current.status === 'ready'
+                ? { ...current, stream: { status: 'open' } }
+                : current,
+            );
           };
           const onTurn = (event: MessageEvent<string>) => {
             if (cancelled) return;
             const payload = parseStreamPayload(event.data);
-            if (!payload) return;
             setState((current) => {
-              const base = current.result ?? result;
+              const base = current.status === 'ready' ? current.result : result;
+              if (payload.kind === 'invalid') {
+                return {
+                  status: 'ready',
+                  result: base,
+                  stream: { status: 'degraded', error: payload.error },
+                };
+              }
               if (payload.kind === 'snapshot') {
                 return {
+                  status: 'ready',
                   result: payload.result,
-                  loading: false,
-                  error: null,
-                  streamState: 'open',
+                  stream: { status: 'open' },
                 };
               }
               return {
+                status: 'ready',
                 result: {
                   ...base,
                   turns: [...base.turns, payload.turn],
                   total_chars: base.total_chars + payload.turn.text.length,
                   captured_at: new Date().toISOString(),
                 },
-                loading: false,
-                error: null,
-                streamState: 'open',
+                stream: { status: 'open' },
               };
             });
           };
@@ -87,17 +96,20 @@ export function useSessionStream(
             if (cancelled) return;
             const streamState =
               source?.readyState === EventSource.CLOSED ? 'closed' : 'connecting';
-            setState((current) => ({ ...current, streamState }));
+            setState((current) =>
+              current.status === 'ready'
+                ? { ...current, stream: { status: streamState } }
+                : current,
+            );
           };
         }
       },
       (err: unknown) => {
         if (!cancelled) {
           setState({
-            result: null,
-            loading: false,
+            status: 'failed',
             error: err instanceof Error ? err.message : 'Failed to load session.',
-            streamState: 'idle',
+            stream: { status: 'idle' },
           });
         }
       },
@@ -114,22 +126,24 @@ export function useSessionStream(
 
 type SessionStreamPayload =
   | { kind: 'turn'; turn: TranscriptTurn }
-  | { kind: 'snapshot'; result: TranscriptResult };
+  | { kind: 'snapshot'; result: TranscriptResult }
+  | { kind: 'invalid'; error: string };
 
-function parseStreamPayload(data: string): SessionStreamPayload | null {
-  // Fail closed on anything that isn't a well-formed turn frame. A non-JSON
-  // payload (e.g. an upstream "[DONE]"/keepalive sentinel) must NOT be rendered
-  // as assistant transcript text — drop it rather than fabricate a turn.
+const MALFORMED_SESSION_STREAM_EVENT = 'Malformed session stream event.';
+
+function parseStreamPayload(data: string): SessionStreamPayload {
   let parsed: unknown;
   try {
     parsed = JSON.parse(data);
   } catch {
-    return null;
+    return { kind: 'invalid', error: MALFORMED_SESSION_STREAM_EVENT };
   }
-  if (!isRecord(parsed)) return null;
+  if (!isRecord(parsed)) return { kind: 'invalid', error: MALFORMED_SESSION_STREAM_EVENT };
   const snapshot = parseTranscriptSnapshot(parsed);
   if (snapshot) return { kind: 'snapshot', result: snapshot };
-  if (typeof parsed.text !== 'string') return null;
+  if (typeof parsed.text !== 'string') {
+    return { kind: 'invalid', error: MALFORMED_SESSION_STREAM_EVENT };
+  }
   return {
     kind: 'turn',
     turn: {
@@ -158,11 +172,8 @@ function parseTranscriptSnapshot(value: Record<string, unknown>): TranscriptResu
   const totalChars = typeof value.total_chars === 'number'
     ? value.total_chars
     : turns.reduce((sum, turn) => sum + turn.text.length, 0);
-  return {
+  const result: TranscriptResult = {
     session_id: sessionId,
-    template: typeof value.template === 'string' ? value.template : undefined,
-    provider: typeof value.provider === 'string' ? value.provider : undefined,
-    format: typeof value.format === 'string' ? value.format : 'conversation',
     turns,
     total_chars: totalChars,
     captured_at: typeof value.captured_at === 'string'
@@ -170,6 +181,14 @@ function parseTranscriptSnapshot(value: Record<string, unknown>): TranscriptResu
       : new Date().toISOString(),
     truncated: value.truncated === true,
   };
+  if (typeof value.template === 'string') result.template = value.template;
+  if (typeof value.provider === 'string') result.provider = value.provider;
+  if (typeof value.format === 'string') {
+    result.format = value.format;
+  } else {
+    result.format = 'conversation';
+  }
+  return result;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

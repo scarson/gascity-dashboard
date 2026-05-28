@@ -17,9 +17,9 @@ describe('workflow execution path resolution', () => {
       metadata: { 'gc.cwd': '/runs/child' },
     });
 
-    assert.equal(
+    assert.deepEqual(
       resolveWorkflowExecutionPath(root, [root, child], '/configured/rig'),
-      '/runs/adopt-pr',
+      { kind: 'known', path: '/runs/adopt-pr' },
     );
   });
 
@@ -32,31 +32,37 @@ describe('workflow execution path resolution', () => {
       metadata: { work_dir: ' /runs/session-step ' },
     });
 
-    assert.equal(
+    assert.deepEqual(
       resolveWorkflowExecutionPath(root, [root, sessionBead], '/configured/rig'),
-      '/runs/session-step',
+      { kind: 'known', path: '/runs/session-step' },
     );
   });
 
   test('uses supervisor rig-root metadata when cwd/work-dir metadata is missing', () => {
     const root = workflowBead({ metadata: { rig_root: ' /rig/from-root ' } });
 
-    assert.equal(
+    assert.deepEqual(
       resolveWorkflowExecutionPath(root, [root], '/configured/rig'),
-      '/rig/from-root',
+      { kind: 'known', path: '/rig/from-root' },
     );
   });
 
   test('uses the configured rig root when supervisor data has no execution path', () => {
-    assert.equal(
+    assert.deepEqual(
       resolveWorkflowExecutionPath(workflowBead({}), [], ' /configured/rig '),
-      '/configured/rig',
+      { kind: 'known', path: '/configured/rig' },
     );
   });
 
-  test('returns null instead of a blank path when no execution path is available', () => {
-    assert.equal(resolveWorkflowExecutionPath(workflowBead({}), [], '  '), null);
-    assert.equal(resolveWorkflowExecutionPath(undefined, [], undefined), null);
+  test('returns an explicit unavailable state when no execution path is available', () => {
+    assert.deepEqual(resolveWorkflowExecutionPath(workflowBead({}), [], '  '), {
+      kind: 'unavailable',
+      reason: 'missing_cwd_and_rig_root',
+    });
+    assert.deepEqual(resolveWorkflowExecutionPath(undefined, [], undefined), {
+      kind: 'unavailable',
+      reason: 'missing_cwd_and_rig_root',
+    });
   });
 });
 

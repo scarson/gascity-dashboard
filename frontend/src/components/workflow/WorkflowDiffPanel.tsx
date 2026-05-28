@@ -17,7 +17,7 @@ export function WorkflowDiffPanel({ diff }: WorkflowDiffPanelProps) {
   if (diff.kind === 'error') {
     return (
       <p className="text-body text-accent" role="alert">
-        {diff.error ?? 'Git diff unavailable.'}
+        {diff.error}
       </p>
     );
   }
@@ -30,8 +30,8 @@ export function WorkflowDiffPanel({ diff }: WorkflowDiffPanelProps) {
           {diff.changedFiles.length} changed file{diff.changedFiles.length === 1 ? '' : 's'}
         </span>
       </div>
-      {diff.rootPath && (
-        <p className="mt-1 text-label text-fg-faint break-all">{diff.rootPath}</p>
+      {diff.rootPath.kind === 'known' && (
+        <p className="mt-1 text-label text-fg-faint break-all">{diff.rootPath.path}</p>
       )}
       {diff.changedFiles.length > 0 && (
         <ul className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-label uppercase tracking-wider text-fg-muted">
@@ -87,6 +87,6 @@ function diffLineClass(line: string): string {
   }
   if (line.startsWith('@@')) return 'diff-line-hunk text-warn';
   if (line.startsWith('+')) return 'diff-line-add text-ok';
-  if (line.startsWith('-')) return 'diff-line-remove text-accent';
+  if (line.startsWith('-')) return 'diff-line-remove text-fg-muted';
   return 'diff-line-context text-fg-muted';
 }

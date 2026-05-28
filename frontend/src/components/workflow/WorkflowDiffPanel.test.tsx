@@ -20,7 +20,7 @@ describe('WorkflowDiffPanel', () => {
       <WorkflowDiffPanel
         diff={{
           kind: 'ok',
-          rootPath: '/tmp/rig',
+          rootPath: { kind: 'known', path: '/tmp/rig' },
           status: [' M src/workflow.ts', 'A  src/workflow.test.ts'],
           changedFiles: [
             { path: 'src/workflow.ts', status: 'M', kind: 'code' },
@@ -54,7 +54,7 @@ describe('WorkflowDiffPanel', () => {
 function diffFor(kind: 'path_unknown' | 'not_git'): WorkflowDiffResponse {
   return {
     kind,
-    rootPath: null,
+    rootPath: { kind: 'unavailable', reason: kind },
     status: [],
     changedFiles: [],
     unstagedDiff: '',

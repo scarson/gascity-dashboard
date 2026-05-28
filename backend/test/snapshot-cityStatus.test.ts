@@ -85,7 +85,7 @@ describe('aggregateSessionsByProvider', () => {
 });
 
 describe('collectCityStatus', () => {
-  test('builds CityStatusSummary from sessions + null city.toml when cityPath unset', async () => {
+  test('builds CityStatusSummary from sessions + explicit max-session state when cityPath unset', async () => {
     const sessionList: GcSessionList = {
       items: [
         sess({ id: 't-1', provider: 'codex', state: 'active' }),
@@ -103,7 +103,11 @@ describe('collectCityStatus', () => {
     assert.equal(summary.totalAgents, 3);
     assert.equal(summary.activeSessions, 2);
     assert.equal(summary.suspendedSessions, 1);
-    assert.equal(summary.maxSessions, null);
+    assert.deepEqual(summary.maxSessions, {
+      status: 'unavailable',
+      source: 'city',
+      error: 'city path not configured',
+    });
     assert.deepEqual(summary.rigs, []);
     // Sort: active desc, then provider asc. codex and claude both have
     // active=1, so alpha tiebreak puts claude first.
@@ -122,25 +126,40 @@ describe('collectCityStatus', () => {
       listSessions: async () => sessionList,
       cityPath: '/fake/city',
       readCityToml: async () => ({
-        maxSessions: 100,
+        maxSessions: { status: 'available', value: 100 },
         rigs: [{ name: 'rig-a', path: '/data/rig-a' }],
       }),
     });
 
-    assert.equal(summary.maxSessions, 100);
+    assert.deepEqual(summary.maxSessions, { status: 'available', value: 100 });
     assert.deepEqual(summary.rigs, [{ name: 'rig-a', path: '/data/rig-a' }]);
   });
 
-  test('tolerates missing city.toml: maxSessions=null, rigs=[]', async () => {
+  test('empty sessions remain known zero counts and missing city.toml is explicit state', async () => {
     const sessionList: GcSessionList = { items: [] };
 
     const summary = await collectCityStatus({
       listSessions: async () => sessionList,
       cityPath: '/fake/city',
-      readCityToml: async () => null,
+      readCityToml: async () => ({
+        maxSessions: {
+          status: 'unavailable',
+          source: 'city',
+          error: 'city.toml not found',
+        },
+        rigs: [],
+      }),
     });
 
-    assert.equal(summary.maxSessions, null);
+    assert.equal(summary.activeAgents, 0);
+    assert.equal(summary.totalAgents, 0);
+    assert.equal(summary.activeSessions, 0);
+    assert.equal(summary.suspendedSessions, 0);
+    assert.deepEqual(summary.maxSessions, {
+      status: 'unavailable',
+      source: 'city',
+      error: 'city.toml not found',
+    });
     assert.deepEqual(summary.rigs, []);
   });
 });
@@ -208,7 +227,7 @@ name = "rig-b"
 path = "/data/rig-b"
 `;
     const summary = parseCityToml(toml);
-    assert.equal(summary.maxSessions, 50);
+    assert.deepEqual(summary.maxSessions, { status: 'available', value: 50 });
     assert.deepEqual(summary.rigs, [
       { name: 'rig-a', path: '/data/rig-a' },
       { name: 'rig-b', path: '/data/rig-b' },

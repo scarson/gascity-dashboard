@@ -1,28 +1,37 @@
 // Read-side telemetry envelope shared across the snapshot series
 // (gascity-dashboard-37u). Ported from demo-dash src/shared/types.ts.
 //
-// The SourceName union enumerates every source the dashboard may surface;
-// individual collectors are wired in later beads. Listing all names here
-// even though only city/workflows/resources have collectors today keeps
-// DashboardSources (bead-3) and the fixture (bead-2) able to `satisfies`
-// a fully-keyed object without churn when the remaining collectors land.
+// The SourceName union enumerates the sources this dashboard actually serves.
+// Deferred demo-dash sources stay out of the runtime contract until they have
+// real collectors and visible product surface.
 
 export type SourceName =
   | 'city'
   | 'resources'
-  | 'workflows'
-  | 'github';
+  | 'workflows';
 
 export type SourceStatus = 'fresh' | 'stale' | 'error' | 'fixture';
 
-export interface SourceState<T> {
+export type SourceError =
+  | { kind: 'none' }
+  | { kind: 'message'; message: string };
+
+export interface SourceAvailableState<T> {
   source: SourceName;
-  status: SourceStatus;
-  fetchedAt: string | null;
-  staleAt: string | null;
-  error: string | null;
-  data: T | null;
+  status: Exclude<SourceStatus, 'error'>;
+  fetchedAt: string;
+  staleAt: string;
+  error: SourceError;
+  data: T;
 }
+
+export interface SourceUnavailableState {
+  source: SourceName;
+  status: 'error';
+  error: string;
+}
+
+export type SourceState<T> = SourceAvailableState<T> | SourceUnavailableState;
 
 // ── Aggregate snapshot ────────────────────────────────────────────────────
 
@@ -40,19 +49,28 @@ export interface DashboardRuntimeConfig {
   useFixtures: boolean;
 }
 
+export type DashboardMetric =
+  | {
+      status: 'available';
+      value: number;
+    }
+  | {
+      status: 'unavailable';
+      source: SourceName;
+      error: string;
+    };
+
 export interface DashboardHeadline {
-  activeAgents: number | null;
-  maxAgents: number | null;
-  activeSessions: number | null;
-  activeWorkflows: number | null;
-  githubOpenReviews: number | null;
+  activeAgents: DashboardMetric;
+  maxAgents: DashboardMetric;
+  activeSessions: DashboardMetric;
+  activeWorkflows: DashboardMetric;
 }
 
 export interface DashboardSources {
   city: SourceState<CityStatusSummary>;
   resources: SourceState<ResourceSummary>;
   workflows: SourceState<WorkflowSummary>;
-  github: SourceState<GitHubSummary>;
 }
 
 /**
@@ -60,10 +78,8 @@ export interface DashboardSources {
  * cannot drift; used by fixtureSourceLoader<K> in the snapshot fixtures
  * module to return a precisely-typed data accessor per source name.
  *
- * NonNullable wraps T inside the conditional so the intent ("strip the
- * null that data: T | null carries") is explicit, even though every
- * current T is already non-nullable. The form-vs-coincidence distinction
- * matters if a future source ever types its T as `Foo | null` directly.
+ * SourceState only exposes data on available states; unavailable states carry
+ * a required error instead of a nullable data sentinel.
  */
 export type SourceDataMap = {
   [K in SourceName]: DashboardSources[K] extends SourceState<infer T>
@@ -74,11 +90,11 @@ export type SourceDataMap = {
 // ── city ──────────────────────────────────────────────────────────────────
 
 export interface CityStatusSummary {
-  activeAgents: number | null;
-  totalAgents: number | null;
-  activeSessions: number | null;
-  suspendedSessions: number | null;
-  maxSessions: number | null;
+  activeAgents: number;
+  totalAgents: number;
+  activeSessions: number;
+  suspendedSessions: number;
+  maxSessions: DashboardMetric;
   sessionsByProvider: CitySessionProvider[];
   rigs: CityRig[];
 }
@@ -135,11 +151,20 @@ export interface WorkflowSummary {
    * time-derived `byStalenessTier` / "failing" counts are deliberately NOT
    * here: per R9 the staleness threshold crossing is owned by the frontend's
    * 1s selector (kb3), so a server-frozen tier census would under-count for
-   * up to the cache TTL on a pure-time stall crossing. Null until the engine
-   * has run (live path always populates it; fixtures may omit).
+   * up to the cache TTL on a pure-time stall crossing.
    */
-  census: WorkflowCensus | null;
+  census: WorkflowCensusState;
 }
+
+export type WorkflowCensusState =
+  | {
+      status: 'available';
+      data: WorkflowCensus;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
 
 /**
  * Threshold-independent city census (gascity-dashboard-3ax, PRD §4 / R5).
@@ -179,10 +204,12 @@ export type WorkflowPhaseConfidence = 'known' | 'inferred';
  * R9-strict contract: this carries FACTS and the one server-only signal
  * (`thrashingDetected`), never a frozen staleness-tier enum. The frontend
  * computes the staleness tier + age from `WorkflowLane.updatedAt` (=
- * max bead updated_at) and `sessionLastActive` on its 1s clock.
+ * max bead updated_at) and the resolved session's `lastActive` fact on its
+ * 1s clock.
  *
- * Optional on the lane: present on every live-served lane (the engine runs
- * in the snapshot read path), absent only on un-enriched fixture literals.
+ * Every lane carries an explicit health state. The lane builder emits an
+ * unavailable pre-engine state; the snapshot read path replaces it with these
+ * available health facts.
  */
 export interface WorkflowLaneHealth {
   /**
@@ -200,10 +227,10 @@ export interface WorkflowLaneHealth {
   needsOperator: boolean;
   /**
    * The semantic node id (raw gc.step_id) the lane is parked on, for the
-   * `?node=:stuckNodeId` deep link (PRD §5). Null when no active step
-   * resolved. Equals `WorkflowLane.activeStepId`.
+   * `?node=:stuckNodeId` deep link (PRD §5). Unavailable when no active step
+   * resolved.
    */
-  stuckNodeId: string | null;
+  stuckNode: WorkflowLaneStuckNode;
   /**
    * R1 progress-monotonicity: attempt-of-active-step climbed while the
    * lane's graph position (active stage) stayed flat across cache
@@ -217,15 +244,19 @@ export interface WorkflowLaneHealth {
    * census already does this (its `thrashing` count excludes inferred lanes).
    */
   thrashingDetected: boolean;
-  /** Whether the lane's assignee resolved to a concrete supervisor session. */
-  sessionResolved: boolean;
-  /** Resolved session's last_active (ISO), for the client age/idle clock. Null when unresolved. */
-  sessionLastActive: string | null;
-  /** Resolved session's process-running flag. Null when unresolved or unset upstream. */
-  sessionRunning: boolean | null;
-  /** Resolved session's coarse activity hint (e.g. 'idle'). Null when unresolved or unset. */
-  sessionActivity: string | null;
+  /** Resolved session facts. Unresolved and missing upstream fields are explicit states. */
+  session: WorkflowLaneSessionState;
 }
+
+export type WorkflowLaneHealthState =
+  | {
+      status: 'available';
+      data: WorkflowLaneHealth;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
 
 export interface WorkflowRunCounts {
   total: number;
@@ -240,44 +271,16 @@ export interface WorkflowRunCounts {
 export interface WorkflowLane {
   id: string;
   title: string;
-  formula: string | null;
-  scopeKind?: 'city' | 'rig' | null;
-  scopeRef?: string | null;
-  rootStoreRef?: string | null;
-  externalUrl: string | null;
-  externalLabel: string | null;
+  formula: WorkflowLaneFormula;
+  scope: WorkflowLaneScope;
+  external: WorkflowLaneExternalReference;
   phase: WorkflowPhase;
   phaseLabel: string;
   statusCounts: Record<string, number>;
   activeAssignees: string[];
-  updatedAt: string | null;
+  updatedAt: WorkflowLaneUpdatedAt;
   stages: WorkflowStage[];
-  /**
-   * Raw gc.step_id of the step the lane is currently active on
-   * (gascity-dashboard-3ax). NOT the coarse stage key — L2's graph nodes
-   * key on the raw step id, so this is the `?node=` deep-link target. Null
-   * when no in_progress step carries a gc.step_id.
-   *
-   * Required-with-null (not optional): the lane builder ALWAYS sets it, and
-   * making it required forces every WorkflowLane producer (incl. fixtures) to
-   * commit to a value rather than silently degrading the engine via undefined
-   * (typescript-reviewer HIGH-2).
-   */
-  activeStepId: string | null;
-  /**
-   * Attempt/iteration count of the ACTIVE step (gascity-dashboard-3ax),
-   * keyed to `activeStepId` — not the lossy lane-wide max. The engine's
-   * monotonicity predicate needs per-step attempt so it fires on a wedged
-   * retry of one step, not on a normal stage transition. Null when no
-   * attempt encoded.
-   */
-  activeStepAttempt: number | null;
-  /**
-   * Index of the active stage within `stages` (gascity-dashboard-3ax). The
-   * engine's "graph position flat" check compares this across cache
-   * generations. Null when no stage is active.
-   */
-  activeStageIndex: number | null;
+  progress: WorkflowLaneProgress;
   /**
    * Provenance fact (gascity-dashboard-3ax): the lane's stages came from a
    * RECOGNISED formula AND the active gc.step_id mapped into one of those
@@ -287,13 +290,151 @@ export interface WorkflowLane {
    */
   formulaStageResolved: boolean;
   /**
-   * Engine-derived health (gascity-dashboard-3ax). Present on every
-   * live-served lane; null/absent only on un-enriched fixture literals (the
-   * engine runs in the snapshot read path, so the served wire always carries
-   * it). Optional because the lane BUILDER does not set it — only the engine.
+   * Engine-derived health (gascity-dashboard-3ax). The lane builder emits
+   * an explicit unavailable pre-engine state; the snapshot read path replaces
+   * it with available health facts.
    */
-  health?: WorkflowLaneHealth | null;
+  health: WorkflowLaneHealthState;
 }
+
+export type WorkflowLaneUpdatedAt =
+  | {
+      status: 'available';
+      at: string;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
+
+export type WorkflowLaneProgress =
+  | {
+      status: 'active_step';
+      /** Raw gc.step_id of the active primary step. */
+      stepId: string;
+      stage: WorkflowLaneStagePosition;
+      attempt: WorkflowLaneStepAttempt;
+    }
+  | {
+      status: 'stage_only';
+      stage: WorkflowLaneStagePosition;
+      error: string;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
+
+export type WorkflowLaneStagePosition =
+  | {
+      status: 'available';
+      index: number;
+      key: string;
+      label: string;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
+
+export type WorkflowLaneStepAttempt =
+  | {
+      status: 'available';
+      value: number;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
+
+export type WorkflowLaneStuckNode =
+  | {
+      status: 'available';
+      id: string;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
+
+export type WorkflowLaneSessionState =
+  | {
+      status: 'resolved';
+      lastActive: WorkflowLaneSessionLastActive;
+      running: WorkflowLaneSessionRunning;
+      activity: WorkflowLaneSessionActivity;
+    }
+  | {
+      status: 'unresolved';
+      error: string;
+    };
+
+export type WorkflowLaneSessionLastActive =
+  | {
+      status: 'available';
+      at: string;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
+
+export type WorkflowLaneSessionRunning =
+  | {
+      status: 'available';
+      value: boolean;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
+
+export type WorkflowLaneSessionActivity =
+  | {
+      status: 'available';
+      value: string;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
+
+export type WorkflowLaneFormula =
+  | {
+      status: 'known';
+      name: string;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
+
+export type WorkflowLaneExternalReference =
+  | {
+      status: 'available';
+      label: string;
+      url: string;
+    }
+  | {
+      status: 'label_only';
+      label: string;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
+
+export type WorkflowLaneScope =
+  | {
+      status: 'available';
+      kind: 'city' | 'rig';
+      ref: string;
+      rootStoreRef: string;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+    };
 
 export type WorkflowPhase =
   | 'intake'
@@ -316,38 +457,4 @@ export interface WorkflowChange {
   title: string;
   status: string;
   updatedAt: string;
-}
-
-// ── github ────────────────────────────────────────────────────────────────
-
-export interface GitHubSummary {
-  repo: string;
-  openPullRequests: number | null;
-  openReviewDemand: number | null;
-  reviewActivity: WindowedCounts;
-  mergedPullRequests: WindowedCounts;
-  commitsToMain: WindowedCounts;
-  newContributors: WindowedCounts;
-  recentActivity: GitHubActivity[];
-  rateLimit: GitHubRateLimit | null;
-}
-
-export interface WindowedCounts {
-  oneDay: number | null;
-  sevenDays: number | null;
-  thirtyDays: number | null;
-}
-
-export interface GitHubActivity {
-  kind: 'pull_request' | 'commit' | 'review' | 'release';
-  title: string;
-  url: string | null;
-  actor: string | null;
-  occurredAt: string;
-}
-
-export interface GitHubRateLimit {
-  remaining: number;
-  limit: number;
-  resetAt: string | null;
 }

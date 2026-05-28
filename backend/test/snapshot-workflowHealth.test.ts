@@ -20,20 +20,46 @@ import {
 function lane(partial: Partial<WorkflowLane> & { id: string }): WorkflowLane {
   return {
     title: partial.id,
-    formula: null,
-    externalUrl: null,
-    externalLabel: null,
+    formula: { status: 'unavailable', error: 'workflow formula unavailable in test' },
+    scope: { status: 'unavailable', error: 'not scoped in test' },
+    external: { status: 'unavailable', error: 'external unavailable in test' },
     phase: 'implementation' as WorkflowPhase,
     phaseLabel: 'implementation',
     statusCounts: {},
     activeAssignees: [],
-    updatedAt: '2026-05-25T00:00:00.000Z',
+    updatedAt: {
+      status: 'available',
+      at: '2026-05-25T00:00:00.000Z',
+    },
     stages: [],
-    activeStepId: null,
-    activeStepAttempt: null,
-    activeStageIndex: null,
+    progress: {
+      status: 'unavailable',
+      error: 'workflow progress unavailable in test',
+    },
     formulaStageResolved: false,
+    health: { status: 'unavailable', error: 'workflow health has not been derived' },
     ...partial,
+  };
+}
+
+function activeProgress(
+  stepId: string,
+  stageIndex: number,
+  attempt: number,
+): WorkflowLane['progress'] {
+  return {
+    status: 'active_step',
+    stepId,
+    stage: {
+      status: 'available',
+      index: stageIndex,
+      key: `stage-${stageIndex}`,
+      label: `Stage ${stageIndex}`,
+    },
+    attempt: {
+      status: 'available',
+      value: attempt,
+    },
   };
 }
 
@@ -61,7 +87,9 @@ function deriveOne(
   });
   const health = lanes[0]?.health;
   assert.ok(health, 'expected health to be populated');
-  return health;
+  assert.equal(health.status, 'available', 'expected health to be available');
+  if (health.status !== 'available') assert.fail('health unavailable');
+  return health.data;
 }
 
 describe('deriveWorkflowHealth — phaseConfidence (R2 + provenance)', () => {
@@ -73,7 +101,7 @@ describe('deriveWorkflowHealth — phaseConfidence (R2 + provenance)', () => {
     });
     const h = deriveOne(l, [sess({ id: 's1', pool: 'chief-of-staff' })]);
     assert.equal(h.phaseConfidence, 'known');
-    assert.equal(h.sessionResolved, true);
+    assert.equal(h.session.status, 'resolved');
   });
 
   test('inferred when formula stage not resolved (generic fallback)', () => {
@@ -90,15 +118,20 @@ describe('deriveWorkflowHealth — phaseConfidence (R2 + provenance)', () => {
     });
     const h = deriveOne(l, [sess({ id: 's1', pool: 'someone-else' })]);
     assert.equal(h.phaseConfidence, 'inferred');
-    assert.equal(h.sessionResolved, false);
+    assert.deepEqual(h.session, {
+      status: 'unresolved',
+      error: 'workflow session unresolved',
+    });
   });
 
   test('sessions unavailable → every lane inferred + unresolved (fail-safe, no maroon)', () => {
     const l = lane({ id: 'a', formulaStageResolved: true, activeAssignees: ['chief-of-staff'] });
     const h = deriveOne(l, [sess({ id: 's1', pool: 'chief-of-staff' })], new Map(), false);
     assert.equal(h.phaseConfidence, 'inferred');
-    assert.equal(h.sessionResolved, false);
-    assert.equal(h.sessionLastActive, null);
+    assert.deepEqual(h.session, {
+      status: 'unresolved',
+      error: 'workflow session list unavailable',
+    });
   });
 });
 
@@ -115,9 +148,18 @@ describe('deriveWorkflowHealth — facts', () => {
     }
   });
 
-  test('stuckNodeId equals the raw activeStepId', () => {
-    const h = deriveOne(lane({ id: 'a', activeStepId: 'review-pipeline.review-claude' }), []);
-    assert.equal(h.stuckNodeId, 'review-pipeline.review-claude');
+  test('stuckNode equals the raw active step id', () => {
+    const h = deriveOne(
+      lane({
+        id: 'a',
+        progress: activeProgress('review-pipeline.review-claude', 2, 1),
+      }),
+      [],
+    );
+    assert.deepEqual(h.stuckNode, {
+      status: 'available',
+      id: 'review-pipeline.review-claude',
+    });
   });
 
   test('session facts come from the resolved session', () => {
@@ -131,9 +173,21 @@ describe('deriveWorkflowHealth — facts', () => {
         activity: 'idle',
       }),
     ]);
-    assert.equal(h.sessionLastActive, '2026-05-25T01:23:00.000Z');
-    assert.equal(h.sessionRunning, false);
-    assert.equal(h.sessionActivity, 'idle');
+    assert.deepEqual(h.session, {
+      status: 'resolved',
+      lastActive: {
+        status: 'available',
+        at: '2026-05-25T01:23:00.000Z',
+      },
+      running: {
+        status: 'available',
+        value: false,
+      },
+      activity: {
+        status: 'available',
+        value: 'idle',
+      },
+    });
   });
 });
 
@@ -145,9 +199,7 @@ describe('progress-monotonicity (R1) + hysteresis (R8)', () => {
       id: 'thrash',
       formulaStageResolved: true,
       activeAssignees: ['w'],
-      activeStepId: 'wait-for-ci',
-      activeStageIndex: 5,
-      activeStepAttempt: attempt,
+      progress: activeProgress('wait-for-ci', 5, attempt),
     });
 
   test('cold map → not detected (no prior to compare)', () => {
@@ -173,8 +225,8 @@ describe('progress-monotonicity (R1) + hysteresis (R8)', () => {
   });
 
   test('an idle lane that never had an active step never thrash-detects', () => {
-    // activeStepId/activeStepAttempt null across generations: position is
-    // "flat" but `climbed` is false (no attempt to compare), so the predicate
+    // progress is unavailable across generations: position is not comparable,
+    // so the predicate
     // must never fire — a genuinely idle lane is not a thrashing lane.
     const idle = () => lane({ id: 'idle', formulaStageResolved: false, activeAssignees: ['w'] });
     let marks = new Map<string, LaneProgressMark>();
@@ -192,9 +244,7 @@ describe('progress-monotonicity (R1) + hysteresis (R8)', () => {
       id: 'thrash',
       formulaStageResolved: true,
       activeAssignees: ['w'],
-      activeStepId: 'merge-and-finalize',
-      activeStageIndex: 6,
-      activeStepAttempt: 3,
+      progress: activeProgress('merge-and-finalize', 6, 3),
     });
     marks = advanceProgressMarks(marks, [advanced]);
     assert.equal(
@@ -241,9 +291,7 @@ describe('city census (R5, threshold-independent)', () => {
         phase: 'review',
         formulaStageResolved: true,
         activeAssignees: ['w'],
-        activeStepId: 'review-loop',
-        activeStageIndex: 2,
-        activeStepAttempt: a,
+        progress: activeProgress('review-loop', 2, a),
       });
     marks = advanceProgressMarks(marks, [thrash(1)]);
     marks = advanceProgressMarks(marks, [thrash(2)]);
@@ -274,9 +322,7 @@ describe('city census (R5, threshold-independent)', () => {
         phase: 'review',
         formulaStageResolved: true,
         activeAssignees: ['ghost'], // does NOT resolve → inferred
-        activeStepId: 'review-loop',
-        activeStageIndex: 2,
-        activeStepAttempt: a,
+        progress: activeProgress('review-loop', 2, a),
       });
     marks = advanceProgressMarks(marks, [thr(1)]);
     marks = advanceProgressMarks(marks, [thr(2)]);
@@ -288,8 +334,11 @@ describe('city census (R5, threshold-independent)', () => {
       marks,
     });
     // structural thrash is still a fact on the lane…
-    assert.equal(lanes[0]?.health?.thrashingDetected, true);
-    assert.equal(lanes[0]?.health?.phaseConfidence, 'inferred');
+    const health = lanes[0]?.health;
+    assert.equal(health?.status, 'available');
+    if (health?.status !== 'available') assert.fail('expected available health');
+    assert.equal(health.data.thrashingDetected, true);
+    assert.equal(health.data.phaseConfidence, 'inferred');
     // …but the census "failing"-class count excludes it (R2: inferred never drives maroon)
     assert.equal(census?.thrashing, 0);
     assert.equal(census?.unverifiable, 1);

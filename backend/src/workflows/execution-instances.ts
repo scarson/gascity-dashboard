@@ -1,9 +1,15 @@
 import type {
   GcWorkflowBead,
+  WorkflowAttempt,
+  WorkflowAttemptSummary,
   WorkflowConstructKind,
   WorkflowControlBadge,
   WorkflowDisplayNode,
   WorkflowExecutionInstance,
+  WorkflowIteration,
+  WorkflowIterationSummary,
+  WorkflowNodeScope,
+  WorkflowSessionAttachment,
 } from 'gas-city-dashboard-shared';
 import {
   attemptFor,
@@ -43,15 +49,12 @@ export function buildWorkflowDisplayNode(
   const visibleInstance = preferredExecutionInstance(instances);
   const iterations = new Set(
     instances
-      .map((instance) => instance.iteration)
-      .filter((n): n is number => typeof n === 'number'),
+      .map((instance) => iterationValue(instance.iteration))
+      .filter(isNumber),
   );
   const visibleIteration =
-    visibleInstance?.iteration ??
+    (visibleInstance ? iterationValue(visibleInstance.iteration) : undefined) ??
     (iterations.size > 0 ? Math.max(...iterations) : undefined);
-  const hasHistoricalIterations =
-    visibleIteration !== undefined &&
-    instances.some((instance) => instance.iteration !== visibleIteration);
   const historicalOnly =
     group.loopControlNodeId !== undefined &&
     visibleIteration !== undefined &&
@@ -61,37 +64,44 @@ export function buildWorkflowDisplayNode(
   for (const instance of instances) {
     const currentIteration =
       !historicalOnly &&
-      (visibleIteration === undefined || instance.iteration === visibleIteration);
+      (visibleIteration === undefined || iterationValue(instance.iteration) === visibleIteration);
     instance.currentIteration = currentIteration;
     instance.historical = !currentIteration;
-    instance.streamable =
-      currentIteration &&
-      instance.sessionLink !== null &&
-      isRunningStatus(instance.status);
+    instance.session =
+      instance.session.kind === 'attached'
+        ? {
+            ...instance.session,
+            streamable: currentIteration && isRunningStatus(instance.status),
+          }
+        : instance.session;
   }
 
-  return {
+  if (visibleInstance === undefined) {
+    throw new Error(`workflow node ${group.semanticNodeId} has no execution instances`);
+  }
+
+  const node: WorkflowDisplayNode = {
     id: group.semanticNodeId,
     semanticNodeId: group.semanticNodeId,
     title: group.title,
     kind: group.kind,
     constructKind: group.constructKind,
     status: aggregateStatus(instances, visibleInstance),
-    currentBeadId: visibleInstance?.beadId,
-    scopeRef: group.scopeRef,
-    loopControlNodeId: group.loopControlNodeId,
+    currentBeadId: visibleInstance.beadId,
+    scope: workflowNodeScope(group.scopeRef),
     visibleInGraph: !historicalOnly,
     historicalOnly,
-    visibleIteration,
-    iterationCount: iterations.size > 0 ? iterations.size : undefined,
-    hasHistoricalIterations,
-    attemptBadge: attemptBadgeFor(group.beads),
-    attemptCount: attemptCountFor(instances),
-    activeAttempt: activeAttemptFor(instances),
-    visibleExecutionInstanceId: visibleInstance?.id,
+    iterationSummary: iterationSummaryFor(
+      visibleIteration,
+      iterations.size,
+      group.loopControlNodeId,
+    ),
+    attemptSummary: attemptSummaryFor(instances, group.beads),
+    visibleExecutionInstanceId: visibleInstance.id,
     executionInstances: instances,
-    controlBadges: controlBadges.length > 0 ? controlBadges : undefined,
+    controlBadges,
   };
+  return node;
 }
 
 export function latestIterationsByLoop(groups: WorkflowNodeGroup[]): Map<string, number> {
@@ -117,21 +127,26 @@ function buildExecutionInstance(
   sessionContext: WorkflowSessionLinkContext,
 ): WorkflowExecutionInstance {
   const beadId = nonEmpty(bead.id);
+  if (beadId === undefined) {
+    throw new Error(`workflow node ${semanticNodeId} has a bead with an empty id`);
+  }
   const iteration = iterationFor(bead);
   const attempt = attemptFor(bead);
   const status = presentationStatus(bead);
-  return {
-    id:
-      beadId ??
-      `${semanticNodeId}:iteration-${iteration ?? 0}:attempt-${attempt ?? index}`,
+  const sessionLink = workflowSessionLinkFor(bead, status, sessionContext);
+  const instance: WorkflowExecutionInstance = {
+    id: beadId || `${semanticNodeId}:iteration-${iteration ?? 0}:attempt-${attempt ?? index}`,
     semanticNodeId,
     beadId,
-    iteration,
-    attempt,
+    iteration: iterationState(iteration),
+    attempt: attemptState(attempt),
     label: instanceLabel(iteration, attempt),
     status,
-    sessionLink: workflowSessionLinkFor(bead, status, sessionContext),
+    session: sessionState(status, sessionLink),
+    currentIteration: true,
+    historical: false,
   };
+  return instance;
 }
 
 function preferredExecutionInstance(
@@ -145,10 +160,32 @@ function compareExecutionInstances(
   right: WorkflowExecutionInstance,
 ): number {
   return (
-    (left.iteration ?? 0) - (right.iteration ?? 0) ||
-    (left.attempt ?? 0) - (right.attempt ?? 0) ||
-    (left.beadId ?? left.id).localeCompare(right.beadId ?? right.id)
+    iterationOrder(left.iteration) - iterationOrder(right.iteration) ||
+    attemptOrder(left.attempt) - attemptOrder(right.attempt) ||
+    left.beadId.localeCompare(right.beadId)
   );
+}
+
+function attemptSummaryFor(
+  instances: WorkflowExecutionInstance[],
+  beads: GcWorkflowBead[],
+): WorkflowAttemptSummary {
+  const attemptCount = attemptCountFor(instances);
+  const activeAttempt = activeAttemptFor(instances);
+  const badgeLabel = attemptBadgeFor(beads);
+  if (attemptCount === 0 && badgeLabel === undefined) return { kind: 'none' };
+  return {
+    kind: 'tracked',
+    count: Math.max(attemptCount, 1),
+    badge:
+      badgeLabel === undefined
+        ? { kind: 'count-only' }
+        : { kind: 'bounded', label: badgeLabel },
+    active:
+      activeAttempt === undefined
+        ? { kind: 'idle' }
+        : { kind: 'running', value: activeAttempt },
+  };
 }
 
 function attemptBadgeFor(beads: GcWorkflowBead[]): string | undefined {
@@ -160,25 +197,88 @@ function attemptBadgeFor(beads: GcWorkflowBead[]): string | undefined {
   return `${Math.max(attempts.size, 1)}/${max}`;
 }
 
-function attemptCountFor(instances: WorkflowExecutionInstance[]): number | undefined {
-  const attempts = new Set(instances.map((instance) => instance.attempt).filter(isNumber));
-  return attempts.size > 0 ? attempts.size : undefined;
+function attemptCountFor(instances: WorkflowExecutionInstance[]): number {
+  const attempts = new Set(
+    instances
+      .map((instance) => attemptValue(instance.attempt))
+      .filter(isNumber),
+  );
+  return attempts.size;
 }
 
 function activeAttemptFor(instances: WorkflowExecutionInstance[]): number | undefined {
-  return instances.find((instance) => isRunningStatus(instance.status))?.attempt;
+  const active = instances.find((instance) => isRunningStatus(instance.status));
+  return active ? attemptValue(active.attempt) : undefined;
 }
 
 function instanceLabel(
   iteration: number | undefined,
   attempt: number | undefined,
-): string | undefined {
+): string {
   if (iteration !== undefined && attempt !== undefined) {
     return `iteration ${iteration}, attempt ${attempt}`;
   }
   if (iteration !== undefined) return `iteration ${iteration}`;
   if (attempt !== undefined) return `attempt ${attempt}`;
-  return undefined;
+  return 'base';
+}
+
+function workflowNodeScope(scopeRef: string | undefined): WorkflowNodeScope {
+  return scopeRef === undefined ? { kind: 'workflow' } : { kind: 'scoped', ref: scopeRef };
+}
+
+function iterationSummaryFor(
+  visibleIteration: number | undefined,
+  iterationCount: number,
+  loopControlNodeId: string | undefined,
+): WorkflowIterationSummary {
+  if (visibleIteration === undefined || iterationCount === 0) return { kind: 'single' };
+  return {
+    kind: 'stacked',
+    visibleIteration,
+    iterationCount,
+    control:
+      loopControlNodeId === undefined
+        ? { kind: 'unknown' }
+        : { kind: 'known', id: loopControlNodeId },
+  };
+}
+
+function iterationState(value: number | undefined): WorkflowIteration {
+  return value === undefined ? { kind: 'base' } : { kind: 'loop', value };
+}
+
+function attemptState(value: number | undefined): WorkflowAttempt {
+  return value === undefined ? { kind: 'untracked' } : { kind: 'attempt', value };
+}
+
+function sessionState(
+  status: WorkflowExecutionInstance['status'],
+  link: ReturnType<typeof workflowSessionLinkFor>,
+): WorkflowSessionAttachment {
+  if (link !== undefined) {
+    return { kind: 'attached', link, streamable: false };
+  }
+  return {
+    kind: 'none',
+    reason: status === 'pending' || status === 'ready' ? 'not_started' : 'session_unresolved',
+  };
+}
+
+function iterationValue(iteration: WorkflowIteration): number | undefined {
+  return iteration.kind === 'loop' ? iteration.value : undefined;
+}
+
+function attemptValue(attempt: WorkflowAttempt): number | undefined {
+  return attempt.kind === 'attempt' ? attempt.value : undefined;
+}
+
+function iterationOrder(iteration: WorkflowIteration): number {
+  return iterationValue(iteration) ?? 0;
+}
+
+function attemptOrder(attempt: WorkflowAttempt): number {
+  return attemptValue(attempt) ?? 0;
 }
 
 function isNumber(value: number | undefined): value is number {

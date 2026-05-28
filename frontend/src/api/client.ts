@@ -21,21 +21,11 @@ import type {
   WorkflowScopeKind,
   EntityLinkView,
 } from 'gas-city-dashboard-shared';
+import { readCsrfToken } from './csrf';
 
 // Typed fetch client for the admin backend's /api/*. Shares types with
 // the backend via the workspace 'gas-city-dashboard-shared' import so wire-shape
 // drift produces compile errors instead of runtime undefined.
-
-const COOKIE_NAME = 'gascity_admin_csrf';
-
-function readCsrfCookie(): string | null {
-  const match = document.cookie
-    .split(';')
-    .map((c) => c.trim())
-    .find((c) => c.startsWith(COOKIE_NAME + '='));
-  if (!match) return null;
-  return decodeURIComponent(match.slice(COOKIE_NAME.length + 1));
-}
 
 async function performRequest<T>(
   method: 'GET' | 'POST',
@@ -47,15 +37,16 @@ async function performRequest<T>(
   };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (method !== 'GET') {
-    const token = readCsrfCookie();
-    if (token) headers['X-CSRF-Token'] = token;
+    const token = readCsrfToken();
+    if (token.status === 'available') headers['X-CSRF-Token'] = token.token;
   }
-  const res = await fetch(url, {
+  const init: RequestInit = {
     method,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
-  });
+  };
+  if (body !== undefined) init.body = JSON.stringify(body);
+  const res = await fetch(url, init);
   if (!res.ok) {
     let payload: ApiError | null = null;
     try {

@@ -284,7 +284,7 @@ function laneMatches(candidate, expected) {
 }
 
 function nodeHasSession(node) {
-  return node.executionInstances.some((instance) => instance.sessionLink);
+  return node.executionInstances.some((instance) => instance.session?.kind === 'attached');
 }
 
 async function fetchJson(url) {

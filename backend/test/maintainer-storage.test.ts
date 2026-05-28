@@ -9,11 +9,11 @@ import type {
   TriageItem,
 } from 'gas-city-dashboard-shared';
 
-// readCache → null contract: any envelope that doesn't pass the shape check
-// (top-level OR a deep spot-check on the first TriageItem) is treated as
-// stale, so the next worker tick repopulates fresh. The deep-check exists
-// to catch caches written before a new TriageItem field shipped — see
-// gascity-dashboard-3qy.
+// readCache contract: a missing file returns an explicit `missing` result,
+// because no cache has been created yet. Corrupt JSON and stale wire shapes
+// throw so callers do not silently replace broken persisted state with an
+// empty envelope. The deep-check exists to catch caches written before a new
+// TriageItem field shipped — see gascity-dashboard-3qy.
 
 const FIXED_ISO = '2026-05-23T00:00:00.000Z';
 
@@ -91,7 +91,7 @@ describe('readCache — happy path', () => {
       const env = makeEnvelope([makeItem()]);
       await writeCache(cachePath, env);
       const got = await readCache(cachePath);
-      assert.deepEqual(got, env);
+      assert.deepEqual(got, { status: 'ready', envelope: env });
     });
   });
 
@@ -101,7 +101,7 @@ describe('readCache — happy path', () => {
       const env = makeEmptyEnvelope();
       await writeCache(cachePath, env);
       const got = await readCache(cachePath);
-      assert.deepEqual(got, env);
+      assert.deepEqual(got, { status: 'ready', envelope: env });
     });
   });
 
@@ -120,41 +120,53 @@ describe('readCache — happy path', () => {
       };
       await writeCache(cachePath, env);
       const got = await readCache(cachePath);
-      assert.deepEqual(got, env);
+      assert.deepEqual(got, { status: 'ready', envelope: env });
     });
   });
 
-  test('returns null when the cache file does not exist', async () => {
+  test('returns explicit missing state when the cache file does not exist', async () => {
     await withTmpDir(async (dir) => {
       const got = await readCache(path.join(dir, 'missing.json'));
-      assert.equal(got, null);
+      assert.deepEqual(got, { status: 'missing' });
+    });
+  });
+});
+
+describe('readCache — corrupt cache errors', () => {
+  test('throws on malformed JSON instead of treating it as a missing cache', async () => {
+    await withTmpDir(async (dir) => {
+      const cachePath = path.join(dir, 'cache.json');
+      await fs.writeFile(cachePath, '{not-json', 'utf-8');
+
+      await assert.rejects(
+        () => readCache(cachePath),
+        /maintainer cache parse failed/,
+      );
     });
   });
 });
 
 describe('readCache — top-level shape rejections', () => {
-  test('rejects when repo is missing', async () => {
+  test('throws when repo is missing', async () => {
     await withTmpDir(async (dir) => {
       const cachePath = path.join(dir, 'cache.json');
       const env = { ...makeEmptyEnvelope() } as Partial<MaintainerTriage>;
       delete env.repo;
       await fs.writeFile(cachePath, JSON.stringify(env), 'utf-8');
-      const got = await readCache(cachePath);
-      assert.equal(got, null);
+      await assert.rejects(() => readCache(cachePath), /maintainer cache shape check failed/);
     });
   });
 
-  test('rejects when tiers is not an array', async () => {
+  test('throws when tiers is not an array', async () => {
     await withTmpDir(async (dir) => {
       const cachePath = path.join(dir, 'cache.json');
       const env = { ...makeEmptyEnvelope(), tiers: 'not-an-array' };
       await fs.writeFile(cachePath, JSON.stringify(env), 'utf-8');
-      const got = await readCache(cachePath);
-      assert.equal(got, null);
+      await assert.rejects(() => readCache(cachePath), /maintainer cache shape check failed/);
     });
   });
 
-  test('rejects when totals.issues_open is missing', async () => {
+  test('throws when totals.issues_open is missing', async () => {
     await withTmpDir(async (dir) => {
       const cachePath = path.join(dir, 'cache.json');
       const env = {
@@ -162,46 +174,42 @@ describe('readCache — top-level shape rejections', () => {
         totals: { prs_open: 0 },
       };
       await fs.writeFile(cachePath, JSON.stringify(env), 'utf-8');
-      const got = await readCache(cachePath);
-      assert.equal(got, null);
+      await assert.rejects(() => readCache(cachePath), /maintainer cache shape check failed/);
     });
   });
 });
 
 describe('readCache — deep TriageItem shape rejections (gascity-dashboard-3qy)', () => {
-  test('rejects when first item is missing triage_assessment key (stale cache pre-are)', async () => {
+  test('throws when first item is missing triage_assessment key', async () => {
     await withTmpDir(async (dir) => {
       const cachePath = path.join(dir, 'cache.json');
       const item = makeItem();
       const { triage_assessment: _drop, ...stale } = item;
       const env = makeEnvelope([stale as unknown as TriageItem]);
       await fs.writeFile(cachePath, JSON.stringify(env), 'utf-8');
-      const got = await readCache(cachePath);
-      assert.equal(got, null);
+      await assert.rejects(() => readCache(cachePath), /maintainer cache shape check failed/);
     });
   });
 
-  test('rejects when first item is missing triage_score key', async () => {
+  test('throws when first item is missing triage_score key', async () => {
     await withTmpDir(async (dir) => {
       const cachePath = path.join(dir, 'cache.json');
       const item = makeItem();
       const { triage_score: _drop, ...stale } = item;
       const env = makeEnvelope([stale as unknown as TriageItem]);
       await fs.writeFile(cachePath, JSON.stringify(env), 'utf-8');
-      const got = await readCache(cachePath);
-      assert.equal(got, null);
+      await assert.rejects(() => readCache(cachePath), /maintainer cache shape check failed/);
     });
   });
 
-  test('rejects when first item is missing is_marked key', async () => {
+  test('throws when first item is missing is_marked key', async () => {
     await withTmpDir(async (dir) => {
       const cachePath = path.join(dir, 'cache.json');
       const item = makeItem();
       const { is_marked: _drop, ...stale } = item;
       const env = makeEnvelope([stale as unknown as TriageItem]);
       await fs.writeFile(cachePath, JSON.stringify(env), 'utf-8');
-      const got = await readCache(cachePath);
-      assert.equal(got, null);
+      await assert.rejects(() => readCache(cachePath), /maintainer cache shape check failed/);
     });
   });
 
@@ -211,16 +219,11 @@ describe('readCache — deep TriageItem shape rejections (gascity-dashboard-3qy)
       const env = makeEnvelope([makeItem({ triage_assessment: null })]);
       await writeCache(cachePath, env);
       const got = await readCache(cachePath);
-      assert.deepEqual(got, env);
+      assert.deepEqual(got, { status: 'ready', envelope: env });
     });
   });
 
-  // Traversal-order contract: firstTriageItem must visit (unclustered, then
-  // clusters[*].items) in the SAME order as triage.ts collectItems. When a tier
-  // has BOTH a valid unclustered item and a stale clustered item, the spot-check
-  // must sample the unclustered one (first) — so the envelope is accepted, not
-  // rejected on the cluster's stale item. See gascity-dashboard-34m.
-  test('samples unclustered before clusters (order matches collectItems)', async () => {
+  test('throws when any item is missing a required key, not just the first item', async () => {
     await withTmpDir(async (dir) => {
       const cachePath = path.join(dir, 'cache.json');
       const valid = makeItem({ number: 1 });
@@ -246,12 +249,11 @@ describe('readCache — deep TriageItem shape rejections (gascity-dashboard-3qy)
         totals: { issues_open: 2, prs_open: 0 },
       };
       await fs.writeFile(cachePath, JSON.stringify(env), 'utf-8');
-      const got = await readCache(cachePath);
-      assert.deepEqual(got, env);
+      await assert.rejects(() => readCache(cachePath), /maintainer cache shape check failed/);
     });
   });
 
-  test('spot-checks the first item inside a cluster when unclustered is empty', async () => {
+  test('checks cluster items when unclustered is empty', async () => {
     await withTmpDir(async (dir) => {
       const cachePath = path.join(dir, 'cache.json');
       const item = makeItem();
@@ -276,8 +278,7 @@ describe('readCache — deep TriageItem shape rejections (gascity-dashboard-3qy)
         totals: { issues_open: 1, prs_open: 0 },
       };
       await fs.writeFile(cachePath, JSON.stringify(env), 'utf-8');
-      const got = await readCache(cachePath);
-      assert.equal(got, null);
+      await assert.rejects(() => readCache(cachePath), /maintainer cache shape check failed/);
     });
   });
 });

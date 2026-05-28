@@ -3,6 +3,12 @@ import { Router } from 'express';
 import type { SourceName } from 'gas-city-dashboard-shared';
 
 import { recordAudit } from '../audit.js';
+import { LOG_COMPONENT } from '../logging.js';
+import {
+  routeInternalError,
+  routeValidationError,
+  writeRouteError,
+} from '../route-errors.js';
 import { isSourceName, type SnapshotService } from '../snapshot/service.js';
 
 // /api/snapshot — aggregate read of the snapshot service for
@@ -23,20 +29,24 @@ export function snapshotRouter(service: SnapshotService): Router {
     try {
       const snapshot = await service.getSnapshot();
       res.json(snapshot);
-    } catch {
+    } catch (err) {
       // Per-source failures are absorbed by SourceCache and surface as
       // status='error' inside the envelope; reaching this catch means
       // SnapshotService itself broke (composition bug, JSON serialize).
       // Internal errors stay server-side — surfacing details would risk
       // leaking paths/symbol names to the browser.
-      res.status(500).json({ error: 'failed to build snapshot', kind: 'internal' });
+      writeRouteError(res, routeInternalError(err, {
+        component: LOG_COMPONENT.snapshot,
+        operation: 'failed to build snapshot',
+        responseError: 'failed to build snapshot',
+      }));
     }
   });
 
   router.post('/refresh', async (req, res) => {
     const validation = parseRefreshBody(req.body);
     if (validation.kind === 'invalid') {
-      res.status(400).json({ error: validation.error, kind: 'validation' });
+      writeRouteError(res, routeValidationError(validation.error));
       return;
     }
 
@@ -53,8 +63,12 @@ export function snapshotRouter(service: SnapshotService): Router {
         duration_ms: durationMs,
       });
       res.json(snapshot);
-    } catch {
-      res.status(500).json({ error: 'failed to refresh snapshot', kind: 'internal' });
+    } catch (err) {
+      writeRouteError(res, routeInternalError(err, {
+        component: LOG_COMPONENT.snapshot,
+        operation: 'failed to refresh snapshot',
+        responseError: 'failed to refresh snapshot',
+      }));
     }
   });
 

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { readBrowserStorage, writeBrowserStorage } from '../lib/browserStorage';
+import { reportClientError } from '../lib/clientErrorReporting';
 
 // useListFilters: per-view search + filter chips + project grouping
 // with collapse state persisted per view in localStorage.
@@ -90,21 +92,23 @@ interface UseListFiltersResult<T> {
 const COLLAPSED_KEY_PREFIX = 'gcd:listFilters:collapsed:';
 const EXPANDED_KEY_PREFIX = 'gcd:listFilters:expanded:';
 const SORT_KEY_PREFIX = 'gcd:listFilters:sortMode:';
+const COMPONENT = 'useListFilters';
 
 function storageKey(viewKey: string, defaultCollapsed: boolean): string {
   return (defaultCollapsed ? EXPANDED_KEY_PREFIX : COLLAPSED_KEY_PREFIX) + viewKey;
 }
 
 function loadOverrides(viewKey: string, defaultCollapsed: boolean): Set<string> {
+  const key = storageKey(viewKey, defaultCollapsed);
+  const stored = readBrowserStorage('localStorage', key, COMPONENT);
+  if (stored.status !== 'found') return new Set();
   try {
-    const raw = window.localStorage.getItem(storageKey(viewKey, defaultCollapsed));
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(stored.value);
     if (Array.isArray(parsed)) {
       return new Set(parsed.filter((v): v is string => typeof v === 'string'));
     }
-  } catch {
-    /* corrupt storage: ignore, start fresh */
+  } catch (err) {
+    reportStorageParseFailure(key, err);
   }
   return new Set();
 }
@@ -114,32 +118,38 @@ function saveOverrides(
   defaultCollapsed: boolean,
   ids: ReadonlySet<string>,
 ): void {
-  try {
-    window.localStorage.setItem(
-      storageKey(viewKey, defaultCollapsed),
-      JSON.stringify(Array.from(ids)),
-    );
-  } catch {
-    /* quota or disabled storage: silently degrade */
-  }
+  writeBrowserStorage(
+    'localStorage',
+    storageKey(viewKey, defaultCollapsed),
+    JSON.stringify(Array.from(ids)),
+    COMPONENT,
+  );
 }
 
 function loadSortMode(viewKey: string, fallback: SortMode): SortMode {
-  try {
-    const raw = window.localStorage.getItem(SORT_KEY_PREFIX + viewKey);
-    if (raw === 'alpha' || raw === 'activity') return raw;
-  } catch {
-    /* ignore */
+  const stored = readBrowserStorage('localStorage', SORT_KEY_PREFIX + viewKey, COMPONENT);
+  if (stored.status === 'found' && (stored.value === 'alpha' || stored.value === 'activity')) {
+    return stored.value;
   }
   return fallback;
 }
 
 function saveSortMode(viewKey: string, mode: SortMode): void {
-  try {
-    window.localStorage.setItem(SORT_KEY_PREFIX + viewKey, mode);
-  } catch {
-    /* ignore */
-  }
+  writeBrowserStorage('localStorage', SORT_KEY_PREFIX + viewKey, mode, COMPONENT);
+}
+
+function reportStorageParseFailure(key: string, err: unknown): void {
+  void reportClientError({
+    component: COMPONENT,
+    operation: 'localStorage.parse',
+    message: `${key}: ${errorMessage(err)}`,
+  });
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  return 'unknown error';
 }
 
 const EMPTY_PINNED: ReadonlyArray<string> = [];

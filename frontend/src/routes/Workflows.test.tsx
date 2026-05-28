@@ -1,6 +1,10 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import type { DashboardSnapshot, SourceStatus } from 'gas-city-dashboard-shared';
+import type {
+  DashboardSnapshot,
+  SourceStatus,
+  WorkflowLane,
+} from 'gas-city-dashboard-shared';
 import { api } from '../api/client';
 import { invalidateKey } from '../api/cache';
 import { WorkflowsPage } from './Workflows';
@@ -51,7 +55,9 @@ vi.mock('../hooks/useGcEvents', () => ({
 const mockSnapshot = api.snapshot as Mock;
 const mockSnapshotRefresh = api.snapshotRefresh as Mock;
 
-function buildEnvelope(workflowsStatus: SourceStatus = 'fresh'): DashboardSnapshot {
+function buildEnvelope(
+  workflowsStatus: Exclude<SourceStatus, 'error'> = 'fresh',
+): DashboardSnapshot {
   return {
     generatedAt: '2026-05-25T00:00:00.000Z',
     config: {
@@ -61,26 +67,94 @@ function buildEnvelope(workflowsStatus: SourceStatus = 'fresh'): DashboardSnapsh
       useFixtures: false,
     },
     headline: {
-      activeAgents: null,
-      maxAgents: null,
-      activeSessions: null,
-      activeWorkflows: 0,
-      githubOpenReviews: null,
+      activeAgents: { status: 'unavailable', source: 'city', error: 'city unavailable in test' },
+      maxAgents: { status: 'unavailable', source: 'city', error: 'city unavailable in test' },
+      activeSessions: { status: 'unavailable', source: 'city', error: 'city unavailable in test' },
+      activeWorkflows: { status: 'available', value: 0 },
     },
     sources: {
-      city: { source: 'city', status: 'fixture', fetchedAt: null, staleAt: null, error: null, data: null },
-      resources: { source: 'resources', status: 'fixture', fetchedAt: null, staleAt: null, error: null, data: null },
+      city: { source: 'city', status: 'error', error: 'city unavailable in test' },
+      resources: { source: 'resources', status: 'error', error: 'resources unavailable in test' },
       workflows: {
         source: 'workflows',
         status: workflowsStatus,
         fetchedAt: '2026-05-25T00:00:00.000Z',
         staleAt: '2026-05-25T00:01:00.000Z',
-        error: null,
-        data: { totalActive: 0, runCounts: { total: 0, visible: 0, prReview: 0, designReview: 0, bugfix: 0, blocked: 0, other: 0 }, lanes: [], recentChanges: [], census: null },
+        error: { kind: 'none' },
+        data: {
+          totalActive: 0,
+          runCounts: {
+            total: 0,
+            visible: 0,
+            prReview: 0,
+            designReview: 0,
+            bugfix: 0,
+            blocked: 0,
+            other: 0,
+          },
+          lanes: [],
+          recentChanges: [],
+          census: { status: 'unavailable', error: 'workflow health has not been derived' },
+        },
       },
-      github: { source: 'github', status: 'fixture', fetchedAt: null, staleAt: null, error: null, data: null },
     },
   };
+}
+
+function completedLane(): WorkflowLane {
+  return {
+    id: 'done-root',
+    title: 'Completed formula run',
+    formula: { status: 'known', name: 'mol-adopt-pr-v2' },
+    scope: {
+      status: 'available',
+      kind: 'city',
+      ref: 'racoon-city',
+      rootStoreRef: 'city:racoon-city',
+    },
+    external: { status: 'unavailable', error: 'external unavailable in test' },
+    phase: 'complete',
+    phaseLabel: 'complete',
+    statusCounts: { closed: 2 },
+    activeAssignees: [],
+    updatedAt: { status: 'available', at: '2026-05-27T22:01:00Z' },
+    stages: [
+      { key: 'intake', label: 'Intake', status: 'complete' },
+      { key: 'implementation', label: 'Implementation', status: 'complete' },
+      { key: 'review', label: 'Review', status: 'complete' },
+      { key: 'approval', label: 'Approval', status: 'complete' },
+      { key: 'finalization', label: 'Finalization', status: 'complete' },
+    ],
+    progress: {
+      status: 'stage_only',
+      stage: {
+        status: 'available',
+        index: 4,
+        key: 'finalization',
+        label: 'Finalization',
+      },
+      error: 'active workflow step unavailable',
+    },
+    formulaStageResolved: false,
+    health: {
+      status: 'available',
+      data: {
+        phaseConfidence: 'known',
+        needsOperator: false,
+        stuckNode: { status: 'unavailable', error: 'workflow stuck node unavailable' },
+        thrashingDetected: false,
+        session: { status: 'unresolved', error: 'workflow session unresolved' },
+      },
+    },
+  };
+}
+
+function requireWorkflowData(envelope: DashboardSnapshot) {
+  const workflows = envelope.sources.workflows;
+  if (workflows.status === 'error') {
+    throw new Error(workflows.error);
+  }
+  return workflows.data;
 }
 
 beforeEach(() => {
@@ -133,6 +207,64 @@ describe('WorkflowsPage — SSE wiring (gascity-dashboard-bqn)', () => {
     await waitForMount();
     // SseIndicator with state='open' renders a StatusBadge with label 'live'.
     expect(screen.getByText(/^live$/i)).toBeTruthy();
+  });
+
+  it('does not flatten an unavailable workflow count into zero', async () => {
+    const envelope = buildEnvelope('fresh');
+    envelope.headline.activeWorkflows = {
+      status: 'unavailable',
+      source: 'workflows',
+      error: 'workflow collector unavailable in test',
+    };
+    mockSnapshot.mockResolvedValue(envelope);
+
+    mount();
+    await waitForMount();
+
+    expect(
+      screen.getByText(/Workflow counts unavailable: workflow collector unavailable in test/i),
+    ).toBeTruthy();
+    expect(screen.queryByText(/^0 active workflows/i)).toBeNull();
+  });
+
+  it('shows completed workflow runs without relabeling them as active', async () => {
+    const envelope = buildEnvelope('fresh');
+    const lane = completedLane();
+    const workflows = requireWorkflowData(envelope);
+    envelope.headline.activeWorkflows = { status: 'available', value: 0 };
+    workflows.runCounts.total = 1;
+    workflows.runCounts.visible = 1;
+    workflows.runCounts.prReview = 1;
+    workflows.totalActive = 1;
+    workflows.lanes = [lane];
+    workflows.census = {
+      status: 'available',
+      data: {
+        byPhase: {
+          intake: 0,
+          implementation: 0,
+          review: 0,
+          approval: 0,
+          finalization: 0,
+          blocked: 0,
+          complete: 1,
+          active: 0,
+        },
+        totalInFlight: 0,
+        unverifiable: 0,
+        knownDenominator: 0,
+        thrashing: 0,
+      },
+    };
+    mockSnapshot.mockResolvedValue(envelope);
+
+    mount();
+    await waitForMount();
+
+    expect(screen.getByText(/^0 active workflows/i)).toBeTruthy();
+    expect(screen.getByText('Completed formula run')).toBeTruthy();
+    expect(screen.getByText(/^Runs$/i)).toBeTruthy();
+    expect(screen.queryByText(/^No active workflows\\.$/i)).toBeNull();
   });
 
   it('manual Refresh button calls api.snapshotRefresh([workflows]), not api.snapshot()', async () => {

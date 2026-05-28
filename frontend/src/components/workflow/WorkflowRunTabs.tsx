@@ -92,5 +92,5 @@ function TabButton({
 }
 
 function nodeHasSession(node: WorkflowDisplayNode): boolean {
-  return node.executionInstances.some((instance) => instance.sessionLink);
+  return node.executionInstances.some((instance) => instance.session.kind === 'attached');
 }

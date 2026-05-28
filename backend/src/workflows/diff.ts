@@ -2,30 +2,35 @@ import type {
   WorkflowChangedFile,
   WorkflowChangedFileKind,
   WorkflowDiffResponse,
+  WorkflowDiffRootPath,
+  WorkflowExecutionPath,
 } from 'gas-city-dashboard-shared';
 import { execWorkflowGit } from '../exec.js';
+import { LOG_COMPONENT, errorMessage, logWarn } from '../logging.js';
 
 export async function readWorkflowGitDiff(
-  executionPath: string | null,
+  executionPath: WorkflowExecutionPath,
 ): Promise<WorkflowDiffResponse> {
-  if (!executionPath) {
-    return emptyDiff('path_unknown', null);
+  if (executionPath.kind === 'unavailable') {
+    return emptyDiff('path_unknown', unavailableRoot('path_unknown'));
   }
+  const cwd = executionPath.path;
 
   let rootPath: string;
   try {
-    const result = await runWorkflowGit(executionPath, 'root');
+    const result = await runWorkflowGit(cwd, 'root');
     rootPath = result.stdout.trim();
-    if (rootPath.length === 0) return emptyDiff('not_git', null);
-  } catch {
-    return emptyDiff('not_git', null);
+    if (rootPath.length === 0) return emptyDiff('not_git', unavailableRoot('not_git'));
+  } catch (err) {
+    logWarn(LOG_COMPONENT.workflows, `workflow git root failed for ${cwd}: ${errorMessage(err)}`);
+    return emptyDiff('not_git', unavailableRoot('not_git'));
   }
 
   try {
     const [statusResult, unstagedResult, stagedResult] = await Promise.all([
-      runWorkflowGit(executionPath, 'status'),
-      runWorkflowGit(executionPath, 'diff'),
-      runWorkflowGit(executionPath, 'diff-cached'),
+      runWorkflowGit(cwd, 'status'),
+      runWorkflowGit(cwd, 'diff'),
+      runWorkflowGit(cwd, 'diff-cached'),
     ]);
     const status = statusResult.stdout
       .split('\n')
@@ -33,7 +38,7 @@ export async function readWorkflowGitDiff(
       .filter((line) => line.length > 0);
     return {
       kind: 'ok',
-      rootPath,
+      rootPath: { kind: 'known', path: rootPath },
       status,
       changedFiles: status.map(parseStatusLine).filter(isChangedFile),
       unstagedDiff: unstagedResult.stdout,
@@ -43,17 +48,24 @@ export async function readWorkflowGitDiff(
         unstagedResult.truncated ||
         stagedResult.truncated,
     };
-  } catch {
+  } catch (err) {
+    logWarn(LOG_COMPONENT.workflows, `workflow git diff failed for ${cwd}: ${errorMessage(err)}`);
     return {
-      ...emptyDiff('error', rootPath),
+      kind: 'error',
+      rootPath: { kind: 'known', path: rootPath },
+      status: [],
+      changedFiles: [],
+      unstagedDiff: '',
+      stagedDiff: '',
+      truncated: false,
       error: 'git diff failed',
     };
   }
 }
 
 function emptyDiff(
-  kind: WorkflowDiffResponse['kind'],
-  rootPath: string | null,
+  kind: Exclude<WorkflowDiffResponse['kind'], 'error'>,
+  rootPath: WorkflowDiffRootPath,
 ): WorkflowDiffResponse {
   return {
     kind,
@@ -64,6 +76,10 @@ function emptyDiff(
     stagedDiff: '',
     truncated: false,
   };
+}
+
+function unavailableRoot(reason: Extract<WorkflowDiffRootPath, { kind: 'unavailable' }>['reason']): WorkflowDiffRootPath {
+  return { kind: 'unavailable', reason };
 }
 
 async function runWorkflowGit(

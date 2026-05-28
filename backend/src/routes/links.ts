@@ -5,7 +5,8 @@ import { parseRef } from '../links/node-ref.js';
 import { buildRelationIndex } from '../links/relation-index.js';
 import { buildLinkView } from '../links/build-link-view.js';
 import { ResolutionRollup } from '../links/instrumentation.js';
-import { toWireInternal500 } from '../lib/sanitise-error.js';
+import { LOG_COMPONENT, errorMessage, logWarn } from '../logging.js';
+import { routeUpstreamError, writeRouteError } from '../route-errors.js';
 
 // GET /api/links/:ref — bead-ID cross-entity linked view (gascity-dashboard-j4x).
 //
@@ -59,24 +60,17 @@ export function linksRouter(gc: GcClient, opts: LinksRouterOptions = {}): Router
         // The bead→PR/issue numbers resolve to unresolved rows; their
         // fetchedAt stays null until a real GitHub join lands (R8/OQ#2).
         githubFetchedAt: null,
-        now: opts.now,
+        ...(opts.now !== undefined ? { now: opts.now } : {}),
         recorder: rollup.recorder(),
       });
       res.json(view);
     } catch (err) {
-      if (GcClient.isTimeoutError(err)) {
-        res
-          .status(504)
-          .json({ error: 'gc supervisor did not respond in time', kind: 'upstream-timeout' });
-        return;
-      }
-      console.warn(`[links] /api/links/:ref failed: ${(err as Error).message}`);
-      const wire = toWireInternal500(err, {
-        status: 502,
-        error: 'failed to build linked view',
-        kind: 'upstream',
-      });
-      res.status(wire.status).json(wire.body);
+      writeRouteError(res, routeUpstreamError(err, {
+        component: LOG_COMPONENT.links,
+        operation: '/api/links/:ref failed',
+        responseError: 'failed to build linked view',
+        isTimeout: GcClient.isTimeoutError,
+      }));
     }
   });
 
@@ -107,8 +101,9 @@ async function fetchSources(gc: GcClient): Promise<Sources> {
   const beads = Array.isArray(beadList.items) ? beadList.items : [];
   let partial = false;
   if (typeof beadList.total === 'number' && beadList.total > beads.length) {
-    console.warn(
-      `[links] bead set truncated: supervisor total ${beadList.total} > fetched ${beads.length}; serving partial`,
+    logWarn(
+      LOG_COMPONENT.links,
+      `bead set truncated: supervisor total ${beadList.total} > fetched ${beads.length}; serving partial`,
     );
     partial = true;
   }
@@ -117,7 +112,7 @@ async function fetchSources(gc: GcClient): Promise<Sources> {
     const sessionList = await gc.listSessions();
     sessions = Array.isArray(sessionList.items) ? sessionList.items : [];
   } catch (err) {
-    console.warn(`[links] session fetch failed; serving partial: ${(err as Error).message}`);
+    logWarn(LOG_COMPONENT.links, `session fetch failed; serving partial: ${errorMessage(err)}`);
     partial = true;
   }
   return { beads, sessions, partial, supervisorFetchedAt };

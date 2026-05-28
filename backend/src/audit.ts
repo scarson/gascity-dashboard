@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import type { AdminAuditEvent } from 'gas-city-dashboard-shared';
+import { LOG_COMPONENT, errorMessage, logError } from './logging.js';
 
 // Audit log writer. Appends one JSON-per-line entry to .gc/events.jsonl —
 // the same durable channel gc uses, which survives dolt-hq corruption
@@ -26,6 +27,6 @@ export async function recordAudit(
   } catch (err) {
     // Audit-log write failures are operationally important but should
     // never crash the request path. Surface via stderr only.
-    console.error(`[admin-audit] write failed: ${(err as Error).message}`);
+    logError(LOG_COMPONENT.adminAudit, `write failed: ${errorMessage(err)}`);
   }
 }

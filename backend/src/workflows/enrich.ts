@@ -8,6 +8,7 @@ import type {
 } from 'gas-city-dashboard-shared';
 import { meta, nonEmpty } from './bead-fields.js';
 import { buildRunningFormulaRun } from './formula-run.js';
+import type { RunningFormulaRunInput } from './formula-run.js';
 
 interface EnrichOptions {
   rigRoot?: string;
@@ -51,7 +52,7 @@ export function enrichWorkflowRun(
     throw new UnsupportedWorkflowError('workflow partial flag is missing or invalid');
   }
 
-  const formulaRun = buildRunningFormulaRun({
+  const runInput: RunningFormulaRunInput = {
     raw,
     workflowId,
     rootBeadId,
@@ -59,12 +60,14 @@ export function enrichWorkflowRun(
     resolvedRootStore,
     scopeKind,
     scopeRef,
-    root,
     beads,
-    rigRoot: opts.rigRoot,
-    sessions: opts.sessions,
-    formulaDetail: opts.formulaDetail,
-  });
+  };
+  if (root !== undefined) runInput.root = root;
+  if (opts.rigRoot !== undefined) runInput.rigRoot = opts.rigRoot;
+  if (opts.sessions !== undefined) runInput.sessions = opts.sessions;
+  if (opts.formulaDetail !== undefined) runInput.formulaDetail = opts.formulaDetail;
+
+  const formulaRun = buildRunningFormulaRun(runInput);
 
   return {
     workflowId,
@@ -77,10 +80,7 @@ export function enrichWorkflowRun(
     formula: formulaRun.formula,
     executionPath: formulaRun.executionPath,
     snapshotVersion: raw.snapshot_version,
-    snapshotEventSeq:
-      typeof raw.snapshot_event_seq === 'number'
-        ? raw.snapshot_event_seq
-        : null,
+    snapshotEventSeq: formulaRun.progress.snapshotEventSeq,
     partial: raw.partial,
     progress: formulaRun.progress,
     nodes: formulaRun.nodes,

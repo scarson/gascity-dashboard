@@ -1,16 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TriageItem } from 'gas-city-dashboard-shared';
+import { selectionKey, type SelectionKey } from '../components/maintainer/selectionKey';
+export { selectionKey, type SelectionKey } from '../components/maintainer/selectionKey';
 
 // Pure helpers for the maintainer bulk-sling selection state
 // (gascity-dashboard-0nn). Lives outside Maintainer.tsx so vitest can
 // exercise the logic without rendering React. Selection is in-memory
 // only; a page refresh clears it (bulk triage is a 'do it now'
 // operation, not a saved view).
-
-export interface SelectionKey {
-  readonly kind: 'pr' | 'issue';
-  readonly number: number;
-}
 
 /** Operator-facing sling intents in the maintainer view's bulk action bar
  *  (gascity-dashboard-5xw). `'triage'` asks an agent to assess an item
@@ -25,14 +22,6 @@ export interface SlingRequest {
   readonly html_url: string;
   readonly intent: MaintainerSlingIntent;
   readonly target?: string;
-}
-
-/**
- * String key for use in a `Set<string>`. Composite of kind + number so a
- * PR and an issue sharing the same number can both be selected.
- */
-export function selectionKey(item: SelectionKey): string {
-  return `${item.kind}:${item.number}`;
 }
 
 /** Immutable add/remove on a selection set, keyed by selectionKey. */

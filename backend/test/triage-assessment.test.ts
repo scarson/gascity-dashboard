@@ -255,19 +255,6 @@ describe('sortScore — vetted overrides heuristic, falls back when null', () =>
     assert.equal(sortScore(item), 0);
   });
 
-  test('tolerates triage_assessment === undefined (stale cache from pre-field build)', () => {
-    // An envelope on disk written before the triage_assessment field shipped
-    // will deserialise with the field missing entirely. The wire type
-    // forbids undefined, so we cast through unknown to model the runtime
-    // shape explicitly. Strict `!== null` would let undefined into a
-    // property read and throw; loose `!= null` collapses both cases.
-    const stale = makeItem({}) as unknown as TriageItem & {
-      triage_assessment: undefined;
-    };
-    delete (stale as { triage_assessment?: unknown }).triage_assessment;
-    assert.equal(sortScore(stale as TriageItem), 200);
-  });
-
   test('sort comparator using sortScore puts vetted high above heuristic low within same tier', () => {
     const vettedHigh = makeItem({
       number: 1,

@@ -1,9 +1,10 @@
-import { test, describe, beforeEach, afterEach } from 'node:test';
+import { test, describe, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 import { eventsRouter } from '../src/routes/events.js';
+import { GcClient } from '../src/gc-client.js';
 
 // gascity-dashboard-iew: backend-side SSE proxy so the browser doesn't
 // need to reach the supervisor's loopback directly. Tests cover: byte
@@ -69,8 +70,13 @@ function startFakeSse(): Promise<FakeSse> {
 }
 
 function buildApp(supervisorUrl: string): express.Express {
+  const gc = new GcClient({
+    baseUrl: supervisorUrl,
+    cityName: 'test',
+    defaultTimeoutMs: 500,
+  });
   const app = express();
-  app.use('/api/events', eventsRouter({ supervisorUrl, cityName: 'test', heartbeatMs: 60_000 }));
+  app.use('/api/events', eventsRouter({ gc, heartbeatMs: 60_000 }));
   return app;
 }
 
@@ -238,6 +244,39 @@ describe('events proxy: GET /api/events/stream', () => {
       assert.match(body, /event: error/);
       assert.match(body, /gc supervisor returned 500/);
     } finally {
+      await close();
+    }
+  });
+
+  test('logs cleanup failures when canceling a non-200 upstream body fails', async () => {
+    const realFetch = globalThis.fetch;
+    const realFetchBound = realFetch.bind(globalThis);
+    const warnMock = mock.method(console, 'warn', () => undefined);
+    globalThis.fetch = async () => ({
+      ok: false,
+      status: 503,
+      body: {
+        cancel: () => Promise.reject(new Error('cancel failed')),
+      },
+    } as unknown as globalThis.Response);
+
+    const app = buildApp(fake.baseUrl);
+    const { url, close } = await startApp(app);
+    try {
+      const res = await realFetchBound(`${url}/api/events/stream`);
+      assert.equal(res.status, 200);
+      const body = await res.text();
+      assert.match(body, /event: error/);
+      assert.match(body, /gc supervisor returned 503/);
+      assert.ok(
+        warnMock.mock.calls.some((call) =>
+          String(call.arguments[0]).includes('failed to cancel SSE upstream body: cancel failed'),
+        ),
+        'expected SSE cancel cleanup failure to be logged',
+      );
+    } finally {
+      globalThis.fetch = realFetch;
+      warnMock.mock.restore();
       await close();
     }
   });

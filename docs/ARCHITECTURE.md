@@ -42,7 +42,13 @@ Current flow:
 
 ## Dolt-noms ring buffer
 
-The ring buffer scaffolding is wired (`backend/src/routes/dolt.ts`): 144 slots, 10-minute sampling cadence. The actual metric source (`sampleDoltNomsSize()`) is a stub — mechanic surgical-ask is filed for "expose a dolt-noms metric endpoint or document where to read the disk size." Until that lands, `/api/dolt-noms/trend` returns `{samples: [], available: false, source: null}` and the Health page renders a calm "metric source pending" panel instead of fake zeros. Once mechanic ships the source, the only code change is swapping `sampleDoltNomsSize()` — the endpoint shape doesn't move.
+The ring buffer is wired in `backend/src/routes/dolt.ts`: 144 slots, 10-minute
+sampling cadence, and explicit unavailable states. The sampler reads the
+recursive byte size of `<GC_CITY_PATH>/.dolt/noms`. When `GC_CITY_PATH` is
+unset, relative, missing, not a directory, or the sample fails, the endpoint
+returns `available: false` with a concrete `reason` instead of fake zeros. The
+Health page renders that reason directly so operators can fix configuration
+without digging through code.
 
 ## Peek is HTTP, not shell-exec
 

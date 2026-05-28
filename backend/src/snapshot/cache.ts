@@ -1,4 +1,4 @@
-import type { SourceName, SourceState } from 'gas-city-dashboard-shared';
+import type { SourceError, SourceName, SourceState } from 'gas-city-dashboard-shared';
 
 // TTL + single-flight + stale-while-error + fixture-fallback cache.
 // Ported from demo-dash src/server/cache.ts (gascity-dashboard-glw).
@@ -30,9 +30,9 @@ export interface SourceCacheOptions<T> {
   source: SourceName;
   ttlMs: number;
   load: () => Promise<T> | T;
-  loadFixture?: () => Promise<T> | T;
-  useFixture?: boolean;
-  now?: () => Date;
+  loadFixture?: (() => Promise<T> | T) | undefined;
+  useFixture?: boolean | undefined;
+  now?: (() => Date) | undefined;
   /**
    * Sanitizer applied to the raw error before it lands in
    * SourceState.error (the wire shape served to the browser via
@@ -60,7 +60,7 @@ export interface SourceCacheOptions<T> {
    * See gascity-dashboard-fhj (original resources ENOENT leak) and
    * gascity-dashboard-4r5 (default inversion).
    */
-  sanitizeErrorMessage?: ((err: unknown) => string) | null;
+  sanitizeErrorMessage?: ((err: unknown) => string) | null | undefined;
   /**
    * Optional server-side observer for the raw error. Fires before
    * sanitization so the caller can log the full Error.message / stack
@@ -68,7 +68,7 @@ export interface SourceCacheOptions<T> {
    * driven by `sanitizeErrorMessage` (default-on per
    * gascity-dashboard-4r5).
    */
-  onError?: (source: SourceName, phase: 'load' | 'fixture', err: unknown) => void;
+  onError?: ((source: SourceName, phase: 'load' | 'fixture', err: unknown) => void) | undefined;
 }
 
 interface CacheEntry<T> {
@@ -80,18 +80,18 @@ export class SourceCache<T> {
   private readonly source: SourceName;
   private readonly ttlMs: number;
   private readonly load: () => Promise<T> | T;
-  private readonly loadFixture?: () => Promise<T> | T;
+  private readonly loadFixture: (() => Promise<T> | T) | undefined;
   private readonly useFixture: boolean;
   private readonly now: () => Date;
-  private readonly sanitizeErrorMessage?: ((err: unknown) => string) | null;
-  private readonly onError?: (
+  private readonly sanitizeErrorMessage: ((err: unknown) => string) | null | undefined;
+  private readonly onError: ((
     source: SourceName,
     phase: 'load' | 'fixture',
     err: unknown,
-  ) => void;
+  ) => void) | undefined;
   private liveEntry: CacheEntry<T> | null = null;
   private fixtureEntry: CacheEntry<T> | null = null;
-  private lastError: string | null = null;
+  private lastError: SourceError = noSourceError();
   private inFlight: Promise<SourceState<T>> | null = null;
 
   constructor(options: SourceCacheOptions<T>) {
@@ -136,10 +136,7 @@ export class SourceCache<T> {
       this.currentState() ?? {
         source: this.source,
         status: 'error',
-        fetchedAt: null,
-        staleAt: null,
-        error: this.lastError,
-        data: null,
+        error: sourceErrorMessage(this.lastError),
       }
     );
   }
@@ -152,11 +149,11 @@ export class SourceCache<T> {
         fetchedAtMs: this.now().getTime(),
       };
       this.fixtureEntry = null;
-      this.lastError = null;
-      return this.stateFromEntry(this.liveEntry, 'fresh', null);
+      this.lastError = noSourceError();
+      return this.stateFromEntry(this.liveEntry, 'fresh', noSourceError());
     } catch (error) {
       this.onError?.(this.source, 'load', error);
-      this.lastError = this.sanitize(error);
+      this.lastError = sourceError(this.sanitize(error));
 
       if (this.useFixture && this.loadFixture) {
         try {
@@ -168,7 +165,9 @@ export class SourceCache<T> {
           return this.stateFromEntry(this.fixtureEntry, 'fixture', this.lastError);
         } catch (fixtureError) {
           this.onError?.(this.source, 'fixture', fixtureError);
-          this.lastError = `${this.lastError}; fixture failed: ${this.sanitize(fixtureError)}`;
+          this.lastError = sourceError(
+            `${sourceErrorMessage(this.lastError)}; fixture failed: ${this.sanitize(fixtureError)}`,
+          );
         }
       }
 
@@ -183,10 +182,7 @@ export class SourceCache<T> {
       return {
         source: this.source,
         status: 'error',
-        fetchedAt: null,
-        staleAt: null,
-        error: this.lastError,
-        data: null,
+        error: sourceErrorMessage(this.lastError),
       };
     }
   }
@@ -200,7 +196,7 @@ export class SourceCache<T> {
       return this.stateFromEntry(
         this.liveEntry,
         status,
-        status === 'stale' ? this.lastError : null,
+        status === 'stale' ? this.lastError : noSourceError(),
       );
     }
 
@@ -246,8 +242,16 @@ export class SourceCache<T> {
   private stateFromEntry(
     entry: CacheEntry<T>,
     status: SourceState<T>['status'],
-    error: string | null,
+    error: SourceError,
   ): SourceState<T> {
+    if (status === 'error') {
+      return {
+        source: this.source,
+        status,
+        error: sourceErrorMessage(error),
+      };
+    }
+
     return {
       source: this.source,
       status,
@@ -257,6 +261,18 @@ export class SourceCache<T> {
       data: entry.data,
     };
   }
+}
+
+function noSourceError(): SourceError {
+  return { kind: 'none' };
+}
+
+function sourceError(message: string): SourceError {
+  return { kind: 'message', message };
+}
+
+function sourceErrorMessage(error: SourceError): string {
+  return error.kind === 'message' ? error.message : 'source has not been fetched';
 }
 
 export function errorMessage(error: unknown): string {

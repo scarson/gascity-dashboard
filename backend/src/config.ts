@@ -2,6 +2,7 @@
 // can audit the configurable surface.
 
 import { AGENT_ALIAS_RE } from './exec.js';
+import { LOG_COMPONENT, logWarn } from './logging.js';
 
 export interface AdminConfig {
   /** Listener port. Default 8081, side-by-side with gc dashboard at 8080. */
@@ -32,17 +33,15 @@ export interface AdminConfig {
   disabled: boolean;
   /**
    * Repo (owner/name) the maintainer triage view fetches issues + PRs from.
-   * Env: MAINTAINER_REPO. Default: gastownhall/gascity. v0 single-repo;
-   * a future bead can promote this to a CSV list when the maintainer
-   * tracks multiple forks.
+   * Env: MAINTAINER_REPO. Default: gastownhall/gascity.
    */
   maintainerRepo: string;
   /**
    * Absolute path to the maintainer enrichment cache file. Env:
    * MAINTAINER_CACHE_PATH. Default: $HOME/.gascity-dashboard/maintainer-cache.json.
-   * The dashboard atomically writes the cache after each refresh; reads
-   * are best-effort (missing file → empty state, parse error → empty
-   * state with a warning logged).
+   * The dashboard atomically writes the cache after each refresh. Missing
+   * cache is an explicit empty state; parse and shape errors are logged and
+   * surfaced as maintainer-route errors.
    */
   maintainerCachePath: string;
   /**
@@ -57,7 +56,7 @@ export interface AdminConfig {
   /**
    * Default agent alias for `gc sling` dispatch from the maintainer view.
    * Env: MAINTAINER_SLING_TARGET. Default: 'mayor'.
-   * Bad env values fall back to the default with a console.warn — a
+   * Bad env values fall back to the default with an operational warning — a
    * typo in this single optional env should not dark the whole
    * dashboard. The exec wrapper re-validates target at request time.
    */
@@ -99,8 +98,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdminConfig {
     gcSupervisorUrl: (env.GC_SUPERVISOR_URL ?? 'http://127.0.0.1:8372').replace(/\/+$/, ''),
     cityName: env.GC_CITY_NAME ?? 'racoon-city',
     cityPath: env.GC_CITY_PATH ?? '',
-    auditLogPath:
-      env.ADMIN_AUDIT_LOG_PATH ?? process.env.HOME ? `${process.env.HOME}/.gc/events.jsonl` : '.gc/events.jsonl',
+    auditLogPath: env.ADMIN_AUDIT_LOG_PATH ?? defaultAuditLogPath(env),
     frontendDistPath: env.ADMIN_FRONTEND_DIST ?? '../frontend/dist',
     disabled: env.ADMIN_DASHBOARD_DISABLED === '1',
     maintainerRepo: env.MAINTAINER_REPO ?? 'gastownhall/gascity',
@@ -130,12 +128,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdminConfig {
 function parseSlingTarget(envName: string, raw: string | undefined, fallback: string): string {
   if (raw === undefined || raw.length === 0) return fallback;
   if (!AGENT_ALIAS_RE.test(raw)) {
-    console.error(
-      `[admin] ${envName}=${JSON.stringify(raw)} is not a valid agent alias; falling back to '${fallback}'`,
+    logWarn(
+      LOG_COMPONENT.admin,
+      `${envName}=${JSON.stringify(raw)} is not a valid agent alias; falling back to '${fallback}'`,
     );
     return fallback;
   }
   return raw;
+}
+
+function defaultAuditLogPath(env: NodeJS.ProcessEnv): string {
+  return env.HOME ? `${env.HOME}/.gc/events.jsonl` : '.gc/events.jsonl';
 }
 
 function parseIntervalMs(raw: string | undefined, fallback: number): number {

@@ -16,7 +16,7 @@ import {
   fetchTriage as defaultFetchTriage,
   selectOneMark,
 } from '../maintainer/triage.js';
-import { readCache, writeCache } from '../maintainer/storage.js';
+import { readCache, writeCache, type CacheReadResult } from '../maintainer/storage.js';
 import { isMarkCandidate } from '../maintainer/classifier.js';
 import { resolveTargetToSession } from '../maintainer/resolve-target.js';
 import {
@@ -25,7 +25,14 @@ import {
   writeSlungEntry,
 } from '../maintainer/slung-state.js';
 import { addSseClient, notifyRefresh, removeSseClient } from '../maintainer/sse.js';
-import { toWireExecError, toWireInternal500 } from '../lib/sanitise-error.js';
+import { toWireExecError } from '../lib/sanitise-error.js';
+import { LOG_COMPONENT, errorMessage, logWarn } from '../logging.js';
+import {
+  routeInternalError,
+  routeUpstreamError,
+  routeValidationError,
+  writeRouteError,
+} from '../route-errors.js';
 
 const GH_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 const GH_URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/(issues|pull)\/\d+$/;
@@ -98,8 +105,20 @@ export function maintainerRouter({
   const router = Router();
 
   router.get('/triage', async (_req, res) => {
-    const cached = await readCache(cachePath);
-    if (cached !== null) {
+    let cache: CacheReadResult;
+    try {
+      cache = await readCache(cachePath);
+    } catch (err) {
+      writeRouteError(res, routeInternalError(err, {
+        component: LOG_COMPONENT.maintainer,
+        operation: 'GET /api/maintainer/triage cache read failed',
+        responseError: 'maintainer triage cache unavailable',
+      }));
+      return;
+    }
+
+    if (cache.status === 'ready') {
+      const cached = cache.envelope;
       // Splice-at-read overlay (gascity-dashboard-9qs): hydrate item.slung
       // from the persisted slung-state file, then re-run isMarkCandidate +
       // selectOneMark over the modified candidate set so the maroon ●
@@ -107,7 +126,7 @@ export function maintainerRouter({
       // (6h default). Vetted items force slung=null (the agent already
       // delivered; slung was the placeholder while waiting).
       await applySlungOverlay(cached, slungStatePath);
-      void recordAudit({
+      await recordAudit({
         type: 'dashboard.fetch',
         endpoint: 'GET /api/maintainer/triage',
         parsed_args: {
@@ -148,7 +167,7 @@ export function maintainerRouter({
       const envelope = await fetchTriage(repo);
       await writeCache(cachePath, envelope);
       notifyRefresh(envelope);
-      void recordAudit({
+      await recordAudit({
         type: 'dashboard.fetch',
         endpoint: 'POST /api/maintainer/refresh',
         parsed_args: {
@@ -168,24 +187,18 @@ export function maintainerRouter({
         // safe strings by ExecError construction (see backend/src/exec.ts),
         // so they pass through.
         if (err.kind === 'spawn') {
-          console.warn(`[maintainer] /api/maintainer/refresh spawn failed: ${err.message}`);
+          logWarn(LOG_COMPONENT.maintainer, `/api/maintainer/refresh spawn failed: ${err.message}`);
         }
         const wire = toWireExecError(err, status);
         res.status(wire.status).json(wire.body);
         return;
       }
-      // gascity-dashboard-ayr: mirror the sr6 redaction. Non-ExecError
-      // failures from fetchTriage (e.g. an unrecognised network error)
-      // can embed OS detail in err.message; details.name (Error class)
-      // is the only safe channel for the browser. journalctl keeps the
-      // full message via the warn below.
-      console.warn(`[maintainer] /api/maintainer/refresh failed: ${(err as Error).message}`);
-      const wire = toWireInternal500(err, {
-        status: 502,
-        error: 'failed to refresh maintainer triage',
-        kind: 'upstream',
-      });
-      res.status(wire.status).json(wire.body);
+      writeRouteError(res, routeUpstreamError(err, {
+        component: LOG_COMPONENT.maintainer,
+        operation: '/api/maintainer/refresh failed',
+        responseError: 'failed to refresh maintainer triage',
+        isTimeout: () => false,
+      }));
     }
   });
 
@@ -208,13 +221,11 @@ export function maintainerRouter({
     };
 
     if (!isSlingKind(body.kind)) {
-      res.status(400).json({ error: 'invalid kind (pr|issue)', kind: 'validation' });
+      writeRouteError(res, routeValidationError('invalid kind (pr|issue)'));
       return;
     }
     if (!isSlingIntent(body.intent)) {
-      res
-        .status(400)
-        .json({ error: 'invalid intent (review|draft|triage)', kind: 'validation' });
+      writeRouteError(res, routeValidationError('invalid intent (review|draft|triage)'));
       return;
     }
     if (
@@ -226,19 +237,19 @@ export function maintainerRouter({
       // a real upstream item, so reject before it lands in slung-state.
       body.number > 2_147_483_647
     ) {
-      res.status(400).json({ error: 'invalid number', kind: 'validation' });
+      writeRouteError(res, routeValidationError('invalid number'));
       return;
     }
     if (
       typeof body.html_url !== 'string' ||
       body.html_url.length > MAX_URL_LEN
     ) {
-      res.status(400).json({ error: 'invalid html_url', kind: 'validation' });
+      writeRouteError(res, routeValidationError('invalid html_url'));
       return;
     }
     const urlMatch = GH_URL_RE.exec(body.html_url);
     if (urlMatch === null) {
-      res.status(400).json({ error: 'invalid html_url', kind: 'validation' });
+      writeRouteError(res, routeValidationError('invalid html_url'));
       return;
     }
     // Cross-check: kind='pr' must point at /pull/, kind='issue' at /issues/.
@@ -246,7 +257,7 @@ export function maintainerRouter({
     const urlPath = urlMatch[1];
     const expected = body.kind === 'pr' ? 'pull' : 'issues';
     if (urlPath !== expected) {
-      res.status(400).json({ error: 'kind/html_url mismatch', kind: 'validation' });
+      writeRouteError(res, routeValidationError('kind/html_url mismatch'));
       return;
     }
     // Intent-aware default target: 'triage' routes to chief-of-staff
@@ -257,7 +268,7 @@ export function maintainerRouter({
       body.intent === 'triage' && triageTarget !== undefined ? triageTarget : slingTarget;
     if (body.target !== undefined) {
       if (typeof body.target !== 'string' || !AGENT_ALIAS_RE.test(body.target)) {
-        res.status(400).json({ error: 'invalid target alias', kind: 'validation' });
+        writeRouteError(res, routeValidationError('invalid target alias'));
         return;
       }
       target = body.target;
@@ -312,8 +323,9 @@ export function maintainerRouter({
         // won't see the One Mark move until the next refresh. Log
         // and continue rather than 500ing on a downstream-of-success
         // disk hiccup.
-        console.warn(
-          `[maintainer] slung-state write failed (sling succeeded): ${(slungErr as Error).message}`,
+        logWarn(
+          LOG_COMPONENT.maintainer,
+          `slung-state write failed (sling succeeded): ${errorMessage(slungErr)}`,
         );
       }
       // Push connected clients to refetch so the One Mark moves
@@ -354,34 +366,32 @@ export function maintainerRouter({
       // failure (non-2xx from the supervisor, network error) maps to 502
       // upstream. The raw message can embed the supervisor URL / host
       // (GcClient throws `gc supervisor returned NNN`; fetch errors embed
-      // host:port), so it stays server-side in console.warn — only
-      // details.name reaches the wire, mirroring the /refresh + sr6
-      // redaction (gascity-dashboard-473/ayr).
-      console.warn(`[maintainer] /api/maintainer/sling failed: ${(err as Error).message}`);
-      const wire = toWireInternal500(err, {
-        status: isTimeout ? 504 : 502,
-        error: isTimeout ? 'gc supervisor timed out' : 'gc sling failed',
-        kind: isTimeout ? 'timeout' : 'upstream',
-      });
-      res.status(wire.status).json(wire.body);
+      // host:port), so it stays server-side in the centralized route log.
+      writeRouteError(res, routeUpstreamError(err, {
+        component: LOG_COMPONENT.maintainer,
+        operation: '/api/maintainer/sling failed',
+        responseError: 'gc sling failed',
+        timeoutError: 'gc supervisor timed out',
+        isTimeout: GcClient.isTimeoutError,
+      }));
     }
   });
 
   router.get('/contributor/:login', async (req, res) => {
     const login = req.params.login;
     if (!GH_LOGIN_RE.test(login)) {
-      res.status(400).json({ error: 'invalid login', kind: 'validation' });
+      writeRouteError(res, routeValidationError('invalid login'));
       return;
     }
     const cached = await readCache(cachePath);
-    if (cached === null) {
+    if (cached.status === 'missing') {
       res.status(404).json({ error: 'no triage cache yet', kind: 'not_found' });
       return;
     }
     // The same ContributorStat is sliced onto every item the author owns
     // in the envelope, so any item carrying this login has the answer.
     // Avoids a second source of truth.
-    const stat = findContributor(cached, login);
+    const stat = findContributor(cached.envelope, login);
     if (stat === null) {
       res.status(404).json({ error: 'contributor not in current envelope', kind: 'not_found' });
       return;
@@ -481,8 +491,9 @@ async function resolveTargetSafely(
     // path; we got here because exitCode === 0). The operator just
     // won't get a clickable link on this entry until the next
     // successful sling refreshes the resolution.
-    console.warn(
-      `[maintainer] sling target resolution failed (sling succeeded, link will surface 'no session for role' error): ${(err as Error).message}`,
+    logWarn(
+      LOG_COMPONENT.maintainer,
+      `sling target resolution failed (sling succeeded, link will surface 'no session for role' error): ${errorMessage(err)}`,
     );
     return null;
   }
@@ -561,4 +572,3 @@ function removeItemsFromTiers(
     tier.unclustered = tier.unclustered.filter(keep);
   }
 }
-

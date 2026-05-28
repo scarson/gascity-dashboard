@@ -53,9 +53,9 @@ export function GroupedTable<T>({
               columns={columns}
               rows={group.rows}
               rowKey={rowKey}
-              onRowClick={onRowClick}
               empty={perProjectEmpty ?? 'No items.'}
-              initialSort={initialSort}
+              {...(onRowClick !== undefined ? { onRowClick } : {})}
+              {...(initialSort !== undefined ? { initialSort } : {})}
             />
           )}
         </section>

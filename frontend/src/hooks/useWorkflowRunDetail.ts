@@ -38,12 +38,14 @@ async function loadWorkflowRunDetail(
   scopeRef?: string,
 ): Promise<Pick<WorkflowRunDetailState, 'detail' | 'diff'>> {
   if (!workflowId) throw new Error('Missing workflow id.');
-  const params = { scopeKind, scopeRef };
+  const params: { scopeKind?: WorkflowScopeKind; scopeRef?: string } = {};
+  if (scopeKind !== undefined) params.scopeKind = scopeKind;
+  if (scopeRef !== undefined) params.scopeRef = scopeRef;
   const [detail, diff] = await Promise.all([
     api.workflowRun(workflowId, params),
     api.workflowDiff(workflowId, params).catch((err: unknown) => ({
       kind: 'error',
-      rootPath: null,
+      rootPath: { kind: 'unavailable', reason: 'error' },
       status: [],
       changedFiles: [],
       unstagedDiff: '',

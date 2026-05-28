@@ -5,6 +5,7 @@
 #     react-hooks, react/no-danger, import/first) at --max-warnings=0
 #   - typecheck across all three workspaces (shared, backend, frontend)
 #   - typecheck of test files too (catches type drift the runtime tests miss)
+#   - generated gc supervisor OpenAPI client drift check
 #   - backend tests (node --test via tsx loader)
 #   - frontend tests (vitest in jsdom)
 #
@@ -57,6 +58,9 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Check generated gc supervisor client
+        run: npm run openapi:gc-supervisor:check
 
       # backend and frontend both type-import from gas-city-dashboard-shared,
       # which only resolves to its dist/ output. Build it first so the

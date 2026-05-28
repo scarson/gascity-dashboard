@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { DeployRecord, GitCommit, GitView } from 'gas-city-dashboard-shared';
 import { api } from '../api/client';
 import { Button } from '../components/Button';
@@ -7,6 +7,7 @@ import { StatusBadge, type StatusTone } from '../components/StatusBadge';
 import { Table, type TableColumn } from '../components/Table';
 import { useCachedData } from '../hooks/useCachedData';
 import { formatRelative } from '../hooks/time';
+import { useVisibleInterval } from '../hooks/useVisibleInterval';
 
 const VIEW_OPTIONS: ReadonlyArray<{ value: GitView; label: string }> = [
   { value: 'recent-main', label: 'Recent · main' },
@@ -17,18 +18,8 @@ const VIEW_OPTIONS: ReadonlyArray<{ value: GitView; label: string }> = [
 
 export function ActivityPage() {
   const [view, setView] = useState<GitView>('recent-main');
-  // Tick state so relative timestamps refresh between data fetches. Mirrors
-  // the Agents.tsx pattern: 15s interval (formatRelative's smallest unit is
-  // seconds in [5,60); 1s would be gratuitous re-render), visibility-aware
-  // so background tabs don't churn.
   const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    const tick = setInterval(() => {
-      if (!document.hidden) setNow(Date.now());
-    }, 15_000);
-    return () => clearInterval(tick);
-  }, []);
+  useVisibleInterval(() => setNow(Date.now()), 15_000);
 
   const {
     data: commitsData,

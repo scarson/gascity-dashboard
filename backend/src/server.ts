@@ -1,230 +1,31 @@
-import express from 'express';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import fs from 'node:fs';
-import type { DashboardRuntimeConfig } from 'gas-city-dashboard-shared';
-
 import { loadConfig } from './config.js';
-import {
-  hostHeaderAllowlistFactory,
-  originCheck,
-  securityHeaders,
-} from './middleware/security.js';
-import { csrfIssueCookie, csrfValidate, getCsrfToken } from './middleware/csrf.js';
-import { GcClient } from './gc-client.js';
-import { sessionsRouter, raceWithTimeout } from './routes/sessions.js';
-import { sessionStreamRouter } from './routes/session-stream.js';
-import { agentsRouter } from './routes/agents.js';
-import { beadsRouter } from './routes/beads.js';
-import { workflowsRouter } from './routes/workflows.js';
-import { linksRouter } from './routes/links.js';
-import { mailRouter } from './routes/mail.js';
-import { mailSendRouter } from './routes/mail-send.js';
-import { gitRouter } from './routes/git.js';
-import { buildsRouter } from './routes/builds.js';
-import { healthRouter } from './routes/health.js';
-import { doltRouter, startDoltNomsSampler } from './routes/dolt.js';
-import { eventsRouter } from './routes/events.js';
-import { maintainerRouter } from './routes/maintainer.js';
-import { snapshotRouter } from './routes/snapshot.js';
-import { startMaintainerRefresher } from './maintainer/worker.js';
-import { createSnapshotService } from './snapshot/service.js';
 import { setAuditLogPath } from './audit.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { createDashboardApp } from './app.js';
+import { LOG_COMPONENT, logError, logInfo } from './logging.js';
 
 function main(): void {
   const config = loadConfig();
 
   if (config.disabled) {
-    console.error('[admin] ADMIN_DASHBOARD_DISABLED=1 — refusing to start');
+    logError(LOG_COMPONENT.admin, 'ADMIN_DASHBOARD_DISABLED=1 — refusing to start');
     process.exit(0);
   }
 
   setAuditLogPath(config.auditLogPath);
 
-  const app = express();
-  app.disable('x-powered-by');
-  app.use(express.json({ limit: '64kb' }));
+  const { app, runtime } = createDashboardApp(config);
+  runtime.start();
 
-  // ── Security middleware (V0-SHIP-REQUIRED) ────────────────────────────
-  app.use(hostHeaderAllowlistFactory(config.extraAllowedHosts));
-  app.use(originCheck(config.port, config.extraAllowedHosts));
-  // gascity-dashboard-iew: EventSource now flows through /api/events/stream
-  // (same origin) instead of directly to the gc supervisor. connect-src
-  // 'self' covers it, so no extra origins needed.
-  app.use(securityHeaders());
-  app.use(csrfIssueCookie);
-
-  // ── Health check (no CSRF, no privileged access) ──────────────────────
-  app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, ts: new Date().toISOString() });
-  });
-
-  app.get('/api/csrf', (_req, res) => {
-    res.json({ token: getCsrfToken() });
-  });
-
-  // ── API routes ────────────────────────────────────────────────────────
-  const gc = new GcClient({
-    baseUrl: config.gcSupervisorUrl,
-    cityName: config.cityName,
-  });
-  const dashboardConfig: DashboardRuntimeConfig = {
-    cityName: config.cityName,
-    cityRoot: config.cityPath,
-    githubRepo: config.maintainerRepo,
-    useFixtures: config.useFixtures,
-  };
-
-  const writeRouter = express.Router();
-  writeRouter.use(csrfValidate);
-  writeRouter.get('/config', (_req, res) => {
-    res.json(dashboardConfig);
-  });
-  writeRouter.use('/sessions', sessionsRouter(gc));
-  writeRouter.use('/workflows', workflowsRouter(gc, { rigRoot: config.cityPath }));
-  // Bead-ID cross-entity linked view (gascity-dashboard-j4x). GET-only
-  // reads; the relation index is rebuilt per request from the bead set +
-  // session list (per-snapshot rebuild — no persisted graph to invalidate).
-  writeRouter.use('/links', linksRouter(gc));
-  writeRouter.use('/agents', agentsRouter(config.cityPath));
-  writeRouter.use('/beads', beadsRouter(gc, config.cityPath));
-  writeRouter.use('/mail', mailRouter(gc));
-  // mail-send is a SEPARATE router mounted at its own path. The handler in
-  // mail-send.ts has no `viewing-as` parameter — physical separation per
-  // architect th-1i30ih §"Identity-switching for mail".
-  // gascity-dashboard-mq2: send over HTTP via the supervisor's POST /mail
-  // endpoint instead of the gc CLI subprocess. The city is in the request
-  // URL path (no --city threading). `from:'human'` is pinned HERE — the
-  // closure's only request-derived inputs are to/subject/body, so the
-  // browser has no path to send-as-someone-else.
-  writeRouter.use(
-    '/mail-send',
-    mailSendRouter({
-      sendMail: (to, subject, body) =>
-        gc.sendMail({ to, subject, body, from: 'human' }),
-    }),
-  );
-  // Phase C: Activity + Health surface.
-  writeRouter.use('/git', gitRouter());
-  writeRouter.use('/builds', buildsRouter());
-  writeRouter.use('/system', healthRouter(gc));
-  writeRouter.use('/dolt-noms', doltRouter());
-  // Maintainer triage (gascity-dashboard-hq2 + 361 onward).
-  // Derive slung-state path once and pass to BOTH router and worker so
-  // the serve-time overlay and the post-refresh purge hit the same file
-  // (gascity-dashboard-4jy). Sibling of the envelope cache.
-  const maintainerSlungStatePath = path.join(
-    path.dirname(config.maintainerCachePath),
-    'slung-state.json',
-  );
-  writeRouter.use(
-    '/maintainer',
-    maintainerRouter({
-      repo: config.maintainerRepo,
-      cachePath: config.maintainerCachePath,
-      slungStatePath: maintainerSlungStatePath,
-      slingTarget: config.maintainerSlingTarget,
-      triageTarget: config.maintainerTriageTarget,
-      // gascity-dashboard-mq2: sling over HTTP via the supervisor's
-      // POST /sling endpoint instead of the gc CLI subprocess. The city is
-      // in the request URL path, so no --city threading is needed.
-      sling: (input) => gc.sling(input),
-      // gascity-dashboard-55b: resolve sling target role to a concrete
-      // supervisor session at write time so the inline 'slung →' link
-      // lands on a real /agents/<session_name> route. Wrapped in a 3s
-      // raceWithTimeout (matches SESSIONS_TIMEOUT_MS in routes/sessions.ts)
-      // so a degraded supervisor can't add 5s to every sling POST while
-      // the GcClient default ticks down — wave-p2-action-semantics Phase
-      // 4 security HIGH-1. The sling subprocess already succeeded by the
-      // time this runs; on timeout we degrade to resolved_session_name=null.
-      listSessions: async () => {
-        const { items } = await raceWithTimeout(gc.listSessions(), 3_000);
-        return items;
-      },
-    }),
-  );
-
-  // Aggregate snapshot route (gascity-dashboard-8nj). Single SnapshotService
-  // instance at server level — never per-request — so SourceCache TTLs +
-  // single-flight + fixture state survive across requests.
-  const snapshotService = createSnapshotService({
-    gc,
-    config: dashboardConfig,
-    cityPath: config.cityPath,
-  });
-  writeRouter.use('/snapshot', snapshotRouter(snapshotService));
-
-  // Session SSE is mounted before the csrf-protected API router. It is a
-  // GET-only same-origin stream, and EventSource cannot attach CSRF headers.
-  app.use('/api/sessions', sessionStreamRouter({
-    supervisorUrl: config.gcSupervisorUrl,
-    cityName: config.cityName,
-  }));
-
-  app.use('/api', writeRouter);
-
-  // SSE proxy (gascity-dashboard-iew). Mounted outside writeRouter so it
-  // bypasses csrfValidate — EventSource can't send custom headers, and
-  // it's a GET so the origin-check middleware already exempts it.
-  app.use('/api/events', eventsRouter({
-    supervisorUrl: config.gcSupervisorUrl,
-    cityName: config.cityName,
-  }));
-
-  // Start the dolt-noms 10-min sampler. The actual metric source is
-  // pending mechanic surgical-ask; the sampler is wired so the ring
-  // buffer starts filling the moment the source lands.
-  startDoltNomsSampler();
-
-  // Start the maintainer triage refresher (gascity-dashboard-ar9).
-  // Set MAINTAINER_REFRESH_INTERVAL_MS=0 to disable.
-  if (config.maintainerRefreshIntervalMs > 0) {
-    startMaintainerRefresher({
-      repo: config.maintainerRepo,
-      cachePath: config.maintainerCachePath,
-      slungStatePath: maintainerSlungStatePath,
-      intervalMs: config.maintainerRefreshIntervalMs,
-    });
-  }
-
-  // ── Frontend static files (prod) ──────────────────────────────────────
-  const distDir = path.resolve(__dirname, '..', config.frontendDistPath);
-  if (fs.existsSync(distDir)) {
-    app.use(
-      express.static(distDir, {
-        index: 'index.html',
-        dotfiles: 'deny',
-        // SPA assets are content-hashed by Vite; the index.html itself
-        // should NOT be cached so deploys are visible on next page load.
-        setHeaders: (res, filePath) => {
-          if (filePath.endsWith('.html')) {
-            res.setHeader('Cache-Control', 'no-store');
-          } else {
-            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-          }
-        },
-      }),
-    );
-    // SPA fallback — any non-/api path returns index.html so the React
-    // router can take over.
-    app.get(/^(?!\/api).*/, (_req, res) => {
-      res.sendFile(path.join(distDir, 'index.html'));
-    });
-  } else {
-    console.log(`[admin] frontend dist not found at ${distDir} — API-only mode`);
-  }
-
-  // Bind 127.0.0.1 ONLY (DNS-rebinding floor; security_researcher).
   const server = app.listen(config.port, config.bindHost, () => {
-    console.log(
-      `[admin] listening on http://${config.bindHost}:${config.port} (city=${config.cityName}, supervisor=${config.gcSupervisorUrl})`,
+    logInfo(
+      LOG_COMPONENT.admin,
+      `listening on http://${config.bindHost}:${config.port} (city=${config.cityName}, supervisor=${config.gcSupervisorUrl})`,
     );
   });
 
   function shutdown(signal: string): void {
-    console.log(`[admin] ${signal} received, shutting down`);
+    logInfo(LOG_COMPONENT.admin, `${signal} received, shutting down`);
+    runtime.stop();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 5_000).unref();
   }

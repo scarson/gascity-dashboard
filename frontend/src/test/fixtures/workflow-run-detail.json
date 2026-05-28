@@ -7,14 +7,26 @@
     "scopeKind": "city",
     "scopeRef": "racoon-city",
     "title": "Adopt PR #42",
-    "formula": "mol-adopt-pr-v2",
-    "executionPath": "/tmp/gascity/adopt-pr-42",
+    "formula": {
+      "kind": "known",
+      "name": "mol-adopt-pr-v2"
+    },
+    "executionPath": {
+      "kind": "known",
+      "path": "/tmp/gascity/adopt-pr-42"
+    },
     "snapshotVersion": 11,
-    "snapshotEventSeq": 91,
+    "snapshotEventSeq": {
+      "kind": "known",
+      "seq": 91
+    },
     "partial": false,
     "progress": {
       "snapshotVersion": 11,
-      "snapshotEventSeq": 91,
+      "snapshotEventSeq": {
+        "kind": "known",
+        "seq": 91
+      },
       "partial": false,
       "totalNodeCount": 7,
       "visibleNodeCount": 6,
@@ -22,7 +34,9 @@
       "executionInstanceCount": 9,
       "sessionLinkCount": 5,
       "streamableSessionCount": 1,
-      "streamableSessionIds": ["gc-session-review-i2"],
+      "streamableSessionIds": [
+        "gc-session-review-i2"
+      ],
       "statusCounts": {
         "active": 3,
         "completed": 1,
@@ -45,19 +59,45 @@
         "constructKind": "workflow-root",
         "status": "active",
         "currentBeadId": "gc-adopt-pr-active",
+        "scope": {
+          "kind": "workflow"
+        },
+        "visibleInGraph": true,
+        "historicalOnly": false,
+        "iterationSummary": {
+          "kind": "single"
+        },
+        "attemptSummary": {
+          "kind": "none"
+        },
+        "visibleExecutionInstanceId": "gc-adopt-pr-active",
         "executionInstances": [
           {
             "id": "gc-adopt-pr-active",
             "semanticNodeId": "gc-adopt-pr-active",
             "beadId": "gc-adopt-pr-active",
+            "iteration": {
+              "kind": "base"
+            },
+            "attempt": {
+              "kind": "untracked"
+            },
+            "label": "base",
             "status": "active",
+            "session": {
+              "kind": "none",
+              "reason": "session_unresolved"
+            },
             "currentIteration": true,
-            "historical": false,
-            "streamable": false
+            "historical": false
           }
         ],
         "controlBadges": [
-          { "id": "gc-adopt-finalize", "label": "finalize", "status": "ready" }
+          {
+            "id": "gc-adopt-finalize",
+            "label": "finalize",
+            "status": "ready"
+          }
         ]
       },
       {
@@ -68,27 +108,54 @@
         "constructKind": "retry",
         "status": "completed",
         "currentBeadId": "gc-rebase-check",
-        "attemptBadge": "1/3",
-        "attemptCount": 1,
+        "scope": {
+          "kind": "workflow"
+        },
+        "visibleInGraph": true,
+        "historicalOnly": false,
+        "iterationSummary": {
+          "kind": "single"
+        },
+        "attemptSummary": {
+          "kind": "tracked",
+          "count": 1,
+          "badge": {
+            "kind": "bounded",
+            "label": "1/3"
+          },
+          "active": {
+            "kind": "idle"
+          }
+        },
         "visibleExecutionInstanceId": "gc-rebase-check",
         "executionInstances": [
           {
             "id": "gc-rebase-check",
             "semanticNodeId": "rebase-check",
             "beadId": "gc-rebase-check",
-            "attempt": 1,
+            "iteration": {
+              "kind": "base"
+            },
+            "attempt": {
+              "kind": "attempt",
+              "value": 1
+            },
             "label": "attempt 1",
             "status": "completed",
-            "sessionLink": {
-              "sessionId": "gc-session-rebase",
-              "sessionName": "adopt-pr-rebase-check",
-              "assignee": "gc-session-rebase"
+            "session": {
+              "kind": "attached",
+              "link": {
+                "sessionId": "gc-session-rebase",
+                "sessionName": "adopt-pr-rebase-check",
+                "assignee": "gc-session-rebase"
+              },
+              "streamable": false
             },
             "currentIteration": true,
-            "historical": false,
-            "streamable": false
+            "historical": false
           }
-        ]
+        ],
+        "controlBadges": []
       },
       {
         "id": "review-loop",
@@ -98,20 +165,49 @@
         "constructKind": "check-loop",
         "status": "active",
         "currentBeadId": "gc-review-loop",
-        "scopeRef": "body",
-        "attemptBadge": "1/999",
+        "scope": {
+          "kind": "scoped",
+          "ref": "body"
+        },
+        "visibleInGraph": true,
+        "historicalOnly": false,
+        "iterationSummary": {
+          "kind": "single"
+        },
+        "attemptSummary": {
+          "kind": "tracked",
+          "count": 1,
+          "badge": {
+            "kind": "bounded",
+            "label": "1/999"
+          },
+          "active": {
+            "kind": "idle"
+          }
+        },
         "visibleExecutionInstanceId": "gc-review-loop",
         "executionInstances": [
           {
             "id": "gc-review-loop",
             "semanticNodeId": "review-loop",
             "beadId": "gc-review-loop",
+            "iteration": {
+              "kind": "base"
+            },
+            "attempt": {
+              "kind": "untracked"
+            },
+            "label": "base",
             "status": "active",
+            "session": {
+              "kind": "none",
+              "reason": "session_unresolved"
+            },
             "currentIteration": true,
-            "historical": false,
-            "streamable": false
+            "historical": false
           }
-        ]
+        ],
+        "controlBadges": []
       },
       {
         "id": "review-pipeline",
@@ -121,52 +217,93 @@
         "constructKind": "expansion",
         "status": "active",
         "currentBeadId": "gc-review-pipeline-i2",
-        "scopeRef": "body",
-        "loopControlNodeId": "review-loop",
-        "visibleIteration": 2,
-        "iterationCount": 2,
-        "hasHistoricalIterations": true,
-        "attemptCount": 2,
-        "activeAttempt": 2,
+        "scope": {
+          "kind": "scoped",
+          "ref": "body"
+        },
+        "visibleInGraph": true,
+        "historicalOnly": false,
+        "iterationSummary": {
+          "kind": "stacked",
+          "visibleIteration": 2,
+          "iterationCount": 2,
+          "control": {
+            "kind": "known",
+            "id": "review-loop"
+          }
+        },
+        "attemptSummary": {
+          "kind": "tracked",
+          "count": 2,
+          "badge": {
+            "kind": "count-only"
+          },
+          "active": {
+            "kind": "running",
+            "value": 2
+          }
+        },
         "visibleExecutionInstanceId": "gc-review-pipeline-i2",
         "executionInstances": [
           {
             "id": "gc-review-pipeline-i1",
             "semanticNodeId": "review-pipeline",
             "beadId": "gc-review-pipeline-i1",
-            "iteration": 1,
-            "attempt": 1,
+            "iteration": {
+              "kind": "loop",
+              "value": 1
+            },
+            "attempt": {
+              "kind": "attempt",
+              "value": 1
+            },
             "label": "iteration 1, attempt 1",
             "status": "completed",
-            "sessionLink": {
-              "sessionId": "gc-session-review-i1",
-              "sessionName": "adopt-pr-review-pipeline-i1",
-              "assignee": "gc-session-review-i1"
+            "session": {
+              "kind": "attached",
+              "link": {
+                "sessionId": "gc-session-review-i1",
+                "sessionName": "adopt-pr-review-pipeline-i1",
+                "assignee": "gc-session-review-i1"
+              },
+              "streamable": false
             },
             "currentIteration": false,
-            "historical": true,
-            "streamable": false
+            "historical": true
           },
           {
             "id": "gc-review-pipeline-i2",
             "semanticNodeId": "review-pipeline",
             "beadId": "gc-review-pipeline-i2",
-            "iteration": 2,
-            "attempt": 2,
+            "iteration": {
+              "kind": "loop",
+              "value": 2
+            },
+            "attempt": {
+              "kind": "attempt",
+              "value": 2
+            },
             "label": "iteration 2, attempt 2",
             "status": "active",
-            "sessionLink": {
-              "sessionId": "gc-session-review-i2",
-              "sessionName": "adopt-pr-review-pipeline-i2",
-              "assignee": "gc-session-review-i2"
+            "session": {
+              "kind": "attached",
+              "link": {
+                "sessionId": "gc-session-review-i2",
+                "sessionName": "adopt-pr-review-pipeline-i2",
+                "assignee": "gc-session-review-i2"
+              },
+              "streamable": true
             },
             "currentIteration": true,
-            "historical": false,
-            "streamable": true
+            "historical": false
           }
         ],
         "controlBadges": [
-          { "id": "gc-review-pipeline-scope-check", "label": "scope check", "status": "completed" }
+          {
+            "id": "gc-review-pipeline-scope-check",
+            "label": "scope check",
+            "status": "completed"
+          }
         ]
       },
       {
@@ -176,27 +313,53 @@
         "kind": "task",
         "constructKind": "step",
         "status": "completed",
-        "loopControlNodeId": "review-loop",
+        "currentBeadId": "gc-old-only-review-i1",
+        "scope": {
+          "kind": "workflow"
+        },
         "visibleInGraph": false,
         "historicalOnly": true,
-        "visibleIteration": 1,
+        "iterationSummary": {
+          "kind": "stacked",
+          "visibleIteration": 1,
+          "iterationCount": 1,
+          "control": {
+            "kind": "known",
+            "id": "review-loop"
+          }
+        },
+        "attemptSummary": {
+          "kind": "none"
+        },
+        "visibleExecutionInstanceId": "gc-old-only-review-i1",
         "executionInstances": [
           {
             "id": "gc-old-only-review-i1",
             "semanticNodeId": "old-only-review",
             "beadId": "gc-old-only-review-i1",
-            "iteration": 1,
+            "iteration": {
+              "kind": "loop",
+              "value": 1
+            },
+            "attempt": {
+              "kind": "untracked"
+            },
+            "label": "base",
             "status": "completed",
-            "sessionLink": {
-              "sessionId": "gc-session-review-i1",
-              "sessionName": "adopt-pr-review-pipeline-i1",
-              "assignee": "gc-session-review-i1"
+            "session": {
+              "kind": "attached",
+              "link": {
+                "sessionId": "gc-session-review-i1",
+                "sessionName": "adopt-pr-review-pipeline-i1",
+                "assignee": "gc-session-review-i1"
+              },
+              "streamable": false
             },
             "currentIteration": false,
-            "historical": true,
-            "streamable": false
+            "historical": true
           }
-        ]
+        ],
+        "controlBadges": []
       },
       {
         "id": "apply-fixes",
@@ -206,44 +369,82 @@
         "constructKind": "step",
         "status": "ready",
         "currentBeadId": "gc-apply-fixes-i2",
-        "scopeRef": "body",
-        "loopControlNodeId": "review-loop",
-        "visibleIteration": 2,
-        "iterationCount": 2,
-        "hasHistoricalIterations": true,
-        "attemptCount": 2,
+        "scope": {
+          "kind": "scoped",
+          "ref": "body"
+        },
+        "visibleInGraph": true,
+        "historicalOnly": false,
+        "iterationSummary": {
+          "kind": "stacked",
+          "visibleIteration": 2,
+          "iterationCount": 2,
+          "control": {
+            "kind": "known",
+            "id": "review-loop"
+          }
+        },
+        "attemptSummary": {
+          "kind": "tracked",
+          "count": 2,
+          "badge": {
+            "kind": "count-only"
+          },
+          "active": {
+            "kind": "idle"
+          }
+        },
         "visibleExecutionInstanceId": "gc-apply-fixes-i2",
         "executionInstances": [
           {
             "id": "gc-apply-fixes-i1",
             "semanticNodeId": "apply-fixes",
             "beadId": "gc-apply-fixes-i1",
-            "iteration": 1,
-            "attempt": 1,
+            "iteration": {
+              "kind": "loop",
+              "value": 1
+            },
+            "attempt": {
+              "kind": "attempt",
+              "value": 1
+            },
             "label": "iteration 1, attempt 1",
             "status": "completed",
-            "sessionLink": {
-              "sessionId": "gc-session-fix-i1",
-              "sessionName": "adopt-pr-apply-fixes-i1",
-              "assignee": "gc-session-fix-i1"
+            "session": {
+              "kind": "attached",
+              "link": {
+                "sessionId": "gc-session-fix-i1",
+                "sessionName": "adopt-pr-apply-fixes-i1",
+                "assignee": "gc-session-fix-i1"
+              },
+              "streamable": false
             },
             "currentIteration": false,
-            "historical": true,
-            "streamable": false
+            "historical": true
           },
           {
             "id": "gc-apply-fixes-i2",
             "semanticNodeId": "apply-fixes",
             "beadId": "gc-apply-fixes-i2",
-            "iteration": 2,
-            "attempt": 2,
+            "iteration": {
+              "kind": "loop",
+              "value": 2
+            },
+            "attempt": {
+              "kind": "attempt",
+              "value": 2
+            },
             "label": "iteration 2, attempt 2",
             "status": "ready",
+            "session": {
+              "kind": "none",
+              "reason": "not_started"
+            },
             "currentIteration": true,
-            "historical": false,
-            "streamable": false
+            "historical": false
           }
-        ]
+        ],
+        "controlBadges": []
       },
       {
         "id": "pre-approval-ci",
@@ -253,25 +454,63 @@
         "constructKind": "condition",
         "status": "skipped",
         "currentBeadId": "gc-pre-approval-ci",
+        "scope": {
+          "kind": "workflow"
+        },
+        "visibleInGraph": true,
+        "historicalOnly": false,
+        "iterationSummary": {
+          "kind": "single"
+        },
+        "attemptSummary": {
+          "kind": "none"
+        },
         "visibleExecutionInstanceId": "gc-pre-approval-ci",
         "executionInstances": [
           {
             "id": "gc-pre-approval-ci",
             "semanticNodeId": "pre-approval-ci",
             "beadId": "gc-pre-approval-ci",
+            "iteration": {
+              "kind": "base"
+            },
+            "attempt": {
+              "kind": "untracked"
+            },
+            "label": "base",
             "status": "skipped",
+            "session": {
+              "kind": "none",
+              "reason": "session_unresolved"
+            },
             "currentIteration": true,
-            "historical": false,
-            "streamable": false
+            "historical": false
           }
-        ]
+        ],
+        "controlBadges": []
       }
     ],
     "edges": [
-      { "from": "rebase-check", "to": "review-loop", "kind": "execution" },
-      { "from": "review-loop", "to": "review-pipeline", "kind": "execution" },
-      { "from": "review-pipeline", "to": "apply-fixes", "kind": "execution" },
-      { "from": "review-loop", "to": "pre-approval-ci", "kind": "execution" }
+      {
+        "from": "rebase-check",
+        "to": "review-loop",
+        "kind": "execution"
+      },
+      {
+        "from": "review-loop",
+        "to": "review-pipeline",
+        "kind": "execution"
+      },
+      {
+        "from": "review-pipeline",
+        "to": "apply-fixes",
+        "kind": "execution"
+      },
+      {
+        "from": "review-loop",
+        "to": "pre-approval-ci",
+        "kind": "execution"
+      }
     ],
     "lanes": [
       {
@@ -291,16 +530,31 @@
   },
   "diff": {
     "kind": "ok",
-    "rootPath": "/tmp/gascity/adopt-pr-42",
+    "rootPath": {
+      "kind": "known",
+      "path": "/tmp/gascity/adopt-pr-42"
+    },
     "status": [
       " M frontend/src/routes/WorkflowRunDetail.tsx",
       " M backend/src/workflows/enrich.ts",
       "?? backend/test/fixtures/workflow-snapshots.ts"
     ],
     "changedFiles": [
-      { "path": "frontend/src/routes/WorkflowRunDetail.tsx", "status": "M", "kind": "code" },
-      { "path": "backend/src/workflows/enrich.ts", "status": "M", "kind": "code" },
-      { "path": "backend/test/fixtures/workflow-snapshots.ts", "status": "??", "kind": "test" }
+      {
+        "path": "frontend/src/routes/WorkflowRunDetail.tsx",
+        "status": "M",
+        "kind": "code"
+      },
+      {
+        "path": "backend/src/workflows/enrich.ts",
+        "status": "M",
+        "kind": "code"
+      },
+      {
+        "path": "backend/test/fixtures/workflow-snapshots.ts",
+        "status": "??",
+        "kind": "test"
+      }
     ],
     "unstagedDiff": "diff --git a/backend/src/workflows/enrich.ts b/backend/src/workflows/enrich.ts\n@@ -1,4 +1,4 @@\n-old session guard\n+preserve failed attempt transcript links\n context line\n\ndiff --git a/frontend/src/routes/WorkflowRunDetail.tsx b/frontend/src/routes/WorkflowRunDetail.tsx\n@@ -10,3 +10,4 @@\n <WorkflowRunDiagram />\n+<WorkflowRunTabs />",
     "stagedDiff": "diff --git a/frontend/src/components/workflow/WorkflowNodeSessionPanel.tsx b/frontend/src/components/workflow/WorkflowNodeSessionPanel.tsx\n@@ -20,3 +20,4 @@\n <SessionPeekContent />\n+<StatusBadge label=\"live\" />",
@@ -310,8 +564,14 @@
     "gc-session-rebase": {
       "session_id": "gc-session-rebase",
       "turns": [
-        { "role": "user", "text": "Rebase the branch and run the local validation gate." },
-        { "role": "assistant", "text": "Rebased cleanly. Typecheck and focused tests passed." }
+        {
+          "role": "user",
+          "text": "Rebase the branch and run the local validation gate."
+        },
+        {
+          "role": "assistant",
+          "text": "Rebased cleanly. Typecheck and focused tests passed."
+        }
       ],
       "total_chars": 101,
       "captured_at": "2026-05-24T10:00:00.000Z",
@@ -320,8 +580,14 @@
     "gc-session-review-i1": {
       "session_id": "gc-session-review-i1",
       "turns": [
-        { "role": "user", "text": "Review iteration 1 for regressions." },
-        { "role": "assistant", "text": "Found two issues: stale loop labels and a missing failed-attempt transcript link." }
+        {
+          "role": "user",
+          "text": "Review iteration 1 for regressions."
+        },
+        {
+          "role": "assistant",
+          "text": "Found two issues: stale loop labels and a missing failed-attempt transcript link."
+        }
       ],
       "total_chars": 111,
       "captured_at": "2026-05-24T10:30:00.000Z",
@@ -330,12 +596,30 @@
     "gc-session-review-i2": {
       "session_id": "gc-session-review-i2",
       "turns": [
-        { "role": "user", "text": "Review the current iteration after the fixture update." },
-        { "role": "assistant", "text": "Checking graph.v2 node grouping, session links, and hidden control badges." },
-        { "role": "tool_use", "text": "Command: node --import tsx --test backend/test/workflow-enrich.test.ts" },
-        { "role": "tool_result", "text": "stdout: 5 graph.v2 enrichment tests passed.\nstderr: <empty>" },
-        { "role": "assistant", "text": "The current run keeps semantic nodes stable and preserves hidden control badges." },
-        { "role": "final", "text": "Ready for handoff: no leaked implementation terminology in the workflow detail." }
+        {
+          "role": "user",
+          "text": "Review the current iteration after the fixture update."
+        },
+        {
+          "role": "assistant",
+          "text": "Checking graph.v2 node grouping, session links, and hidden control badges."
+        },
+        {
+          "role": "tool_use",
+          "text": "Command: node --import tsx --test backend/test/workflow-enrich.test.ts"
+        },
+        {
+          "role": "tool_result",
+          "text": "stdout: 5 graph.v2 enrichment tests passed.\nstderr: <empty>"
+        },
+        {
+          "role": "assistant",
+          "text": "The current run keeps semantic nodes stable and preserves hidden control badges."
+        },
+        {
+          "role": "final",
+          "text": "Ready for handoff: no leaked implementation terminology in the workflow detail."
+        }
       ],
       "total_chars": 416,
       "captured_at": "2026-05-24T11:00:00.000Z",
@@ -344,8 +628,14 @@
     "gc-session-fix-i1": {
       "session_id": "gc-session-fix-i1",
       "turns": [
-        { "role": "user", "text": "Apply the iteration 1 review fixes." },
-        { "role": "assistant", "text": "Updated the visual semantics and left the loop ready for another review." }
+        {
+          "role": "user",
+          "text": "Apply the iteration 1 review fixes."
+        },
+        {
+          "role": "assistant",
+          "text": "Updated the visual semantics and left the loop ready for another review."
+        }
       ],
       "total_chars": 100,
       "captured_at": "2026-05-24T11:30:00.000Z",
@@ -354,7 +644,10 @@
   },
   "streamTurns": {
     "gc-session-review-i2": [
-      { "role": "assistant", "text": "Streaming: preserving active-session progress while the node remains selected." }
+      {
+        "role": "assistant",
+        "text": "Streaming: preserving active-session progress while the node remains selected."
+      }
     ]
   }
 }

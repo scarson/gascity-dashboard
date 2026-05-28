@@ -18,6 +18,19 @@ describe('loadConfig', () => {
     assert.equal(cfg.cityName, 'other-city');
   });
 
+  test('auditLogPath honors ADMIN_AUDIT_LOG_PATH exactly when set', () => {
+    const cfg = loadConfig({
+      ADMIN_AUDIT_LOG_PATH: '/tmp/custom-events.jsonl',
+      HOME: '/tmp/home-for-defaults',
+    });
+    assert.equal(cfg.auditLogPath, '/tmp/custom-events.jsonl');
+  });
+
+  test('auditLogPath default derives from the provided HOME env', () => {
+    const cfg = loadConfig({ HOME: '/tmp/dashboard-home' });
+    assert.equal(cfg.auditLogPath, '/tmp/dashboard-home/.gc/events.jsonl');
+  });
+
   test('useFixtures is true when SNAPSHOT_USE_FIXTURES=1', () => {
     const cfg = loadConfig({ SNAPSHOT_USE_FIXTURES: '1' });
     assert.equal(cfg.useFixtures, true);

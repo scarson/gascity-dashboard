@@ -61,7 +61,8 @@ These apply to all code in this project — frontend and server:
 - **YAGNI (You're Not Gonna Need It)** – avoid speculative complexity or
   over-engineering.
 - **Don't Swallow Errors** by catching exceptions, silently filling in required
-  but missing values, masking deserialization with nulls or empty lists, or
+  but missing values, masking deserialization with nulls (or undefined values)
+  or empty lists, or
   ignoring timeouts when something hangs. All of those are errors (client-side
   and server-side) and must be tracked in a centralized log so it can be used to
   improve the app over time. Also, inform the user as appropriate so that they

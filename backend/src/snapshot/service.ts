@@ -1,12 +1,13 @@
 import type {
   CityStatusSummary,
   DashboardHeadline,
+  DashboardMetric,
   DashboardRuntimeConfig,
   DashboardSnapshot,
   DashboardSources,
   GcSessionList,
-  GitHubSummary,
   ResourceSummary,
+  SourceAvailableState,
   SourceName,
   SourceState,
   SourceStatus,
@@ -34,14 +35,13 @@ import {
  */
 export const SESSIONS_CACHE_TTL_MS = 45 * 1000;
 
-// SnapshotService — gascity-dashboard-8nj. Composes the SourceCaches
+// SnapshotService — gascity-dashboard-8nj. Composes the active SourceCaches
 // behind one aggregate getSnapshot()/refresh() façade. Ported from
 // demo-dash src/server/snapshot.ts; differences from the upstream port:
 //   - Uses GcClient (HTTP) for city sessions, not the gc/bd subprocess
 //     CLIs (dkb Q1 — HTTP is the canonical contract here).
-//   - github cache is wired with throwing load() (its collector is
-//     deferred) — snapshot serves status='error' for that source in v0.
-//     NOT a bug; the deferred contract is explicit.
+//   - Deferred demo-dash sources stay out of the runtime contract until they
+//     have real collectors and visible dashboard product surface.
 //   - workflows runs the real lane builder (gascity-dashboard-0t6) over
 //     gc.listBeads({ limit }) with the co-located workflowBeadFilter.
 
@@ -49,14 +49,12 @@ export const SOURCE_NAMES = [
   'city',
   'resources',
   'workflows',
-  'github',
 ] as const satisfies readonly SourceName[];
 
 export interface SourceCacheMap {
   city: SourceCache<CityStatusSummary>;
   resources: SourceCache<ResourceSummary>;
   workflows: SourceCache<WorkflowSummary>;
-  github: SourceCache<GitHubSummary>;
 }
 
 export interface SnapshotHealth {
@@ -77,9 +75,9 @@ export interface SnapshotService {
 
 export interface CreateSnapshotServiceOptions {
   /** Shared GcClient instance — must NOT be re-instantiated per request. */
-  gc?: GcClient;
+  gc?: GcClient | undefined;
   /** Pre-built cache map. Tests inject this directly for spy-tracked loaders. */
-  caches?: SourceCacheMap;
+  caches?: SourceCacheMap | undefined;
   /**
    * Shared sessions cache (gascity-dashboard-3ax). Feeds BOTH the city
    * collector's listSessions seam and the workflow-health engine's
@@ -88,12 +86,12 @@ export interface CreateSnapshotServiceOptions {
    * sessions stay off /api/snapshot (payload size). Tests may inject a
    * spy-tracked cache; otherwise built from `gc`.
    */
-  sessions?: SourceCache<GcSessionList>;
+  sessions?: SourceCache<GcSessionList> | undefined;
   config: DashboardRuntimeConfig;
   /** Optional path to city.toml directory (for cityStatus collector). */
-  cityPath?: string;
-  now?: () => Date;
-  uptimeSeconds?: () => number;
+  cityPath?: string | undefined;
+  now?: (() => Date) | undefined;
+  uptimeSeconds?: (() => number) | undefined;
 }
 
 const sourceNameSet = new Set<string>(SOURCE_NAMES);
@@ -131,7 +129,8 @@ export function createSnapshotService(
     sessionsState: SourceState<GcSessionList>,
   ): DashboardSources => {
     const wf = sources.workflows;
-    if (wf.data === null) return sources;
+    if (!sourceIsAvailable(wf)) return sources;
+    const sessionsAvailable = sourceIsAvailable(sessionsState);
 
     // A sessions read failure degrades confidence (all lanes inferred, no
     // maroon — R2 fail-safe); it never blanks the lanes. Only advance the
@@ -143,14 +142,17 @@ export function createSnapshotService(
 
     const { lanes, census } = deriveWorkflowHealth({
       lanes: wf.data.lanes,
-      sessions: sessionsState.data?.items ?? [],
-      sessionsAvailable: sessionsState.data !== null,
+      sessions: sessionsAvailable ? sessionsState.data.items : [],
+      sessionsAvailable,
       marks: progressMarks,
     });
 
     return {
       ...sources,
-      workflows: { ...wf, data: { ...wf.data, lanes, census } },
+      workflows: {
+        ...wf,
+        data: { ...wf.data, lanes, census: { status: 'available', data: census } },
+      },
     };
   };
 
@@ -282,8 +284,8 @@ function buildDefaultCaches(
       // isolation rather than silently aggregating an empty list.
       listSessions: async () => {
         const state = await sessionsCache.get();
-        if (state.data === null) {
-          throw new Error(state.error ?? 'sessions unavailable');
+        if (!sourceIsAvailable(state)) {
+          throw new Error(state.error);
         }
         return state.data;
       },
@@ -299,33 +301,7 @@ function buildDefaultCaches(
       useFixture,
       loadFixture: useFixture ? fixtureSourceLoader('workflows') : undefined,
     }),
-    github: notWiredCache<GitHubSummary>('github', now),
   };
-}
-
-/**
- * SourceCache for sources whose collectors are deferred (github — dkb Q2
- * pending). Load throws so the snapshot envelope carries status='error'
- * for that source. Tests cover the deferred shape in
- * snapshot-route.test.ts via the same constructor pattern.
- *
- * Opts out of the default-on sanitizer (gascity-dashboard-4r5) via
- * `sanitizeErrorMessage: null`: the thrown message is a hand-authored
- * string with no OS-path or secret material, and preserving the literal
- * "${source} collector not wired (gascity-dashboard-37u, dkb Q2
- * pending)" gives the operator a bead-id breadcrumb in the wire error
- * instead of a generic "${source} collection failed".
- */
-function notWiredCache<T>(source: SourceName, now: (() => Date) | undefined): SourceCache<T> {
-  return new SourceCache<T>({
-    source,
-    ttlMs: 30_000,
-    now,
-    sanitizeErrorMessage: null,
-    load: () => {
-      throw new Error(`${source} collector not wired (gascity-dashboard-37u, dkb Q2 pending)`);
-    },
-  });
 }
 
 async function readSources(
@@ -370,14 +346,13 @@ async function readSources(
     }
   };
 
-  const [city, resources, workflows, github] = await Promise.all([
+  const [city, resources, workflows] = await Promise.all([
     settle('city', caches.city),
     settle('resources', caches.resources),
     settle('workflows', caches.workflows),
-    settle('github', caches.github),
   ]);
 
-  return { city, resources, workflows, github };
+  return { city, resources, workflows };
 }
 
 /**
@@ -386,9 +361,9 @@ async function readSources(
  *   - normal GET (refreshSources undefined) → get() (TTL-driven)
  *   - POST /refresh including 'workflows' → refresh() (force same-instant)
  *   - POST /refresh excluding 'workflows' → snapshot() (read-only)
- * A failure surfaces as a SourceState with data:null; the health engine then
- * degrades every lane to unresolved/inferred (R2 fail-safe) — it never throws
- * here, so a sessions outage can't 500 the snapshot.
+ * A failure surfaces as a SourceState with status='error'; the health engine
+ * then degrades every lane to unresolved/inferred (R2 fail-safe) — it never
+ * throws here, so a sessions outage can't 500 the snapshot.
  */
 async function readSessions(
   cache: SourceCache<GcSessionList>,
@@ -406,28 +381,89 @@ async function readSessions(
 /**
  * Wire-shape failure envelope shared by readSources' settle wrapper and
  * readSessions: a thrown error becomes a SourceState with status='error',
- * data:null, and the message routed through cache.sanitize() (so the escape
- * scenarios these wrappers guard against still get the default-on
- * sanitization from gascity-dashboard-4r5).
+ * and the message routed through cache.sanitize() (so the escape scenarios
+ * these wrappers guard against still get the default-on sanitization from
+ * gascity-dashboard-4r5).
  */
 function errorState<T>(cache: SourceCache<T>, error: unknown): SourceState<T> {
+  const current = cache.snapshot();
   return {
-    ...cache.snapshot(),
+    source: current.source,
     status: 'error',
     error: cache.sanitize(error),
-    data: null,
   };
 }
 
 function buildHeadline(sources: DashboardSources): DashboardHeadline {
   return {
-    activeAgents: sources.city.data?.activeAgents ?? null,
-    maxAgents: sources.city.data?.maxSessions ?? null,
-    activeSessions: sources.city.data?.activeSessions ?? null,
-    activeWorkflows:
-      sources.workflows.data?.runCounts.total ?? sources.workflows.data?.totalActive ?? null,
-    githubOpenReviews: sources.github.data?.openReviewDemand ?? null,
+    activeAgents: cityMetric(sources.city, 'activeAgents'),
+    maxAgents: cityMetricState(sources.city, (city) => city.maxSessions),
+    activeSessions: cityMetric(sources.city, 'activeSessions'),
+    activeWorkflows: sourceMetric(
+      sources.workflows,
+      activeWorkflowCount,
+      'active workflow count',
+    ),
   };
+}
+
+function activeWorkflowCount(workflows: WorkflowSummary): number {
+  if (workflows.census.status === 'available') {
+    return workflows.census.data.totalInFlight;
+  }
+
+  return workflows.lanes.filter((lane) => lane.phase !== 'complete').length;
+}
+
+function cityMetric(
+  state: SourceState<CityStatusSummary>,
+  key: keyof Pick<CityStatusSummary, 'activeAgents' | 'activeSessions'>,
+): DashboardMetric {
+  return sourceMetric(state, (city) => city[key], key);
+}
+
+function cityMetricState(
+  state: SourceState<CityStatusSummary>,
+  readMetric: (data: CityStatusSummary) => DashboardMetric,
+): DashboardMetric {
+  if (!sourceIsAvailable(state)) {
+    return {
+      status: 'unavailable',
+      source: state.source,
+      error: state.error,
+    };
+  }
+
+  return readMetric(state.data);
+}
+
+function sourceMetric<T>(
+  state: SourceState<T>,
+  readValue: (data: T) => number,
+  label: string,
+): DashboardMetric {
+  if (!sourceIsAvailable(state)) {
+    return {
+      status: 'unavailable',
+      source: state.source,
+      error: state.error,
+    };
+  }
+
+  const value = readValue(state.data);
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return { status: 'available', value };
+  }
+
+  return {
+    status: 'unavailable',
+    source: state.source,
+    error: `${label} missing from ${state.source} source`,
+  };
+}
+
+function sourceIsAvailable<T>(state: SourceState<T>): state is SourceAvailableState<T> {
+  return state.status !== 'error';
 }
 
 function sourceStatuses(caches: SourceCacheMap): Record<SourceName, SourceStatus> {
@@ -435,6 +471,5 @@ function sourceStatuses(caches: SourceCacheMap): Record<SourceName, SourceStatus
     city: caches.city.snapshot().status,
     resources: caches.resources.snapshot().status,
     workflows: caches.workflows.snapshot().status,
-    github: caches.github.snapshot().status,
   };
 }

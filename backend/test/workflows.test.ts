@@ -91,8 +91,7 @@ function buildApp(fakeUrl: string, rigRoot = ''): express.Express {
   app.use(express.json());
   app.use('/api/workflows', workflowsRouter(gc, { rigRoot }));
   app.use('/api/sessions', sessionStreamRouter({
-    supervisorUrl: fakeUrl,
-    cityName: 'racoon-city',
+    gc,
     heartbeatMs: 10_000,
   }));
   return app;
@@ -259,7 +258,7 @@ describe('workflows detail route', () => {
       assert.equal(res.status, 200);
       const body = await res.json();
       assert.equal(body.workflowId, 'gc-root');
-      assert.equal(body.formula, 'mol-adopt-pr-v2');
+      assert.deepEqual(body.formula, { kind: 'known', name: 'mol-adopt-pr-v2' });
       assert.equal(body.snapshotVersion, 7);
       assert.ok(
         fake.requests.includes('/v0/city/racoon-city/workflow/gc-root?scope_kind=city&scope_ref=racoon-city'),
@@ -274,13 +273,18 @@ describe('workflows detail route', () => {
 
       const codexNode = body.nodes.find((node: { semanticNodeId?: string }) => node.semanticNodeId === 'review-codex');
       assert.ok(codexNode, 'expected semantic review-codex node');
-      assert.equal(codexNode.visibleIteration, 2);
-      assert.equal(codexNode.hasHistoricalIterations, true);
+      assert.deepEqual(codexNode.iterationSummary, {
+        kind: 'stacked',
+        visibleIteration: 2,
+        iterationCount: 2,
+        control: { kind: 'known', id: 'review-loop' },
+      });
       assert.equal(codexNode.executionInstances.length, 2);
       assert.equal(codexNode.executionInstances[0].historical, true);
       assert.equal(codexNode.executionInstances[1].currentIteration, true);
-      assert.equal(codexNode.executionInstances[1].streamable, true);
-      assert.equal(codexNode.executionInstances[1].sessionLink.sessionId, 'gc-session-b');
+      assert.equal(codexNode.executionInstances[1].session.kind, 'attached');
+      assert.equal(codexNode.executionInstances[1].session.streamable, true);
+      assert.equal(codexNode.executionInstances[1].session.link.sessionId, 'gc-session-b');
       assert.ok(
         codexNode.controlBadges.some((badge: { label?: string }) => badge.label === 'scope check'),
         'expected scope-check to collapse into a badge',
@@ -506,8 +510,9 @@ describe('workflows detail route', () => {
       assert.equal(codexNode?.status, 'active');
       assert.equal(codexNode?.executionInstances[0].status, 'completed');
       assert.equal(codexNode?.executionInstances[1].status, 'active');
-      assert.equal(codexNode?.executionInstances[1].streamable, true);
-      assert.equal(codexNode?.executionInstances[1].sessionLink.sessionId, 'gc-session-b');
+      assert.equal(codexNode?.executionInstances[1].session.kind, 'attached');
+      assert.equal(codexNode?.executionInstances[1].session.streamable, true);
+      assert.equal(codexNode?.executionInstances[1].session.link.sessionId, 'gc-session-b');
     } finally {
       await close();
     }
@@ -602,8 +607,10 @@ describe('workflows detail route', () => {
       const body = await res.json();
       const rootNode = body.nodes.find((node: { id?: string }) => node.id === 'gc-root');
       assert.equal(rootNode?.status, 'ready');
-      assert.equal(rootNode?.executionInstances[0].sessionLink, null);
-      assert.equal(rootNode?.executionInstances[0].streamable, false);
+      assert.deepEqual(rootNode?.executionInstances[0].session, {
+        kind: 'none',
+        reason: 'not_started',
+      });
     } finally {
       await close();
     }
@@ -677,12 +684,18 @@ describe('workflows detail route', () => {
         (instance: { currentIteration?: boolean }) => instance.currentIteration,
       );
       assert.equal(currentInstance?.status, 'active');
-      assert.equal(currentInstance?.sessionLink.sessionId, 'fddc-g3v');
-      assert.equal(currentInstance?.sessionLink.sessionName, 'tic-tac-toe-app/codex-1');
-      assert.equal(currentInstance?.streamable, true);
+      assert.deepEqual(currentInstance?.session, {
+        kind: 'attached',
+        streamable: true,
+        link: {
+          sessionId: 'fddc-g3v',
+          sessionName: 'tic-tac-toe-app/codex-1',
+          assignee: 'tic-tac-toe-app/codex-1',
+        },
+      });
       assert.deepEqual(body.progress, {
         snapshotVersion: 7,
-        snapshotEventSeq: 42,
+        snapshotEventSeq: { kind: 'known', seq: 42 },
         partial: false,
         totalNodeCount: 3,
         visibleNodeCount: 3,
@@ -913,7 +926,7 @@ describe('workflows detail route', () => {
       assert.equal(res.status, 200);
       const body = await res.json();
       assert.equal(body.kind, 'ok');
-      assert.equal(body.rootPath, await fs.realpath(repo));
+      assert.deepEqual(body.rootPath, { kind: 'known', path: await fs.realpath(repo) });
       assert.deepEqual(body.changedFiles, [
         { path: 'README.md', status: 'M', kind: 'docs' },
         { path: 'src/index.ts', status: 'A', kind: 'code' },
@@ -937,7 +950,7 @@ describe('workflows detail route', () => {
       assert.equal(res.status, 200);
       const body = await res.json();
       assert.equal(body.kind, 'path_unknown');
-      assert.equal(body.rootPath, null);
+      assert.deepEqual(body.rootPath, { kind: 'unavailable', reason: 'path_unknown' });
       assert.deepEqual(body.changedFiles, []);
     } finally {
       await close();
@@ -956,7 +969,7 @@ describe('workflows detail route', () => {
       assert.equal(res.status, 200);
       const body = await res.json();
       assert.equal(body.kind, 'not_git');
-      assert.equal(body.rootPath, null);
+      assert.deepEqual(body.rootPath, { kind: 'unavailable', reason: 'not_git' });
       assert.deepEqual(body.changedFiles, []);
     } finally {
       await close();

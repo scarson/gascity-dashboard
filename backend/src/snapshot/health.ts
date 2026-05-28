@@ -62,12 +62,22 @@ const DEFAULT_THRESHOLDS: HealthThresholds = {
  * observed cache generation, plus the running streak.
  */
 export interface LaneProgressMark {
-  activeStepId: string | null;
-  activeStageIndex: number | null;
-  activeStepAttempt: number | null;
+  progress: LaneProgressComparison;
   /** Consecutive generations the climb-while-flat predicate has held. */
   thrashStreak: number;
 }
+
+export type LaneProgressComparison =
+  | {
+      status: 'comparable';
+      stepId: string;
+      stageIndex: number;
+      attempt: number;
+    }
+  | {
+      status: 'not_comparable';
+      error: string;
+    };
 
 export interface DeriveWorkflowHealthInput {
   lanes: readonly WorkflowLane[];
@@ -108,27 +118,25 @@ export function advanceProgressMarks(
   const next = new Map<string, LaneProgressMark>();
 
   for (const lane of lanes) {
-    const stepId = lane.activeStepId ?? null;
-    const stageIndex = lane.activeStageIndex ?? null;
-    const attempt = lane.activeStepAttempt ?? null;
+    const progress = comparableProgress(lane);
     const prior = previous.get(lane.id);
 
     const positionFlat =
       prior !== undefined &&
-      prior.activeStepId === stepId &&
-      prior.activeStageIndex === stageIndex;
+      prior.progress.status === 'comparable' &&
+      progress.status === 'comparable' &&
+      prior.progress.stepId === progress.stepId &&
+      prior.progress.stageIndex === progress.stageIndex;
     const climbed =
       prior !== undefined &&
-      attempt !== null &&
-      prior.activeStepAttempt !== null &&
-      attempt - prior.activeStepAttempt >= attemptClimbMin;
+      prior.progress.status === 'comparable' &&
+      progress.status === 'comparable' &&
+      progress.attempt - prior.progress.attempt >= attemptClimbMin;
 
     const thrashStreak = positionFlat && climbed ? prior.thrashStreak + 1 : 0;
 
     next.set(lane.id, {
-      activeStepId: stepId,
-      activeStageIndex: stageIndex,
-      activeStepAttempt: attempt,
+      progress,
       thrashStreak,
     });
   }
@@ -149,8 +157,8 @@ export function deriveWorkflowHealth(
   const lanes = input.lanes.map((lane) => {
     const session = input.sessionsAvailable
       ? resolveLaneSession(lane, input.sessions)
-      : null;
-    const sessionResolved = session !== null;
+      : { status: 'unresolved' as const, error: 'workflow session list unavailable' };
+    const sessionResolved = session.status === 'resolved';
 
     // R2: an unresolved assignee can never be 'known' (must not drive maroon),
     // regardless of the bead-side provenance. Confidence = formula resolved
@@ -165,15 +173,14 @@ export function deriveWorkflowHealth(
       // Decision-pending from bead state alone — threshold-independent. The
       // stalled-driven attention signal is added client-side from the facts.
       needsOperator: lane.phase === 'approval' || lane.phase === 'blocked',
-      stuckNodeId: lane.activeStepId ?? null,
+      stuckNode: stuckNode(lane),
       thrashingDetected: thrashStreak >= thrashDetectedStreak,
-      sessionResolved,
-      sessionLastActive: session?.last_active ?? null,
-      sessionRunning: session?.running ?? null,
-      sessionActivity: session?.activity ?? null,
+      session: session.status === 'resolved'
+        ? sessionFacts(session.session)
+        : { status: 'unresolved', error: session.error },
     };
 
-    return { ...lane, health };
+    return { ...lane, health: { status: 'available' as const, data: health } };
   });
 
   return { lanes, census: buildCensus(lanes) };
@@ -186,12 +193,54 @@ export function deriveWorkflowHealth(
 function resolveLaneSession(
   lane: WorkflowLane,
   sessions: readonly GcSession[],
-): GcSession | null {
+): { status: 'resolved'; session: GcSession } | { status: 'unresolved'; error: string } {
   for (const assignee of lane.activeAssignees) {
     const session = resolveSessionForTarget(assignee, sessions);
-    if (session !== null) return session;
+    if (session !== null) return { status: 'resolved', session };
   }
-  return null;
+  return { status: 'unresolved', error: 'workflow session unresolved' };
+}
+
+function comparableProgress(lane: WorkflowLane): LaneProgressComparison {
+  if (lane.progress.status !== 'active_step') {
+    return { status: 'not_comparable', error: 'workflow has no active step' };
+  }
+  if (lane.progress.stage.status !== 'available') {
+    return { status: 'not_comparable', error: lane.progress.stage.error };
+  }
+  if (lane.progress.attempt.status !== 'available') {
+    return { status: 'not_comparable', error: lane.progress.attempt.error };
+  }
+  return {
+    status: 'comparable',
+    stepId: lane.progress.stepId,
+    stageIndex: lane.progress.stage.index,
+    attempt: lane.progress.attempt.value,
+  };
+}
+
+function stuckNode(lane: WorkflowLane): WorkflowLaneHealth['stuckNode'] {
+  return lane.progress.status === 'active_step'
+    ? { status: 'available', id: lane.progress.stepId }
+    : { status: 'unavailable', error: 'active workflow step unavailable' };
+}
+
+function sessionFacts(session: GcSession): WorkflowLaneHealth['session'] {
+  return {
+    status: 'resolved',
+    lastActive:
+      session.last_active === undefined
+        ? { status: 'unavailable', error: 'session last_active unavailable' }
+        : { status: 'available', at: session.last_active },
+    running:
+      session.running === undefined
+        ? { status: 'unavailable', error: 'session running state unavailable' }
+        : { status: 'available', value: session.running },
+    activity:
+      session.activity === undefined
+        ? { status: 'unavailable', error: 'session activity unavailable' }
+        : { status: 'available', value: session.activity },
+  };
 }
 
 /**
@@ -233,10 +282,12 @@ function buildCensus(lanes: readonly WorkflowLane[]): WorkflowCensus {
     if (lane.phase === 'complete') continue;
 
     totalInFlight += 1;
-    const known = lane.health?.phaseConfidence === 'known';
-    if (known) {
+    if (
+      lane.health.status === 'available' &&
+      lane.health.data.phaseConfidence === 'known'
+    ) {
       knownDenominator += 1;
-      if (lane.health?.thrashingDetected === true) thrashing += 1;
+      if (lane.health.data.thrashingDetected === true) thrashing += 1;
     } else {
       unverifiable += 1;
     }

@@ -5,7 +5,9 @@ import {
 } from '../exec.js';
 import type { ExecResult } from '../exec.js';
 import { recordAudit } from '../audit.js';
-import { toWireExecError, toWireInternal500 } from '../lib/sanitise-error.js';
+import { toWireExecError } from '../lib/sanitise-error.js';
+import { LOG_COMPONENT, logWarn } from '../logging.js';
+import { routeInternalError, writeRouteError } from '../route-errors.js';
 
 // gascity-dashboard-vq7: per-agent prompt/directive surface. Read-only.
 // The bead acceptance is explicitly read-only — direct prompt edit via
@@ -75,12 +77,13 @@ export function agentsRouter(opts: AgentsRouterOptions | string = {}): Router {
         // routes on `kind` + status code only (see AgentDetail.tsx:659
         // — `error?.status === 404 || error?.kind === 'not_found'`),
         // never on `details.stderr`. Mirror the 473 catch-arm pattern:
-        // stderr stays server-side in console.warn for journalctl
-        // debugging; the wire carries `kind` + a fixed error message,
+        // stderr stays server-side in the operational log for debugging;
+        // the wire carries `kind` + a fixed error message,
         // plus `details: { name }` on the upstream arm so the shape is
         // consistent with the catch-all 500 below.
-        console.warn(
-          `[agents] /api/agents/${alias}/prime non-zero exit ${result.exitCode}: ${stderr}`,
+        logWarn(
+          LOG_COMPONENT.agents,
+          `/api/agents/${alias}/prime non-zero exit ${result.exitCode}: ${stderr}`,
         );
         if (notFound) {
           res.status(404).json({
@@ -121,7 +124,7 @@ export function agentsRouter(opts: AgentsRouterOptions | string = {}): Router {
         // gascity-dashboard-473: spawn-arm host path redaction. See
         // beads.ts / mail-send.ts for rationale.
         if (err.kind === 'spawn') {
-          console.warn(`[agents] /api/agents/${alias}/prime spawn failed: ${err.message}`);
+          logWarn(LOG_COMPONENT.agents, `/api/agents/${alias}/prime spawn failed: ${err.message}`);
         }
         const wire = toWireExecError(err, status);
         res.status(wire.status).json(wire.body);
@@ -133,16 +136,11 @@ export function agentsRouter(opts: AgentsRouterOptions | string = {}): Router {
         parsed_args: { agent: alias, error_kind: 'unknown' },
         duration_ms: 0,
       });
-      // gascity-dashboard-473: mirror the ayr sr6 redaction on the
-      // catch-all 500. Raw err.message can embed OS detail; details.name
-      // (Error class) is the only safe channel.
-      console.warn(`[agents] /api/agents/${alias}/prime failed: ${(err as Error).message}`);
-      const wire = toWireInternal500(err, {
-        status: 500,
-        error: 'internal error',
-        kind: 'internal',
-      });
-      res.status(wire.status).json(wire.body);
+      writeRouteError(res, routeInternalError(err, {
+        component: LOG_COMPONENT.agents,
+        operation: `/api/agents/${alias}/prime failed`,
+        responseError: 'internal error',
+      }));
     }
   });
 

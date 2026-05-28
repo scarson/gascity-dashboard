@@ -31,6 +31,7 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/coverage/**',
       '**/.claude/**',
+      'backend/src/generated/**',
     ],
   },
   {
@@ -64,6 +65,17 @@ export default tseslint.config(
         caughtErrorsIgnorePattern: '^_',
       }],
       'import/first': 'error',
+      'no-console': 'error',
+    },
+  },
+  {
+    files: [
+      'backend/src/logging.ts',
+      'frontend/src/test/**/*.ts',
+      '**/*.test.{ts,tsx}',
+    ],
+    rules: {
+      'no-console': 'off',
     },
   },
   {

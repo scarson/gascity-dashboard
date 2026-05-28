@@ -71,7 +71,7 @@ describe('workflow display edge projection', () => {
 
     assert.deepEqual(detailEdges, [
       { from: 'root', to: 'a', kind: 'blocks' },
-      { from: 'a', to: 'b' },
+      { from: 'a', to: 'b', kind: 'dependency' },
     ]);
   });
 
@@ -191,7 +191,15 @@ function node(
     kind: 'task',
     constructKind: 'step',
     status: 'ready',
+    currentBeadId: id,
+    scope: { kind: 'workflow' },
+    visibleInGraph: true,
+    historicalOnly: false,
+    iterationSummary: { kind: 'single' },
+    attemptSummary: { kind: 'none' },
+    visibleExecutionInstanceId: id,
     executionInstances: [],
+    controlBadges: [],
     ...overrides,
   };
 }

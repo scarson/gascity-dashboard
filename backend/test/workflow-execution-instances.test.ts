@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { GcWorkflowBead } from 'gas-city-dashboard-shared';
+import type { GcWorkflowBead, WorkflowExecutionInstance } from 'gas-city-dashboard-shared';
 import {
   buildWorkflowDisplayNode,
   latestIterationsByLoop,
@@ -31,15 +31,18 @@ describe('workflow execution instance presentation', () => {
     const node = buildWorkflowDisplayNode(group, [], 2);
 
     assert.equal(node.status, 'active');
-    assert.equal(node.visibleIteration, 2);
-    assert.equal(node.iterationCount, 2);
-    assert.equal(node.hasHistoricalIterations, true);
+    assert.deepEqual(node.iterationSummary, {
+      kind: 'stacked',
+      visibleIteration: 2,
+      iterationCount: 2,
+      control: { kind: 'known', id: 'review-loop' },
+    });
     assert.equal(node.visibleInGraph, true);
     assert.equal(node.historicalOnly, false);
     assert.equal(node.executionInstances[0]?.historical, true);
-    assert.equal(node.executionInstances[0]?.streamable, false);
+    assert.equal(streamable(node.executionInstances[0]), false);
     assert.equal(node.executionInstances[1]?.currentIteration, true);
-    assert.equal(node.executionInstances[1]?.streamable, true);
+    assert.equal(streamable(node.executionInstances[1]), true);
   });
 
   test('preserves older-only loop nodes as historical evidence', () => {
@@ -59,11 +62,16 @@ describe('workflow execution instance presentation', () => {
 
     assert.equal(node.visibleInGraph, false);
     assert.equal(node.historicalOnly, true);
-    assert.equal(node.visibleIteration, 1);
+    assert.deepEqual(node.iterationSummary, {
+      kind: 'stacked',
+      visibleIteration: 1,
+      iterationCount: 1,
+      control: { kind: 'known', id: 'review-loop' },
+    });
     assert.equal(node.executionInstances[0]?.historical, true);
     assert.equal(node.executionInstances[0]?.currentIteration, false);
-    assert.equal(node.executionInstances[0]?.streamable, false);
-    assert.equal(node.executionInstances[0]?.sessionLink?.sessionId, 'session-i1');
+    assert.equal(streamable(node.executionInstances[0]), false);
+    assert.equal(sessionId(node.executionInstances[0]), 'session-i1');
   });
 
   test('summarizes retry attempts without hiding failed transcript history', () => {
@@ -91,12 +99,15 @@ describe('workflow execution instance presentation', () => {
     const node = buildWorkflowDisplayNode(group, [], undefined);
 
     assert.equal(node.status, 'completed');
-    assert.equal(node.attemptBadge, '2/3');
-    assert.equal(node.attemptCount, 2);
-    assert.equal(node.activeAttempt, undefined);
+    assert.deepEqual(node.attemptSummary, {
+      kind: 'tracked',
+      count: 2,
+      badge: { kind: 'bounded', label: '2/3' },
+      active: { kind: 'idle' },
+    });
     assert.equal(node.executionInstances[0]?.status, 'failed');
-    assert.equal(node.executionInstances[0]?.sessionLink?.sessionId, 'session-a1');
-    assert.equal(node.executionInstances[0]?.streamable, false);
+    assert.equal(sessionId(node.executionInstances[0]), 'session-a1');
+    assert.equal(streamable(node.executionInstances[0]), false);
     assert.equal(node.executionInstances[1]?.status, 'completed');
   });
 
@@ -114,8 +125,12 @@ describe('workflow execution instance presentation', () => {
 
     const node = buildWorkflowDisplayNode(group, [], undefined);
 
-    assert.equal(node.attemptBadge, undefined);
-    assert.equal(node.attemptCount, 1);
+    assert.deepEqual(node.attemptSummary, {
+      kind: 'tracked',
+      count: 1,
+      badge: { kind: 'count-only' },
+      active: { kind: 'idle' },
+    });
   });
 
   test('tracks latest iteration per loop control independently', () => {
@@ -153,6 +168,15 @@ function nodeGroup(overrides: Partial<WorkflowNodeGroup> = {}): WorkflowNodeGrou
   };
 }
 
+function streamable(instance: WorkflowExecutionInstance | undefined): boolean {
+  return instance?.session.kind === 'attached' && instance.session.streamable;
+}
+
+function sessionId(instance: WorkflowExecutionInstance | undefined): string {
+  assert.equal(instance?.session.kind, 'attached');
+  return instance.session.link.sessionId;
+}
+
 function bead(opts: {
   id: string;
   status?: string;
@@ -169,12 +193,13 @@ function bead(opts: {
   if (opts.outcome) metadata['gc.outcome'] = opts.outcome;
   if (opts.sessionId) metadata.session_id = opts.sessionId;
   if (opts.maxAttempts !== undefined) metadata['gc.max_attempts'] = String(opts.maxAttempts);
-  return {
+  const result: GcWorkflowBead = {
     id: opts.id,
     title: opts.id,
     status: opts.status ?? 'ready',
     kind: 'task',
-    assignee: opts.assignee,
     metadata,
   };
+  if (opts.assignee !== undefined) result.assignee = opts.assignee;
+  return result;
 }

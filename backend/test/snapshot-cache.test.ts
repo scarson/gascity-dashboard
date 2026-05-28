@@ -1,5 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import type { SourceAvailableState, SourceState } from 'gas-city-dashboard-shared';
 
 import { SourceCache, errorMessage } from '../src/snapshot/cache.js';
 
@@ -10,7 +11,7 @@ import { SourceCache, errorMessage } from '../src/snapshot/cache.js';
 //   3. Stale-while-error: load() throws after a prior success → status='stale'
 //      with .data preserved and .error populated
 //   4. Fixture fallback: useFixture + loadFixture + load() throws → status='fixture'
-//   5. Never-fetched + load() throws → synthetic status='error' state, null data
+//   5. Never-fetched + load() throws → synthetic status='error' state, no data
 //   6. snapshot() returns last cached state without triggering a load
 
 describe('SourceCache', () => {
@@ -32,7 +33,7 @@ describe('SourceCache', () => {
     assert.deepEqual(fresh.data, { value: 'live' });
     assert.equal(fresh.fetchedAt, '2026-05-22T12:00:00.000Z');
     assert.equal(fresh.staleAt, '2026-05-22T12:00:01.000Z');
-    assert.equal(fresh.error, null);
+    assert.deepEqual(fresh.error, { kind: 'none' });
 
     // Inside TTL window — should still be fresh, no extra load.
     nowMs += 500;
@@ -52,7 +53,7 @@ describe('SourceCache', () => {
     let resolveLoad: ((value: { value: string }) => void) | undefined;
 
     const cache = new SourceCache({
-      source: 'github',
+      source: 'resources',
       ttlMs: 1_000,
       load: () =>
         new Promise<{ value: string }>((resolve) => {
@@ -73,6 +74,9 @@ describe('SourceCache', () => {
     resolveLoad?.({ value: 'shared' });
 
     const [a, b, c] = await Promise.all([first, second, third]);
+    assertSourceAvailable(a);
+    assertSourceAvailable(b);
+    assertSourceAvailable(c);
     assert.deepEqual(a.data, { value: 'shared' });
     assert.deepEqual(b.data, { value: 'shared' });
     assert.deepEqual(c.data, { value: 'shared' });
@@ -83,6 +87,7 @@ describe('SourceCache', () => {
     // without re-entering load(). This is the post-settle cache-hit path
     // — distinct from (and weaker than) the mid-flight coalescing above.
     const fourth = await cache.get();
+    assertSourceAvailable(fourth);
     assert.deepEqual(fourth.data, { value: 'shared' });
     assert.equal(loadCount, 1, 'cache-hit must not trigger a new load');
   });
@@ -115,7 +120,7 @@ describe('SourceCache', () => {
     nowMs += 1_500;
     const stale = await cache.get();
     assert.equal(stale.status, 'stale');
-    assert.equal(stale.error, 'collector failed');
+    assert.deepEqual(stale.error, { kind: 'message', message: 'collector failed' });
     assert.deepEqual(stale.data, { value: 'live' });
     // Stale entry retains the original fetchedAt; staleAt is original + ttl.
     assert.equal(stale.fetchedAt, '2026-05-22T12:00:00.000Z');
@@ -139,13 +144,13 @@ describe('SourceCache', () => {
     const state = await cache.get();
     assert.equal(state.source, 'city');
     assert.equal(state.status, 'fixture');
-    assert.equal(state.error, 'live source unavailable');
+    assert.deepEqual(state.error, { kind: 'message', message: 'live source unavailable' });
     assert.deepEqual(state.data, { activeAgents: 4 });
   });
 
-  test('never-fetched + load() throws → synthetic error state with null data', async () => {
+  test('never-fetched + load() throws → synthetic error state without pretend data', async () => {
     const cache = new SourceCache({
-      source: 'github',
+      source: 'workflows',
       ttlMs: 1_000,
       load: async () => {
         throw new Error('upstream offline');
@@ -156,12 +161,12 @@ describe('SourceCache', () => {
     });
 
     const state = await cache.get();
-    assert.equal(state.source, 'github');
+    assert.equal(state.source, 'workflows');
     assert.equal(state.status, 'error');
-    assert.equal(state.data, null);
     assert.equal(state.error, 'upstream offline');
-    assert.equal(state.fetchedAt, null);
-    assert.equal(state.staleAt, null);
+    assert.equal('data' in state, false);
+    assert.equal('fetchedAt' in state, false);
+    assert.equal('staleAt' in state, false);
   });
 
   test('snapshot() returns last cached state without triggering a load', async () => {
@@ -178,7 +183,7 @@ describe('SourceCache', () => {
     // Before any fetch, snapshot() returns synthetic error WITHOUT calling load().
     const cold = cache.snapshot();
     assert.equal(cold.status, 'error');
-    assert.equal(cold.data, null);
+    assert.equal('data' in cold, false);
     assert.equal(loadCount, 0);
 
     // Prime with one .get(), then snapshot() must return the cached value
@@ -213,6 +218,7 @@ describe('SourceCache', () => {
 
     // Without force, a second .get() inside TTL must NOT re-invoke load().
     const cached = await cache.get();
+    assertSourceAvailable(cached);
     assert.deepEqual(cached.data, { value: 'load-1' });
     assert.equal(loadCount, 1, 'unforced .get() within TTL must reuse cache');
 
@@ -230,7 +236,7 @@ describe('SourceCache', () => {
     // confirming a non-Promise return resolves correctly through .get().
     let loadCount = 0;
     const cache = new SourceCache<{ value: string }>({
-      source: 'workflows',
+      source: 'resources',
       ttlMs: 1_000,
       load: (): { value: string } => {
         loadCount += 1;
@@ -300,6 +306,12 @@ describe('SourceCache constructor validation', () => {
   });
 });
 
+function assertSourceAvailable<T>(
+  state: SourceState<T>,
+): asserts state is SourceAvailableState<T> {
+  assert.notEqual(state.status, 'error');
+}
+
 describe('errorMessage', () => {
   test('returns message for Error instances', () => {
     assert.equal(errorMessage(new Error('boom')), 'boom');
@@ -340,11 +352,11 @@ describe('SourceCache error sanitization (gascity-dashboard-fhj, gascity-dashboa
 
     const state = await cache.get();
     assert.equal(state.status, 'error');
-    assert.equal(state.data, null);
     assert.equal(state.error, 'resource collection failed');
+    assert.equal('data' in state, false);
     // Regression guard: the OS path must never appear in the wire shape.
-    assert.ok(!state.error?.includes('/proc/meminfo'));
-    assert.ok(!state.error?.includes('ENOENT'));
+    assert.ok(!state.error.includes('/proc/meminfo'));
+    assert.ok(!state.error.includes('ENOENT'));
   });
 
   test('default-on: omitting sanitizeErrorMessage collapses raw error to "<source> collection failed"', async () => {
@@ -363,17 +375,17 @@ describe('SourceCache error sanitization (gascity-dashboard-fhj, gascity-dashboa
     const state = await cache.get();
     assert.equal(state.status, 'error');
     assert.equal(state.error, 'resources collection failed');
-    assert.ok(!state.error?.includes('/proc/meminfo'));
-    assert.ok(!state.error?.includes('ENOENT'));
+    assert.ok(!state.error.includes('/proc/meminfo'));
+    assert.ok(!state.error.includes('ENOENT'));
   });
 
   test('default-on uses the source name in the generic message', async () => {
     // Pin the message shape so the contract is observable from outside
     // the cache module (the route layer surfaces this to the operator).
-    const cases: Array<{ source: 'city' | 'workflows' | 'github'; expected: string }> = [
+    const cases: Array<{ source: 'city' | 'workflows' | 'resources'; expected: string }> = [
       { source: 'city', expected: 'city collection failed' },
       { source: 'workflows', expected: 'workflows collection failed' },
-      { source: 'github', expected: 'github collection failed' },
+      { source: 'resources', expected: 'resources collection failed' },
     ];
 
     for (const { source, expected } of cases) {
@@ -428,8 +440,8 @@ describe('SourceCache error sanitization (gascity-dashboard-fhj, gascity-dashboa
 
     const state = await cache.get();
     assert.equal(state.status, 'error');
-    assert.ok(state.error?.includes('gc supervisor returned 503'));
-    assert.ok(state.error?.includes('fixture data for source city is null'));
+    assert.ok(state.error.includes('gc supervisor returned 503'));
+    assert.ok(state.error.includes('fixture data for source city is null'));
   });
 
   test('onError observer fires with raw error BEFORE sanitization, so server-side logs keep fidelity', async () => {
@@ -496,13 +508,13 @@ describe('SourceCache error sanitization (gascity-dashboard-fhj, gascity-dashboa
 
     const state = await cache.get();
     assert.equal(state.status, 'error');
-    assert.ok(!state.error?.includes('/proc/'));
-    assert.ok(!state.error?.includes('/var/lib'));
-    assert.ok(!state.error?.includes('ENOENT'));
+    assert.ok(!state.error.includes('/proc/'));
+    assert.ok(!state.error.includes('/var/lib'));
+    assert.ok(!state.error.includes('ENOENT'));
     // The sanitized message appears for both halves; cache uses the
     // same sanitizer on each side so the concat result is two copies
     // of the generic string. Exact shape is an internal detail; the
     // contract is: no raw path leaked.
-    assert.ok(state.error?.includes('resource collection failed'));
+    assert.ok(state.error.includes('resource collection failed'));
   });
 });

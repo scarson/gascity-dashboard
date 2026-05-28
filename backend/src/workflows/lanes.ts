@@ -10,7 +10,7 @@ export function buildWorkflowDisplayLanes(
 ): WorkflowDisplayLane[] {
   const byScope = new Map<string, WorkflowDisplayLane>();
   for (const node of nodes) {
-    const scope = node.scopeRef ?? WORKFLOW_SCOPE;
+    const scope = node.scope.kind === 'scoped' ? node.scope.ref : WORKFLOW_SCOPE;
     const existing =
       byScope.get(scope) ??
       {

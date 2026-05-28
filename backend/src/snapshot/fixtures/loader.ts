@@ -12,8 +12,8 @@ import { fixtureSnapshot } from './snapshot.js';
 //
 // Demo-dash exposes markSnapshotAsFixture / markSourceAsFixture helpers
 // for wrapping arbitrary input snapshots. We don't port them: the
-// committed fixtureSnapshot already has status='fixture' on every source
-// and SourceCache stamps its own envelope on the way out anyway.
+// committed fixtureSnapshot already has fixture data for every served source;
+// SourceCache stamps its own envelope on the way out anyway.
 
 export async function loadFixtureSnapshot(): Promise<DashboardSnapshot> {
   return fixtureSnapshot;
@@ -21,26 +21,19 @@ export async function loadFixtureSnapshot(): Promise<DashboardSnapshot> {
 
 /**
  * Returns a loader function suitable for SourceCacheOptions.loadFixture.
- * The returned function rejects when the requested source's fixture data
- * is null (the placeholder shape used for collectors that aren't wired
- * yet — github at v0). Callers MUST only bind this for
- * sources with populated fixture data; binding for a null-data source
- * makes both the live load AND the fixture fallback throw, leaving the
- * cache in the synthetic-error state. Coverage at
- * backend/test/snapshot-fixtures.test.ts asserts the null-source guard.
+ * All current served sources have populated fixture data. If a future source
+ * is added, the typed fixture snapshot must carry that source's data before it
+ * can be bound here.
  */
 export function fixtureSourceLoader<K extends SourceName>(
   source: K,
 ): () => Promise<SourceDataMap[K]> {
   return async () => {
-    const data = fixtureSnapshot.sources[source].data;
-    if (data === null) {
-      throw new Error(`fixture data for source '${source}' is null`);
-    }
+    const state = fixtureSnapshot.sources[source];
     // Cast is unavoidable: tsc cannot narrow a generic index access
-    // (sources[source].data) back to SourceDataMap[K] after a null
-    // guard. Soundness rests on the fixtureSnapshot annotation — if
-    // its shape drifts, the typed-const compile gate catches it first.
-    return data as SourceDataMap[K];
+    // (sources[source].data) back to SourceDataMap[K]. Soundness rests on the
+    // fixtureSnapshot annotation — if its shape drifts, the typed-const compile
+    // gate catches it first.
+    return state.data as SourceDataMap[K];
   };
 }

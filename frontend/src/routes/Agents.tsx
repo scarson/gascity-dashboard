@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { GcSession, GcSessionState } from 'gas-city-dashboard-shared';
 import { effectiveContextPct } from 'gas-city-dashboard-shared';
@@ -18,6 +18,7 @@ import { useCachedData } from '../hooks/useCachedData';
 import { useGcEventRefresh } from '../hooks/useGcEvents';
 import { useListFilters, type FilterChip, type SortMode } from '../hooks/useListFilters';
 import { formatRelative } from '../hooks/time';
+import { useVisibleInterval } from '../hooks/useVisibleInterval';
 import {
   ORCHESTRATION_PROJECT,
   isPerRigDispatcher,
@@ -104,12 +105,7 @@ export function AgentsPage() {
     [rows, peekId],
   );
 
-  useEffect(() => {
-    const tick = setInterval(() => {
-      if (!document.hidden) setNow(Date.now());
-    }, 15_000);
-    return () => clearInterval(tick);
-  }, []);
+  useVisibleInterval(() => setNow(Date.now()), 15_000);
 
   const sseState = useGcEventRefresh(['session.'], () => void refresh());
 
@@ -170,8 +166,8 @@ export function AgentsPage() {
         <StatusBadge
           tone={stateTone(r.state)}
           label={r.state}
-          trailing={r.attached ? 'att' : undefined}
-          title={r.reason ? `reason: ${r.reason}` : undefined}
+          {...(r.attached ? { trailing: 'att' } : {})}
+          {...(r.reason ? { title: `reason: ${r.reason}` } : {})}
         />
       ),
       className: 'w-32',

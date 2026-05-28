@@ -4,6 +4,7 @@ import { fetchTriage as defaultFetchTriage, collectItems } from './triage.js';
 import { writeCache } from './storage.js';
 import { purgeSlungKeys, slungKey } from './slung-state.js';
 import { notifyRefresh, sendHeartbeat } from './sse.js';
+import { LOG_COMPONENT, logError, logInfo, logWarn } from '../logging.js';
 
 // Nightly enrichment worker (gascity-dashboard-ar9). In-process setInterval
 // scheduler — no external cron. Runs once at boot (after a short delay so
@@ -19,6 +20,45 @@ import { notifyRefresh, sendHeartbeat } from './sse.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const STARTUP_DELAY_MS = 5_000;
+
+export interface RefresherTimer {
+  unref(): void;
+}
+
+export interface RefresherRuntime {
+  startupDelayMs: number;
+  heartbeatIntervalMs: number;
+  setTimeout(callback: () => void, delayMs: number): RefresherTimer;
+  setInterval(callback: () => void, delayMs: number): RefresherTimer;
+  clearTimeout(timer: RefresherTimer): void;
+  clearInterval(timer: RefresherTimer): void;
+}
+
+export interface MaintainerRefresher {
+  readonly running: boolean;
+  start(): void;
+  stop(): void;
+}
+
+type TimerState =
+  | { status: 'idle' }
+  | { status: 'scheduled'; timer: RefresherTimer };
+
+type RefreshState =
+  | { status: 'idle' }
+  | { status: 'running'; promise: Promise<void> };
+
+const idleTimer = (): TimerState => ({ status: 'idle' });
+const idleRefresh = (): RefreshState => ({ status: 'idle' });
+
+const nodeRuntime: RefresherRuntime = {
+  startupDelayMs: STARTUP_DELAY_MS,
+  heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  setInterval: (callback, delayMs) => setInterval(callback, delayMs),
+  clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout),
+  clearInterval: (timer) => clearInterval(timer as NodeJS.Timeout),
+};
 
 export interface WorkerOptions {
   repo: string;
@@ -41,34 +81,72 @@ export interface WorkerOptions {
   fetchTriage?: (repo: string) => Promise<MaintainerTriage>;
 }
 
-let refreshTimer: NodeJS.Timeout | null = null;
-let heartbeatTimer: NodeJS.Timeout | null = null;
+export function createMaintainerRefresher(
+  opts: WorkerOptions,
+  runtime: RefresherRuntime = nodeRuntime,
+): MaintainerRefresher {
+  let startupTimer: TimerState = idleTimer();
+  let refreshTimer: TimerState = idleTimer();
+  let heartbeatTimer: TimerState = idleTimer();
+  let refreshState: RefreshState = idleRefresh();
 
-export function startMaintainerRefresher(opts: WorkerOptions): void {
-  if (refreshTimer !== null) {
-    // Already running. Safe-noop so a re-call during dev hot reload
-    // doesn't accumulate intervals.
-    return;
-  }
+  const triggerRefresh = () => {
+    if (refreshState.status === 'running') {
+      logWarn(LOG_COMPONENT.maintainer, 'refresh skipped because the previous run is still active');
+      return;
+    }
+    const promise = runRefresh(opts).finally(() => {
+      if (refreshState.status === 'running' && refreshState.promise === promise) {
+        refreshState = idleRefresh();
+      }
+    });
+    refreshState = { status: 'running', promise };
+  };
 
-  // Heartbeat tick — independent of the refresh schedule.
-  heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
-  heartbeatTimer.unref();
+  const clearScheduledTimer = (
+    state: TimerState,
+    clear: (timer: RefresherTimer) => void,
+  ): TimerState => {
+    if (state.status === 'idle') return state;
+    clear(state.timer);
+    return idleTimer();
+  };
 
-  // Kick off an initial refresh shortly after boot. .unref() so the
-  // backend can shut down cleanly while the timer is still in-flight.
-  setTimeout(() => {
-    void runRefresh(opts);
-  }, STARTUP_DELAY_MS).unref();
+  return {
+    get running() {
+      return refreshTimer.status === 'scheduled';
+    },
+    start() {
+      if (refreshTimer.status === 'scheduled') {
+        return;
+      }
 
-  refreshTimer = setInterval(() => {
-    void runRefresh(opts);
-  }, opts.intervalMs);
-  refreshTimer.unref();
+      heartbeatTimer = {
+        status: 'scheduled',
+        timer: runtime.setInterval(sendHeartbeat, runtime.heartbeatIntervalMs),
+      };
+      heartbeatTimer.timer.unref();
 
-  console.log(
-    `[maintainer] refresher started for ${opts.repo}, interval ${formatInterval(opts.intervalMs)}`,
-  );
+      startupTimer = {
+        status: 'scheduled',
+        timer: runtime.setTimeout(triggerRefresh, runtime.startupDelayMs),
+      };
+      startupTimer.timer.unref();
+
+      refreshTimer = {
+        status: 'scheduled',
+        timer: runtime.setInterval(triggerRefresh, opts.intervalMs),
+      };
+      refreshTimer.timer.unref();
+
+      logInfo(LOG_COMPONENT.maintainer, `refresher started for ${opts.repo}, interval ${formatInterval(opts.intervalMs)}`);
+    },
+    stop() {
+      startupTimer = clearScheduledTimer(startupTimer, runtime.clearTimeout);
+      refreshTimer = clearScheduledTimer(refreshTimer, runtime.clearInterval);
+      heartbeatTimer = clearScheduledTimer(heartbeatTimer, runtime.clearInterval);
+    },
+  };
 }
 
 /**
@@ -96,19 +174,18 @@ export async function runRefresh(opts: WorkerOptions): Promise<void> {
         .map((item) => slungKey(item.kind, item.number));
       await purgeSlungKeys(opts.slungStatePath, vettedKeys);
     } catch (purgeErr) {
-      console.warn(
-        `[maintainer] slung-state purge failed (refresh succeeded): ${(purgeErr as Error).message}`,
+      logWarn(
+        LOG_COMPONENT.maintainer,
+        `slung-state purge failed (refresh succeeded): ${purgeErr instanceof Error ? purgeErr.message : 'unknown error'}`,
       );
     }
     notifyRefresh(envelope);
     const issues = envelope.totals.issues_open;
     const prs = envelope.totals.prs_open;
-    console.log(
-      `[maintainer] refresh ok: ${issues} issues, ${prs} PRs in ${Date.now() - start}ms`,
-    );
+    logInfo(LOG_COMPONENT.maintainer, `refresh ok: ${issues} issues, ${prs} PRs in ${Date.now() - start}ms`);
   } catch (err) {
     const msg = err instanceof ExecError ? err.message : (err as Error).message;
-    console.error(`[maintainer] refresh failed: ${msg}`);
+    logError(LOG_COMPONENT.maintainer, `refresh failed: ${msg}`);
   }
 }
 

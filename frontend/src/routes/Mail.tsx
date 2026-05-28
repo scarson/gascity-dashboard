@@ -16,6 +16,7 @@ import { displayLabel } from '../hooks/aliasPriority';
 import { useListFilters, type FilterChip } from '../hooks/useListFilters';
 import { mailProject } from '../hooks/projectOf';
 import { formatRelative } from '../hooks/time';
+import { useVisibleInterval } from '../hooks/useVisibleInterval';
 
 // Mail chips operate on read-state. "Sent" box has no unread concept;
 // the chips still render but their match predicates are box-aware.
@@ -58,17 +59,8 @@ export function MailPage() {
   useEffect(() => {
     loadAliases();
   }, [loadAliases]);
-  // Tick state so relative timestamps refresh between data fetches. Mirrors
-  // the Agents.tsx pattern: 15s interval, visibility-aware so background
-  // tabs don't churn.
   const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    const tick = setInterval(() => {
-      if (!document.hidden) setNow(Date.now());
-    }, 15_000);
-    return () => clearInterval(tick);
-  }, []);
+  useVisibleInterval(() => setNow(Date.now()), 15_000);
 
   const { data: mailData, loading, error: mailError, refresh } = useCachedData(
     `mail:${box}:${viewingAs.alias}`,

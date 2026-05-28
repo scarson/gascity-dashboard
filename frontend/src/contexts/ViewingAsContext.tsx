@@ -11,6 +11,11 @@ import {
 import type { ViewingAs } from 'gas-city-dashboard-shared';
 import { api } from '../api/client';
 import { prioritizeAliases, type AliasBucket } from '../hooks/aliasPriority';
+import {
+  readBrowserStorage,
+  removeBrowserStorage,
+  writeBrowserStorage,
+} from '../lib/browserStorage';
 
 // Identity-switching for mail:
 //
@@ -34,6 +39,7 @@ import { prioritizeAliases, type AliasBucket } from '../hooks/aliasPriority';
 // list containing just the operator — the UI degrades but never breaks.
 
 const STORAGE_KEY = 'gascity.dashboard.viewingAs';
+const COMPONENT = 'ViewingAsContext';
 const OPERATOR = 'stephanie';
 // gc's wire identity for the operator (mail is addressed to/from `human`,
 // not `stephanie` — see backend exec.ts and routes/mail.ts). The agent
@@ -78,24 +84,19 @@ interface ViewingAsContextValue {
 const Context = createContext<ViewingAsContextValue | null>(null);
 
 function readStored(): string {
-  try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEY);
-    if (typeof raw === 'string' && raw.length > 0 && raw.length <= 64) return raw;
-  } catch {
-    /* sessionStorage may be unavailable */
+  const stored = readBrowserStorage('sessionStorage', STORAGE_KEY, COMPONENT);
+  if (stored.status === 'found') {
+    const raw = stored.value;
+    if (raw.length > 0 && raw.length <= 64) return raw;
   }
   return OPERATOR;
 }
 
 function writeStored(alias: string): void {
-  try {
-    if (alias === OPERATOR) {
-      window.sessionStorage.removeItem(STORAGE_KEY);
-    } else {
-      window.sessionStorage.setItem(STORAGE_KEY, alias);
-    }
-  } catch {
-    /* no-op */
+  if (alias === OPERATOR) {
+    removeBrowserStorage('sessionStorage', STORAGE_KEY, COMPONENT);
+  } else {
+    writeBrowserStorage('sessionStorage', STORAGE_KEY, alias, COMPONENT);
   }
 }
 

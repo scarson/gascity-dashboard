@@ -130,7 +130,7 @@ export function BeadDetailModal({
             loading={links.loading}
             error={links.error}
             now={now}
-            onOpenBead={onOpenBead}
+            {...(onOpenBead !== undefined ? { onOpenBead } : {})}
           />
         </>
       )}
@@ -167,23 +167,20 @@ function readWorkflowMeta(bead: GcBead): WorkflowMeta {
   const md = bead.metadata;
   if (!md || typeof md !== 'object') return {};
   const r = md as Record<string, unknown>;
-  return {
-    kind: typeof r['gc.kind'] === 'string' ? (r['gc.kind'] as string) : undefined,
-    originBeadId:
-      typeof r['gc.source_bead_id'] === 'string'
-        ? (r['gc.source_bead_id'] as string)
-        : undefined,
-    formulaContract:
-      typeof r['gc.formula_contract'] === 'string'
-        ? (r['gc.formula_contract'] as string)
-        : undefined,
-    runTarget:
-      typeof r['gc.run_target'] === 'string'
-        ? (r['gc.run_target'] as string)
-        : typeof r['gc.routed_to'] === 'string'
-          ? (r['gc.routed_to'] as string)
-          : undefined,
-  };
+  const workflowMeta: WorkflowMeta = {};
+  if (typeof r['gc.kind'] === 'string') workflowMeta.kind = r['gc.kind'];
+  if (typeof r['gc.source_bead_id'] === 'string') {
+    workflowMeta.originBeadId = r['gc.source_bead_id'];
+  }
+  if (typeof r['gc.formula_contract'] === 'string') {
+    workflowMeta.formulaContract = r['gc.formula_contract'];
+  }
+  if (typeof r['gc.run_target'] === 'string') {
+    workflowMeta.runTarget = r['gc.run_target'];
+  } else if (typeof r['gc.routed_to'] === 'string') {
+    workflowMeta.runTarget = r['gc.routed_to'];
+  }
+  return workflowMeta;
 }
 
 type BeadKind = 'template' | 'wisp' | 'work';

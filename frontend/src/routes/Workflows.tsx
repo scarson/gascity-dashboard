@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { SourceStatus } from 'gas-city-dashboard-shared';
+import { useCallback, useRef, useState } from 'react';
+import type { DashboardSnapshot, SourceStatus } from 'gas-city-dashboard-shared';
 import { api } from '../api/client';
 import { Button } from '../components/Button';
 import { PageHeader } from '../components/PageHeader';
@@ -8,6 +8,7 @@ import { WorkflowMap } from '../components/workflow/WorkflowMap';
 import { useCachedData } from '../hooks/useCachedData';
 import { useGcEventRefresh } from '../hooks/useGcEvents';
 import { formatRelative } from '../hooks/time';
+import { useVisibleInterval } from '../hooks/useVisibleInterval';
 
 // /workflows route (gascity-dashboard-0t6, made live in
 // gascity-dashboard-bqn). Reads /api/snapshot via useCachedData for
@@ -34,6 +35,8 @@ import { formatRelative } from '../hooks/time';
 
 const TICK_MS = 5_000;
 const REFRESH_DEBOUNCE_MS = 10_000;
+const WORKFLOW_PHASE_GRAMMAR =
+  'Phase grammar: intake, implementation, review, approval, finalization.';
 
 export function WorkflowsPage() {
   const { data, loading, error, refresh } = useCachedData(
@@ -46,13 +49,7 @@ export function WorkflowsPage() {
   const loadingRef = useRef(loading);
   loadingRef.current = loading;
   const lastRefreshAtRef = useRef(0);
-
-  useEffect(() => {
-    const tick = setInterval(() => {
-      if (!document.hidden) setNow(Date.now());
-    }, TICK_MS);
-    return () => clearInterval(tick);
-  }, []);
+  useVisibleInterval(() => setNow(Date.now()), TICK_MS);
 
   const workflows = data?.sources.workflows ?? null;
   workflowsStatusRef.current = workflows?.status ?? null;
@@ -78,9 +75,7 @@ export function WorkflowsPage() {
 
   const sseState = useGcEventRefresh(['bead.'], onSseMatch);
 
-  const synopsis = data
-    ? `${data.headline.activeWorkflows ?? 0} active workflows across the supervisor's bead store. Phase grammar: intake, implementation, review, approval, finalization.`
-    : 'Loading the workflow lanes.';
+  const synopsis = workflowSynopsis(data);
 
   const freshnessLabel = workflows
     ? workflows.status === 'fresh'
@@ -132,4 +127,15 @@ export function WorkflowsPage() {
       )}
     </section>
   );
+}
+
+function workflowSynopsis(data: DashboardSnapshot | undefined): string {
+  if (data === undefined) return 'Loading the workflow lanes.';
+
+  const metric = data.headline.activeWorkflows;
+  if (metric.status === 'available') {
+    return `${metric.value} active workflows across the supervisor's bead store. ${WORKFLOW_PHASE_GRAMMAR}`;
+  }
+
+  return `Workflow counts unavailable: ${metric.error}. ${WORKFLOW_PHASE_GRAMMAR}`;
 }

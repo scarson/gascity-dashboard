@@ -41,11 +41,9 @@ export const fixtureSessions: GcSessionList = {
 // demo-dash src/fixtures/snapshot.json with operator-specific names and
 // paths replaced by generic placeholders.
 //
-// Only city / workflows / resources carry realistic data; github is
-// intentionally null until its collector is wired (deferred pending bead
-// dkb's architecture decisions). The placeholder envelope keeps
-// DashboardSources fully populated so callers can index every source
-// without optional-chaining churn.
+// City / workflows / resources are the snapshot sources this dashboard serves.
+// Deferred demo-dash sources are intentionally absent from the runtime
+// contract until they have real collectors and visible product surface.
 
 export const fixtureSnapshot = {
   generatedAt: '2026-05-22T22:00:00.000Z',
@@ -56,11 +54,10 @@ export const fixtureSnapshot = {
     useFixtures: true,
   },
   headline: {
-    activeAgents: 12,
-    maxAgents: 100,
-    activeSessions: 28,
-    activeWorkflows: 6,
-    githubOpenReviews: 14,
+    activeAgents: { status: 'available', value: 12 },
+    maxAgents: { status: 'available', value: 100 },
+    activeSessions: { status: 'available', value: 28 },
+    activeWorkflows: { status: 'available', value: 6 },
   },
   sources: {
     city: {
@@ -68,13 +65,13 @@ export const fixtureSnapshot = {
       status: 'fixture',
       fetchedAt: '2026-05-22T22:00:00.000Z',
       staleAt: '2026-05-22T22:00:45.000Z',
-      error: null,
+      error: { kind: 'none' },
       data: {
         activeAgents: 12,
         totalAgents: 17,
         activeSessions: 28,
         suspendedSessions: 0,
-        maxSessions: 100,
+        maxSessions: { status: 'available', value: 100 },
         sessionsByProvider: [
           { provider: 'codex', active: 18, total: 22 },
           { provider: 'claude', active: 7, total: 8 },
@@ -93,7 +90,7 @@ export const fixtureSnapshot = {
       status: 'fixture',
       fetchedAt: '2026-05-22T22:00:00.000Z',
       staleAt: '2026-05-22T22:00:30.000Z',
-      error: null,
+      error: { kind: 'none' },
       data: {
         vcpuCount: 32,
         loadAverage: [8.4, 7.9, 7.1],
@@ -123,7 +120,7 @@ export const fixtureSnapshot = {
       status: 'fixture',
       fetchedAt: '2026-05-22T22:00:00.000Z',
       staleAt: '2026-05-22T22:01:00.000Z',
-      error: null,
+      error: { kind: 'none' },
       data: {
         totalActive: 6,
         runCounts: {
@@ -139,9 +136,18 @@ export const fixtureSnapshot = {
           {
             id: 'lane-1',
             title: 'Example workflow',
-            formula: 'mol-example-v1',
-            externalUrl: 'https://github.com/example-org/example-repo/pull/1',
-            externalLabel: 'PR #1',
+            formula: { status: 'known', name: 'mol-example-v1' },
+            scope: {
+              status: 'available',
+              kind: 'city',
+              ref: 'example-city',
+              rootStoreRef: 'city:example-city',
+            },
+            external: {
+              status: 'available',
+              label: 'PR #1',
+              url: 'https://github.com/example-org/example-repo/pull/1',
+            },
             phase: 'review',
             phaseLabel: 'review round 2',
             statusCounts: {
@@ -150,7 +156,10 @@ export const fixtureSnapshot = {
               closed: 8,
             },
             activeAssignees: ['agent-1', 'agent-2'],
-            updatedAt: '2026-05-22T21:58:00.000Z',
+            updatedAt: {
+              status: 'available',
+              at: '2026-05-22T21:58:00.000Z',
+            },
             stages: [
               { key: 'intake', label: 'Intake', status: 'complete' },
               { key: 'implementation', label: 'Implementation', status: 'complete' },
@@ -159,10 +168,21 @@ export const fixtureSnapshot = {
             // Engine inputs (gascity-dashboard-3ax). 'mol-example-v1' is not a
             // recognised formula, so formulaStageResolved is false → the engine
             // serves this lane as 'inferred' (honest for a degraded-mode sample).
-            activeStepId: null,
-            activeStepAttempt: null,
-            activeStageIndex: 2,
+            progress: {
+              status: 'stage_only',
+              stage: {
+                status: 'available',
+                index: 2,
+                key: 'review',
+                label: 'Review',
+              },
+              error: 'active workflow step unavailable',
+            },
             formulaStageResolved: false,
+            health: {
+              status: 'unavailable',
+              error: 'workflow health has not been derived',
+            },
           },
         ],
         recentChanges: [
@@ -174,18 +194,13 @@ export const fixtureSnapshot = {
           },
         ],
         // census + per-lane health are engine-derived at serve time
-        // (gascity-dashboard-3ax); the stored fixture leaves them null and
-        // deriveWorkflowHealth fills them in the snapshot read path.
-        census: null,
+        // (gascity-dashboard-3ax); the stored fixture carries the pre-engine
+        // state and deriveWorkflowHealth replaces it in the snapshot read path.
+        census: {
+          status: 'unavailable',
+          error: 'workflow health has not been derived',
+        },
       },
-    },
-    github: {
-      source: 'github',
-      status: 'fixture',
-      fetchedAt: null,
-      staleAt: null,
-      error: null,
-      data: null,
     },
   },
 } satisfies DashboardSnapshot;

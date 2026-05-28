@@ -45,9 +45,15 @@ export function LaneCard({ lane, now }: LaneCardProps) {
         </span>
         <span
           className="text-label uppercase tracking-wider text-fg-faint tnum tabular-nums"
-          title={lane.updatedAt ?? 'no recent update'}
+          title={
+            lane.updatedAt.status === 'available'
+              ? lane.updatedAt.at
+              : lane.updatedAt.error
+          }
         >
-          {formatRelative(lane.updatedAt, now)}
+          {lane.updatedAt.status === 'available'
+            ? formatRelative(lane.updatedAt.at, now)
+            : '·'}
         </span>
       </div>
 
@@ -58,26 +64,26 @@ export function LaneCard({ lane, now }: LaneCardProps) {
         {lane.title}
       </Link>
 
-      {(lane.externalLabel !== null || lane.formula !== null) && (
+      {(lane.external.status !== 'unavailable' || lane.formula.status === 'known') && (
         <div className="mt-1 flex items-baseline gap-x-4 gap-y-1 flex-wrap text-label">
-          {lane.externalLabel !== null && (
-            lane.externalUrl !== null ? (
+          {lane.external.status !== 'unavailable' && (
+            lane.external.status === 'available' ? (
               <a
-                href={lane.externalUrl}
+                href={lane.external.url}
                 target="_blank"
                 rel="noreferrer"
                 className="text-fg-muted uppercase tracking-wider hover:text-fg focus-mark"
               >
-                {lane.externalLabel}
+                {lane.external.label}
               </a>
             ) : (
               <span className="text-fg-muted uppercase tracking-wider">
-                {lane.externalLabel}
+                {lane.external.label}
               </span>
             )
           )}
-          {lane.formula !== null && (
-            <span className="text-fg-faint tnum">{lane.formula}</span>
+          {lane.formula.status === 'known' && (
+            <span className="text-fg-faint tnum">{lane.formula.name}</span>
           )}
         </div>
       )}
@@ -131,9 +137,9 @@ export function LaneCard({ lane, now }: LaneCardProps) {
 
 function workflowDetailHref(lane: WorkflowLane): string {
   const search = new URLSearchParams();
-  if (lane.scopeKind && lane.scopeRef) {
-    search.set('scope_kind', lane.scopeKind);
-    search.set('scope_ref', lane.scopeRef);
+  if (lane.scope.status === 'available') {
+    search.set('scope_kind', lane.scope.kind);
+    search.set('scope_ref', lane.scope.ref);
   }
   const qs = search.toString();
   return `/workflows/${encodeURIComponent(lane.id)}${qs ? `?${qs}` : ''}`;

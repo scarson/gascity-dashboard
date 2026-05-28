@@ -382,7 +382,7 @@ async function installApiFixtureRoutes(context) {
     const payload = route.request().url().includes('/diff')
       ? {
           kind: 'not_git',
-          rootPath: null,
+          rootPath: { kind: 'unavailable', reason: 'not_git' },
           status: [],
           changedFiles: [],
           unstagedDiff: '',
@@ -401,14 +401,18 @@ async function installApiFixtureRoutes(context) {
     const payload = route.request().url().includes('/diff')
       ? {
           kind: 'path_unknown',
-          rootPath: null,
+          rootPath: { kind: 'unavailable', reason: 'path_unknown' },
           status: [],
           changedFiles: [],
           unstagedDiff: '',
           stagedDiff: '',
           truncated: false,
         }
-      : { ...fixture.detail, workflowId: 'gc-path-unknown', executionPath: null };
+      : {
+          ...fixture.detail,
+          workflowId: 'gc-path-unknown',
+          executionPath: { kind: 'unavailable', reason: 'missing_cwd_and_rig_root' },
+        };
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -420,7 +424,7 @@ async function installApiFixtureRoutes(context) {
     const payload = route.request().url().includes('/diff')
       ? {
           kind: 'ok',
-          rootPath: '/tmp/gascity/adopt-pr-42',
+          rootPath: { kind: 'known', path: '/tmp/gascity/adopt-pr-42' },
           status: [],
           changedFiles: [],
           unstagedDiff: '',
@@ -529,16 +533,14 @@ function snapshotFixture() {
       useFixtures: false,
     },
     headline: {
-      activeAgents: null,
-      maxAgents: null,
-      activeSessions: null,
-      activeWorkflows: 1,
-      githubOpenReviews: null,
+      activeAgents: unavailableMetric('city', 'city unavailable in fixture'),
+      maxAgents: unavailableMetric('city', 'city unavailable in fixture'),
+      activeSessions: unavailableMetric('city', 'city unavailable in fixture'),
+      activeWorkflows: { status: 'available', value: 1 },
     },
     sources: {
-      aimux: sourceFixture('aimux', null),
-      city: sourceFixture('city', null),
-      resources: sourceFixture('resources', null),
+      city: sourceUnavailable('city', 'city unavailable in fixture'),
+      resources: sourceUnavailable('resources', 'resources unavailable in fixture'),
       workflows: sourceFixture('workflows', {
         totalActive: 1,
         runCounts: {
@@ -552,9 +554,11 @@ function snapshotFixture() {
         },
         lanes: [workflowLaneFixture()],
         recentChanges: [],
+        census: {
+          status: 'unavailable',
+          error: 'workflow health has not been derived',
+        },
       }),
-      github: sourceFixture('github', null),
-      tokens: sourceFixture('tokens', null),
     },
   };
 }
@@ -563,12 +567,14 @@ function workflowLaneFixture() {
   return {
     id: 'gc-adopt-pr-active',
     title: 'Adopt PR #42',
-    formula: 'mol-adopt-pr-v2',
-    scopeKind: 'city',
-    scopeRef: 'racoon-city',
-    rootStoreRef: 'city:racoon-city',
-    externalUrl: null,
-    externalLabel: null,
+    formula: { status: 'known', name: 'mol-adopt-pr-v2' },
+    scope: {
+      status: 'available',
+      kind: 'city',
+      ref: 'racoon-city',
+      rootStoreRef: 'city:racoon-city',
+    },
+    external: { status: 'unavailable', error: 'external unavailable in fixture' },
     phase: 'review',
     phaseLabel: 'Review',
     statusCounts: {
@@ -578,7 +584,10 @@ function workflowLaneFixture() {
       skipped: 1,
     },
     activeAssignees: ['gc-session-review-i2'],
-    updatedAt: '2026-05-25T00:00:00.000Z',
+    updatedAt: {
+      status: 'available',
+      at: '2026-05-25T00:00:00.000Z',
+    },
     stages: [
       { key: 'intake', label: 'Intake', status: 'complete' },
       { key: 'implementation', label: 'Implementation', status: 'complete' },
@@ -586,6 +595,25 @@ function workflowLaneFixture() {
       { key: 'approval', label: 'Approval', status: 'pending' },
       { key: 'finalization', label: 'Finalization', status: 'pending' },
     ],
+    progress: {
+      status: 'active_step',
+      stepId: 'review-pipeline',
+      stage: {
+        status: 'available',
+        index: 2,
+        key: 'review',
+        label: 'Review',
+      },
+      attempt: {
+        status: 'available',
+        value: 2,
+      },
+    },
+    formulaStageResolved: true,
+    health: {
+      status: 'unavailable',
+      error: 'workflow health has not been derived',
+    },
   };
 }
 
@@ -595,8 +623,24 @@ function sourceFixture(source, data) {
     status: 'fresh',
     fetchedAt: '2026-05-25T00:00:00.000Z',
     staleAt: '2026-05-25T00:01:00.000Z',
-    error: null,
+    error: { kind: 'none' },
     data,
+  };
+}
+
+function sourceUnavailable(source, error) {
+  return {
+    source,
+    status: 'error',
+    error,
+  };
+}
+
+function unavailableMetric(source, error) {
+  return {
+    status: 'unavailable',
+    source,
+    error,
   };
 }
 

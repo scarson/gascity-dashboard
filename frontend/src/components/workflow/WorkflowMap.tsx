@@ -20,27 +20,25 @@ const COUNT_LABELS: Array<[keyof WorkflowSummary['runCounts'], string]> = [
 ];
 
 export function WorkflowMap({ source, now }: WorkflowMapProps) {
-  const summary = source.data;
-
-  if (summary === null) {
+  if (source.status === 'error') {
     return (
       <section>
         <CountsHeader summary={null} />
         <p className="mt-8 text-body text-fg-muted italic">
-          {source.status === 'error'
-            ? `Workflow data unavailable: ${source.error ?? 'unknown error'}.`
-            : 'Waiting for workflow data.'}
+          {`Workflow data unavailable: ${source.error}.`}
         </p>
       </section>
     );
   }
+
+  const summary = source.data;
 
   return (
     <section>
       <CountsHeader summary={summary} />
       {summary.lanes.length === 0 ? (
         <p className="mt-8 text-body text-fg-muted italic">
-          No active workflows.
+          No workflow runs.
         </p>
       ) : (
         <ol className="mt-6 divide-y divide-rule">
@@ -64,7 +62,7 @@ function CountsHeader({ summary }: { summary: WorkflowSummary | null }) {
   return (
     <header className="space-y-2">
       <div className="flex items-baseline gap-x-6 gap-y-2 flex-wrap">
-        <CountTile label="Active" value={total} tone="strong" />
+        <CountTile label="Runs" value={total} tone="strong" />
         {COUNT_LABELS.map(([key, label]) => (
           <CountTile
             key={key}

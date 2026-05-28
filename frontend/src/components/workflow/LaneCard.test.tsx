@@ -11,22 +11,29 @@ describe('LaneCard navigation', () => {
     const lane: WorkflowLane = {
       id: 'gc-root',
       title: 'Adopt PR #42',
-      formula: 'mol-adopt-pr-v2',
-      scopeKind: 'city',
-      scopeRef: 'racoon-city',
-      rootStoreRef: 'city:racoon-city',
-      externalUrl: null,
-      externalLabel: null,
+      formula: { status: 'known', name: 'mol-adopt-pr-v2' },
+      scope: {
+        status: 'available',
+        kind: 'city',
+        ref: 'racoon-city',
+        rootStoreRef: 'city:racoon-city',
+      },
+      external: { status: 'unavailable', error: 'external unavailable in test' },
       phase: 'review',
       phaseLabel: 'review',
       statusCounts: { in_progress: 1 },
       activeAssignees: ['gc-session-b'],
-      updatedAt: '2026-05-24T12:00:00Z',
+      updatedAt: {
+        status: 'available',
+        at: '2026-05-24T12:00:00Z',
+      },
       stages: [],
-      activeStepId: null,
-      activeStepAttempt: null,
-      activeStageIndex: null,
+      progress: {
+        status: 'unavailable',
+        error: 'workflow progress unavailable in test',
+      },
       formulaStageResolved: false,
+      health: { status: 'unavailable', error: 'workflow health has not been derived' },
     };
 
     render(
@@ -41,26 +48,28 @@ describe('LaneCard navigation', () => {
     );
   });
 
-  it('omits scope query params when the lane has only half of the scope pair', () => {
+  it('omits scope query params when the lane has unavailable scope', () => {
     const lane: WorkflowLane = {
       id: 'gc-root',
       title: 'Adopt PR #42',
-      formula: 'mol-adopt-pr-v2',
-      scopeKind: undefined,
-      scopeRef: 'racoon-city',
-      rootStoreRef: 'city:racoon-city',
-      externalUrl: null,
-      externalLabel: null,
+      formula: { status: 'known', name: 'mol-adopt-pr-v2' },
+      scope: { status: 'unavailable', error: 'scope unavailable in test' },
+      external: { status: 'unavailable', error: 'external unavailable in test' },
       phase: 'review',
       phaseLabel: 'review',
       statusCounts: { in_progress: 1 },
       activeAssignees: ['gc-session-b'],
-      updatedAt: '2026-05-24T12:00:00Z',
+      updatedAt: {
+        status: 'available',
+        at: '2026-05-24T12:00:00Z',
+      },
       stages: [],
-      activeStepId: null,
-      activeStepAttempt: null,
-      activeStageIndex: null,
+      progress: {
+        status: 'unavailable',
+        error: 'workflow progress unavailable in test',
+      },
       formulaStageResolved: false,
+      health: { status: 'unavailable', error: 'workflow health has not been derived' },
     };
 
     render(

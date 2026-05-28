@@ -7,15 +7,15 @@ import {
 } from '../src/workflows/session-link.js';
 
 describe('workflow session link resolution', () => {
-  test('returns null when no session identity is available', () => {
-    assert.equal(workflowSessionLinkFor(workflowBead({}), 'active'), null);
+  test('returns undefined when no session identity is available', () => {
+    assert.equal(workflowSessionLinkFor(workflowBead({}), 'active'), undefined);
   });
 
   test('does not expose transcript links for pending or ready work', () => {
     const bead = workflowBead({ metadata: { session_id: 'session-1' } });
 
-    assert.equal(workflowSessionLinkFor(bead, 'pending'), null);
-    assert.equal(workflowSessionLinkFor(bead, 'ready'), null);
+    assert.equal(workflowSessionLinkFor(bead, 'pending'), undefined);
+    assert.equal(workflowSessionLinkFor(bead, 'ready'), undefined);
   });
 
   test('uses explicit supervisor session metadata when available', () => {
@@ -35,7 +35,6 @@ describe('workflow session link resolution', () => {
         sessionId: 'session-1',
         sessionName: 'rig__agent',
         assignee: 'agent',
-        rigId: 'rig-a',
       },
     );
   });
@@ -54,11 +53,11 @@ describe('workflow session link resolution', () => {
         }),
         'active',
       ),
-      null,
+      undefined,
     );
   });
 
-  test('does not expose legacy rig metadata aliases', () => {
+  test('ignores legacy rig metadata aliases', () => {
     const link = workflowSessionLinkFor(
       workflowBead({
         assignee: 'agent-session',
@@ -70,7 +69,11 @@ describe('workflow session link resolution', () => {
       'active',
     );
 
-    assert.equal(link?.rigId, undefined);
+    assert.deepEqual(link, {
+      sessionId: 'session-1',
+      sessionName: 'agent-session',
+      assignee: 'agent-session',
+    });
   });
 
   test('falls back to assignee for completed historical transcripts', () => {
@@ -80,7 +83,6 @@ describe('workflow session link resolution', () => {
         sessionId: 'agent-session',
         sessionName: 'agent-session',
         assignee: 'agent-session',
-        rigId: undefined,
       },
     );
   });
@@ -92,7 +94,6 @@ describe('workflow session link resolution', () => {
         sessionId: 'fddc-54n',
         sessionName: 'claude-fddc-54n',
         assignee: 'claude-fddc-54n',
-        rigId: undefined,
       },
     );
   });
@@ -117,7 +118,6 @@ describe('workflow session link resolution', () => {
         sessionId: 'fddc-g3v',
         sessionName: 'tic-tac-toe-app/codex-1',
         assignee: 'tic-tac-toe-app/codex-1',
-        rigId: undefined,
       },
     );
   });

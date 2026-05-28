@@ -1,10 +1,11 @@
-import { useEffect, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import type { DoltNomsTrend, SystemHealth } from 'gas-city-dashboard-shared';
 import { api } from '../api/client';
 import { Button } from '../components/Button';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge, type StatusTone } from '../components/StatusBadge';
 import { useCachedData } from '../hooks/useCachedData';
+import { useVisibleInterval } from '../hooks/useVisibleInterval';
 
 // Health page fetches the two slow paths in parallel through the
 // stale-while-revalidate cache so re-entering this view (or polling
@@ -27,13 +28,9 @@ export function HealthPage() {
   );
   const health = data?.health ?? null;
   const trend = data?.trend ?? null;
+  const hostHealthStatus = health ? hostStatus(health) : undefined;
 
-  useEffect(() => {
-    const tick = setInterval(() => {
-      if (!document.hidden) void refresh();
-    }, 30_000);
-    return () => clearInterval(tick);
-  }, [refresh]);
+  useVisibleInterval(() => void refresh(), 30_000);
 
   return (
     <section>
@@ -57,12 +54,12 @@ export function HealthPage() {
       {health ? (
         <div className="space-y-12">
           <Section title="Supervisor" status={supervisorStatus(health)}>
-            {health.supervisor ? (
+            {health.supervisor.status === 'available' ? (
               <KvList>
-                <Kv label="City" value={health.supervisor.city} />
-                <Kv label="Version" value={health.supervisor.version} />
-                <Kv label="Uptime" value={formatDuration(health.supervisor.uptime_sec)} />
-                <Kv label="Status" value={health.supervisor.status} />
+                <Kv label="City" value={health.supervisor.data.city} />
+                <Kv label="Version" value={health.supervisor.data.version} />
+                <Kv label="Uptime" value={formatDuration(health.supervisor.data.uptime_sec)} />
+                <Kv label="Status" value={health.supervisor.data.status} />
               </KvList>
             ) : (
               <p className="text-body text-accent">
@@ -73,23 +70,23 @@ export function HealthPage() {
 
           <Section
             title="Host"
-            status={hostStatus(health)}
+            {...(hostHealthStatus ? { status: hostHealthStatus } : {})}
           >
             <KvList>
               <Kv label="CPUs" value={health.host.cpu_count.toString()} />
               <Kv
                 label="Load (1m, 5m, 15m)"
                 value={`${health.host.load_avg_1.toFixed(2)}, ${health.host.load_avg_5.toFixed(2)}, ${health.host.load_avg_15.toFixed(2)}`}
-                tone={health.host.load_avg_1 > health.host.cpu_count ? 'warn' : undefined}
+                {...(health.host.load_avg_1 > health.host.cpu_count
+                  ? { tone: 'warn' as const }
+                  : {})}
               />
               <Kv
                 label="Memory free"
                 value={`${formatBytes(health.host.free_mem_bytes)} of ${formatBytes(health.host.total_mem_bytes)}`}
-                tone={
-                  health.host.free_mem_bytes / health.host.total_mem_bytes < 0.1
-                    ? 'warn'
-                    : undefined
-                }
+                {...(health.host.free_mem_bytes / health.host.total_mem_bytes < 0.1
+                  ? { tone: 'warn' as const }
+                  : {})}
               />
               <Kv label="Host uptime" value={formatDuration(health.host.uptime_sec)} />
             </KvList>
@@ -113,7 +110,7 @@ export function HealthPage() {
               <p className="text-body text-fg-muted italic">Loading.</p>
             ) : !trend.available ? (
               <p className="text-body text-fg-muted italic">
-                Metric source not yet wired. The ring buffer is running; samples will appear once <code className="text-fg">sampleDoltNomsSize()</code> lands.
+                Dolt-noms metric unavailable: {doltUnavailableCopy(trend.reason)}.
               </p>
             ) : trend.samples.length === 0 ? (
               <p className="text-body text-fg-muted italic">
@@ -226,11 +223,29 @@ function Sparkline({ samples }: { samples: { ts: string; bytes: number }[] }) {
   );
 }
 
+function doltUnavailableCopy(
+  reason: Extract<DoltNomsTrend, { available: false }>['reason'],
+): string {
+  switch (reason) {
+    case 'city_path_missing':
+      return 'city path is not configured';
+    case 'city_path_not_absolute':
+      return 'city path is not absolute';
+    case 'noms_directory_missing':
+      return '.dolt/noms directory was not found';
+    case 'noms_path_not_directory':
+      return '.dolt/noms exists but is not a directory';
+    case 'sample_failed':
+      return 'latest sampler read failed; check the backend log';
+  }
+}
+
 function buildSynopsis(h: SystemHealth): string {
   const parts: string[] = [];
-  if (h.supervisor) {
-    const verb = h.supervisor.status === 'ok' ? 'healthy' : h.supervisor.status;
-    parts.push(`Supervisor ${verb} on ${h.supervisor.city}, uptime ${formatDuration(h.supervisor.uptime_sec)}.`);
+  if (h.supervisor.status === 'available') {
+    const supervisor = h.supervisor.data;
+    const verb = supervisor.status === 'ok' ? 'healthy' : supervisor.status;
+    parts.push(`Supervisor ${verb} on ${supervisor.city}, uptime ${formatDuration(supervisor.uptime_sec)}.`);
   } else {
     parts.push('Supervisor unreachable.');
   }
@@ -244,9 +259,9 @@ function buildSynopsis(h: SystemHealth): string {
 }
 
 function supervisorStatus(h: SystemHealth): { tone: StatusTone; label: string } {
-  if (!h.supervisor) return { tone: 'stuck', label: 'offline' };
-  if (h.supervisor.status === 'ok') return { tone: 'ok', label: 'healthy' };
-  return { tone: 'warn', label: h.supervisor.status };
+  if (h.supervisor.status === 'unavailable') return { tone: 'stuck', label: 'offline' };
+  if (h.supervisor.data.status === 'ok') return { tone: 'ok', label: 'healthy' };
+  return { tone: 'warn', label: h.supervisor.data.status };
 }
 
 function hostStatus(h: SystemHealth): { tone: StatusTone; label: string } | undefined {

@@ -41,7 +41,7 @@ const SAMPLE_CITY: CityStatusSummary = {
   totalAgents: 1,
   activeSessions: 1,
   suspendedSessions: 0,
-  maxSessions: 10,
+  maxSessions: { status: 'available', value: 10 },
   sessionsByProvider: [],
   rigs: [],
 };
@@ -61,20 +61,23 @@ const SAMPLE_WORKFLOWS: WorkflowSummary = {
   // gascity-dashboard-3ax: the health engine derives a census in the read
   // path; with no lanes it is the all-zero census the served data carries.
   census: {
-    byPhase: {
-      intake: 0,
-      implementation: 0,
-      review: 0,
-      approval: 0,
-      finalization: 0,
-      blocked: 0,
-      complete: 0,
-      active: 0,
+    status: 'available',
+    data: {
+      byPhase: {
+        intake: 0,
+        implementation: 0,
+        review: 0,
+        approval: 0,
+        finalization: 0,
+        blocked: 0,
+        complete: 0,
+        active: 0,
+      },
+      totalInFlight: 0,
+      unverifiable: 0,
+      knownDenominator: 0,
+      thrashing: 0,
     },
-    totalInFlight: 0,
-    unverifiable: 0,
-    knownDenominator: 0,
-    thrashing: 0,
   },
   recentChanges: [],
 };
@@ -109,13 +112,6 @@ function buildHealthyCaches(): SourceCacheMap {
       source: 'workflows',
       ttlMs: 60_000,
       load: async () => SAMPLE_WORKFLOWS,
-    }),
-    github: new SourceCache({
-      source: 'github',
-      ttlMs: 30_000,
-      load: () => {
-        throw new Error('github collector not wired');
-      },
     }),
   };
 }
@@ -156,7 +152,7 @@ describe('readSources failure isolation (settle wrapper contract)', () => {
     const snapshot = await service.getSnapshot();
 
     assert.equal(snapshot.sources.city.status, 'error');
-    assert.equal(snapshot.sources.city.data, null);
+    assert.equal('data' in snapshot.sources.city, false);
     assert.equal(snapshot.sources.city.source, 'city');
 
     assert.equal(snapshot.sources.resources.status, 'fresh');
@@ -170,15 +166,14 @@ describe('readSources failure isolation (settle wrapper contract)', () => {
     sabotageCache(caches.city as SourceCache<unknown>, 'city down');
     sabotageCache(caches.resources as SourceCache<unknown>, 'resources down');
     sabotageCache(caches.workflows as SourceCache<unknown>, 'workflows down');
-    sabotageCache(caches.github as SourceCache<unknown>, 'github down');
 
     const service = buildService(caches);
 
     const snapshot = await service.getSnapshot();
 
-    for (const name of ['city', 'resources', 'workflows', 'github'] as const) {
+    for (const name of ['city', 'resources', 'workflows'] as const) {
       assert.equal(snapshot.sources[name].status, 'error', `${name} should be status=error`);
-      assert.equal(snapshot.sources[name].data, null, `${name} should have data=null`);
+      assert.equal('data' in snapshot.sources[name], false, `${name} should not expose data`);
       assert.equal(snapshot.sources[name].source, name, `${name} envelope should carry source name`);
     }
   });
@@ -192,7 +187,7 @@ describe('readSources failure isolation (settle wrapper contract)', () => {
     const snapshot = await service.refresh(['city', 'resources']);
 
     assert.equal(snapshot.sources.city.status, 'error');
-    assert.equal(snapshot.sources.city.data, null);
+    assert.equal('data' in snapshot.sources.city, false);
     assert.equal(snapshot.sources.resources.status, 'fresh');
     assert.deepEqual(snapshot.sources.resources.data, SAMPLE_RESOURCES);
   });
@@ -203,8 +198,7 @@ describe('readSources failure isolation (settle wrapper contract)', () => {
     // lands on the wire — exactly the failure mode 4r5 was added to
     // prevent. With cache.sanitize routing, the default sanitizer fires
     // for caches that omit sanitizeErrorMessage (resources) and the raw
-    // string passes through for caches that explicitly opt out
-    // (github via notWiredCache).
+    // string passes through for caches that explicitly opt out.
     const caches = buildHealthyCaches();
     const leakyPath = '/home/operator/.ssh/id_rsa';
 

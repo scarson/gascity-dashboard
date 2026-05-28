@@ -28,13 +28,6 @@ describe('fixtureSourceLoader', () => {
     assert.equal(data.activeAgents, 12);
     assert.equal(data.rigs.length, 1);
   });
-
-  test('rejects for placeholder sources whose data is null', async () => {
-    await assert.rejects(
-      fixtureSourceLoader('github')(),
-      /fixture data for source 'github' is null/,
-    );
-  });
 });
 
 describe('SourceCache + fixtureSourceLoader integration', () => {
@@ -57,7 +50,7 @@ describe('SourceCache + fixtureSourceLoader integration', () => {
     const state = await cache.get();
     assert.equal(state.source, 'city');
     assert.equal(state.status, 'fixture');
-    assert.equal(state.error, 'supervisor unreachable');
-    assert.equal(state.data?.activeAgents, 12);
+    assert.deepEqual(state.error, { kind: 'message', message: 'supervisor unreachable' });
+    assert.equal(state.data.activeAgents, 12);
   });
 });

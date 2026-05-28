@@ -140,7 +140,7 @@ function RunMetadata({
 }) {
   return (
     <dl className="grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
-      <Meta label="Formula" value={detail.formula ?? 'unknown'} />
+      <Meta label="Formula" value={formulaLabel(detail.formula)} />
       <Meta label="Root" value={detail.rootBeadId} />
       <Meta label="Scope" value={`${detail.scopeKind}:${detail.scopeRef}`} />
       <Meta label="Store" value={detail.resolvedRootStore || detail.rootStoreRef || 'unknown'} />
@@ -160,9 +160,13 @@ function Meta({ label, value }: { label: string; value: string }) {
 function snapshotLabel(
   detail: WorkflowRunDetailData,
 ): string {
-  return detail.snapshotEventSeq !== null && detail.snapshotEventSeq !== undefined
-    ? `v${detail.snapshotVersion} · seq ${detail.snapshotEventSeq}`
+  return detail.snapshotEventSeq.kind === 'known'
+    ? `v${detail.snapshotVersion} · seq ${detail.snapshotEventSeq.seq}`
     : `v${detail.snapshotVersion}`;
+}
+
+function formulaLabel(formula: WorkflowRunDetailData['formula']): string {
+  return formula.kind === 'known' ? formula.name : `unavailable (${formula.reason})`;
 }
 
 type ScopeParseResult =

@@ -127,20 +127,14 @@ export function parseTriageAssessment(
 /**
  * Comparator key used everywhere within-tier item lists are sorted. When a
  * vetted assessment is present its vetted_score wins; otherwise the
- * heuristic triage_score is used. Defensive `?? 0` so an item that
- * pre-dates classifier enrichment still sorts to the bottom rather than
- * crashing the comparator.
- *
- * Loose `!= null` is deliberate: a TriageItem deserialised from an envelope
- * cached by a build that pre-dates this field has `triage_assessment:
- * undefined`, and strict `!== null` would let undefined pass into a
- * `.vetted_score` read and throw.
+ * heuristic triage_score is used. Defensive `?? 0` keeps not-yet-scored
+ * items at the bottom without making every caller branch on score presence.
  *
  * Centralising this here keeps the three sort sites (triage.ts,
  * blast-radius.ts, topics.ts) consistent — if the precedence rule ever
  * changes, it changes in one place.
  */
 export function sortScore(item: TriageItem): number {
-  if (item.triage_assessment != null) return item.triage_assessment.vetted_score;
+  if (item.triage_assessment !== null) return item.triage_assessment.vetted_score;
   return item.triage_score ?? 0;
 }
