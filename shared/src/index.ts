@@ -191,7 +191,11 @@ export interface GcBead {
   title: string;
   status: BeadStatus;
   issue_type: BeadIssueType;
-  priority: number;
+  /** Supervisor sends `priority: null` for non-engineering beads (messages,
+   *  sessions, …) and the OpenAPI spec declares the field optional. Treat
+   *  this as nullable on the wire; callers that need a sortable number must
+   *  coalesce. */
+  priority: number | null;
   description?: string;
   owner?: string;
   assignee?: string;

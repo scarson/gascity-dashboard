@@ -156,10 +156,11 @@ export function BeadsPage() {
       key: 'priority',
       label: 'P',
       sortable: true,
-      sortValue: (r) => r.priority,
+      // Sort null priority to the bottom (sentinel > any P-value the supervisor uses).
+      sortValue: (r) => r.priority ?? Number.POSITIVE_INFINITY,
       render: (r) => (
         <span className={`tnum font-medium ${priorityColor(r.priority)}`}>
-          P{r.priority}
+          {r.priority === null ? 'P—' : `P${r.priority}`}
         </span>
       ),
       align: 'right',
@@ -376,7 +377,7 @@ function labelTone(label: string): string {
   return 'text-fg-muted hover:text-fg';
 }
 
-function priorityColor(p: number): string {
+function priorityColor(p: number | null): string {
   if (p === 0) return 'text-accent';
   if (p === 1) return 'text-warn';
   return 'text-fg-muted';

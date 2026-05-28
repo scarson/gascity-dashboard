@@ -106,7 +106,7 @@ export function BeadDetailModal({
             {' · '}
             {bead.issue_type}
             {' · P'}
-            {bead.priority}
+            {bead.priority === null ? '—' : bead.priority}
           </span>
         ) : beadId ? (
           <code className="text-fg-muted">{beadId}</code>
