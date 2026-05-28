@@ -17,7 +17,7 @@ An editorial-typographic ambient dashboard surfacing live state from a [Gas City
 
 ## Remote, CI, and the merge gate
 
-Published at **github.com/sjarmak/gascity-dashboard**. The working remote is named `origin`; land feature work on branches and open PRs against `main`.
+Published at **github.com/sjarmak/gascity-dashboard**. Land feature work on branches and open PRs against `main`. (The git remote pointing at that URL is whatever your local clone named it — `git clone` defaults to `origin`, but a renamed remote is still fine; nothing in the workflow depends on the name.)
 
 `main` is branch-protected — land work via a PR that passes CI (`.github/workflows`); you cannot push straight to `main`. **Match CI locally before pushing or the merge blocks:** the root `npm run typecheck` covers only each workspace's _app_ tsconfig, but CI also runs `typecheck:test` (backend + frontend), `frontend run build`, and both test suites. A change to a `shared` wire-shape type breaks `*.test.ts(x)` fixtures the app typecheck never sees — run both `typecheck:test`s too.
 
@@ -26,7 +26,7 @@ Published at **github.com/sjarmak/gascity-dashboard**. The working remote is nam
 - **Tailwind config changes need a full Vite restart**, not HMR: `rm -rf node_modules/.vite && npm run dev:frontend`, or stale class definitions are served.
 - **The Vite proxy's `changeOrigin: true` is load-bearing** — it makes write requests carry the backend's expected `Origin` and pass its allow-list. Don't remove it.
 - **`.env.local` (gitignored) must be sourced** before the backend runs (it defines `GC_CITY_NAME`, `ADMIN_AUDIT_LOG_PATH`, etc.): `set -a; . ./.env.local; set +a`.
-- **Workflow run detail has a focused browser harness:** `node scripts/snap-workflow-detail.mjs --test` clicks through `/workflows` into a mocked run detail and fails on any broken `/api/*` call.
+- **Workflow run detail has a focused browser harness:** `node scripts/snap-workflow-detail.mjs --test` clicks through `/workflows` into a mocked run detail and fails on any broken `/api/*` call. It hardcodes `BASE=http://127.0.0.1:5174` and **does not start its own server** — it drives whatever vite is already serving there, so it tests the working tree of whichever checkout is running `npm run dev:frontend`. Running the harness from a worktree without retargeting the dev server just retests the primary tree. Playwright lives at `scripts/node_modules/` (per-script install), not at the root.
 
 ## Issue tracking
 
