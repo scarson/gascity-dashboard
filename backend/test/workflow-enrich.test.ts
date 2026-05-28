@@ -367,6 +367,56 @@ describe('workflow presentation enrichment fixtures', () => {
       reason: 'missing_formula_metadata',
     });
   });
+
+  // gascity-dashboard-sadp: the resolveWorkflowFormulaName helper has
+  // its own unit-test surface in workflow-formula-name.test.ts; the
+  // tests below verify it composes correctly into enrichWorkflowRun.
+
+  test('reads formula name from title for graph.v2 roots when gc.formula is absent but gc.run_target is set', () => {
+    const snapshot = formulaOrderGraphSnapshot({
+      deps: [],
+      logical_edges: [],
+    });
+    const root = snapshot.beads?.find((bead) => bead.id === 'gc-root');
+    assert.ok(root);
+    // Use a fixture-style title (not a live-data string) so the test
+    // intent reads as "the title flows through, whatever it is" rather
+    // than "we expect a specific live workflow's name".
+    root.title = 'fixture-formula';
+    root.metadata = {
+      'gc.kind': 'workflow',
+      'gc.formula_contract': 'graph.v2',
+      'gc.run_target': '/fixture/run/target',
+    };
+
+    const detail = enrichWorkflowRun(snapshot, {});
+
+    assert.deepEqual(detail.formula, {
+      kind: 'known',
+      name: 'fixture-formula',
+    });
+  });
+
+  test('does NOT fall back to title when gc.run_target is absent (formula cannot be fetched anyway)', () => {
+    const snapshot = formulaOrderGraphSnapshot({
+      deps: [],
+      logical_edges: [],
+    });
+    const root = snapshot.beads?.find((bead) => bead.id === 'gc-root');
+    assert.ok(root);
+    root.title = 'fixture-formula';
+    root.metadata = {
+      'gc.kind': 'workflow',
+      'gc.formula_contract': 'graph.v2',
+    };
+
+    const detail = enrichWorkflowRun(snapshot, {});
+
+    assert.deepEqual(detail.formula, {
+      kind: 'unavailable',
+      reason: 'missing_formula_metadata',
+    });
+  });
 });
 
 function findNode(detail: WorkflowRunDetail, id: string): WorkflowDisplayNode {

@@ -14,7 +14,7 @@ import type {
   WorkflowScopeKind,
   WorkflowSnapshotSequence,
 } from 'gas-city-dashboard-shared';
-import { meta } from './bead-fields.js';
+import { resolveWorkflowFormulaName } from './formula-name.js';
 import { applyDisplayNodeStates } from './display-state.js';
 import { buildWorkflowDisplayEdges } from './edges.js';
 import { orderWorkflowNodeGroups } from './formula-order.js';
@@ -146,15 +146,15 @@ export function buildRunningFormulaRun(
   return run;
 }
 
-function workflowFormula(root: GcWorkflowBead): string | null {
-  return meta(root, 'gc.formula') ?? null;
-}
-
 function workflowFormulaState(
   root: GcWorkflowBead | undefined,
   formulaDetail: GcFormulaDetail | null | undefined,
 ): WorkflowFormula {
-  const name = root ? workflowFormula(root) ?? formulaDetail?.name : formulaDetail?.name;
+  // Title-fallback for missing `gc.formula` on graph.v2 roots lives in
+  // resolveWorkflowFormulaName so the route-side formula-detail fetch
+  // (routes/workflows.ts) and this presentation-enrichment path share
+  // a single source of truth. See gascity-dashboard-sadp.
+  const name = resolveWorkflowFormulaName(root) ?? formulaDetail?.name;
   if (name) return { kind: 'known', name };
   return {
     kind: 'unavailable',

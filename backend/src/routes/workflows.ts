@@ -11,6 +11,7 @@ import { SCOPE_REF_RE } from 'gas-city-dashboard-shared';
 import { GcClient } from '../gc-client.js';
 import { BEAD_ID_RE } from '../lib/beadId.js';
 import { meta, nonEmpty } from '../workflows/bead-fields.js';
+import { resolveWorkflowFormulaName } from '../workflows/formula-name.js';
 import { enrichWorkflowRun, UnsupportedWorkflowError } from '../workflows/enrich.js';
 import { readWorkflowGitDiff } from '../workflows/diff.js';
 import { mergeWorkflowRuntimeState } from '../workflows/runtime-state.js';
@@ -93,7 +94,12 @@ async function getWorkflowFormulaDetail(
   scope: { scopeKind: WorkflowScopeKind; scopeRef: string },
 ): Promise<GcFormulaDetail | null> {
   const root = raw.beads?.find((bead) => nonEmpty(bead.id) === raw.root_bead_id);
-  const formula = root ? meta(root, 'gc.formula') : undefined;
+  // Share the title-fallback resolution with the presentation-enrichment
+  // path (workflows/formula-run.ts). Without this, the live graph.v2
+  // workflow roots (which carry the formula name in the title rather than
+  // `gc.formula`) would silently fail to fetch the formula detail even
+  // when the supervisor has it registered — see gascity-dashboard-sadp.
+  const formula = resolveWorkflowFormulaName(root);
   const target = root
     ? meta(root, 'gc.run_target') ?? meta(root, 'gc.routed_to') ?? nonEmpty(root.assignee)
     : undefined;
