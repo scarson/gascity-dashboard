@@ -61,6 +61,11 @@ describe('HealthPage', () => {
     currentHealth = withSupervisor(absentLocator());
 
     renderPage();
+    // Wait for the data-dependent Supervisor section heading before
+    // reading the synopsis — the page-title 'Health' heading renders
+    // even during the initial loading state, so anchoring on it could
+    // race the fetch resolution on slow CI workers.
+    await screen.findByRole('heading', { name: /supervisor/i });
     const heading = await screen.findByRole('heading', { name: /^health$/i });
     const synopsis = synopsisFor(heading);
 
@@ -79,6 +84,10 @@ describe('HealthPage', () => {
     currentHealth = withSupervisor(presentLocator());
 
     const { container } = renderPage();
+    // Same as the test above: wait for the Supervisor section heading
+    // so the data has actually loaded before we query for the City /
+    // Version Kvs the assertion reads.
+    await screen.findByRole('heading', { name: /supervisor/i });
     const heading = await screen.findByRole('heading', { name: /^health$/i });
 
     const cityValue = valueFor(container, 'City');

@@ -1,0 +1,427 @@
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import type {
+  DashboardSnapshot,
+  WorkflowCensus,
+  WorkflowLane,
+  WorkflowLaneHealth,
+} from 'gas-city-dashboard-shared';
+import { MemoryRouter } from 'react-router-dom';
+import { api } from '../api/client';
+import { invalidateKey } from '../api/cache';
+import { NowProvider } from '../contexts/NowContext';
+import { AmbientHomePage } from './AmbientHome';
+
+// gascity-dashboard-kb3 — AmbientHome integration coverage.
+//
+// The unit-level tests on useStaleness, useFaviconSignal, and the three
+// component primitives cover their respective derivations. These
+// integration tests pin the contract surfaces the bead's acceptance
+// criteria are written against:
+//   • One Mark Rule       — at most 1 .text-accent in the rendered DOM.
+//   • R10 withholding     — a fully-calm city renders NO concern rows.
+//   • R2 maroon-on-inferred — inferred lanes never produce a maroon token.
+//   • Non-fresh paths     — workflows.status='error' and census.unavailable.
+//   • Deep-link encoding  — encodeURIComponent applied to stuckNode.id.
+//   • R6 no-negative-reassurance — calm sentence is absent, not "all clear".
+
+vi.mock('../api/client', () => ({
+  api: {
+    snapshot: vi.fn(),
+    snapshotRefresh: vi.fn(),
+  },
+  ApiClientError: class extends Error {},
+}));
+
+// useFaviconSignal mutates the DOM favicon link; setup/teardown the
+// element so it never throws and tests can assert on it.
+beforeEach(() => {
+  const link = document.createElement('link');
+  link.id = 'favicon';
+  link.rel = 'icon';
+  link.href = '/favicon-calm.svg';
+  document.head.appendChild(link);
+});
+
+afterEach(() => {
+  document.head.querySelectorAll('#favicon').forEach((n) => n.remove());
+  cleanup();
+  invalidateKey('snapshot');
+  vi.useRealTimers();
+});
+
+const mockSnapshot = api.snapshot as Mock;
+
+function knownHealth(overrides: Partial<WorkflowLaneHealth> = {}): WorkflowLaneHealth {
+  return {
+    phaseConfidence: 'known',
+    needsOperator: false,
+    stuckNode: { status: 'unavailable', error: 'no active step' },
+    thrashingDetected: false,
+    session: {
+      status: 'resolved',
+      lastActive: { status: 'available', at: '2026-05-29T20:00:00.000Z' },
+      running: { status: 'unavailable', error: 'unused' },
+      activity: { status: 'unavailable', error: 'unused' },
+    },
+    ...overrides,
+  };
+}
+
+function inferredHealth(overrides: Partial<WorkflowLaneHealth> = {}): WorkflowLaneHealth {
+  return { ...knownHealth(overrides), phaseConfidence: 'inferred' };
+}
+
+interface LaneFixture {
+  id: string;
+  title?: string;
+  externalLabel?: string;
+  scopeKind?: 'city' | 'rig';
+  scopeRef?: string;
+  updatedAt?: string;
+  health: WorkflowLaneHealth;
+}
+
+function lane(f: LaneFixture): WorkflowLane {
+  return {
+    id: f.id,
+    title: f.title ?? f.id,
+    formula: { status: 'unavailable', error: 'unused' },
+    scope:
+      f.scopeKind !== undefined && f.scopeRef !== undefined
+        ? {
+            status: 'available',
+            kind: f.scopeKind,
+            ref: f.scopeRef,
+            rootStoreRef: `${f.scopeKind}:${f.scopeRef}`,
+          }
+        : { status: 'unavailable', error: 'unused' },
+    external:
+      f.externalLabel !== undefined
+        ? {
+            status: 'available',
+            label: f.externalLabel,
+            url: `https://example.com/${f.externalLabel}`,
+          }
+        : { status: 'unavailable', error: 'unused' },
+    phase: 'implementation',
+    phaseLabel: 'implementation',
+    statusCounts: { in_progress: 1 },
+    activeAssignees: [],
+    updatedAt:
+      f.updatedAt !== undefined
+        ? { status: 'available', at: f.updatedAt }
+        : { status: 'unavailable', error: 'no fact' },
+    stages: [],
+    progress: { status: 'unavailable', error: 'unused' },
+    formulaStageResolved: false,
+    health: { status: 'available', data: f.health },
+  };
+}
+
+const DEFAULT_CENSUS: WorkflowCensus = {
+  byPhase: {
+    intake: 0,
+    implementation: 0,
+    review: 0,
+    approval: 0,
+    finalization: 0,
+    blocked: 0,
+    complete: 0,
+    active: 0,
+  },
+  totalInFlight: 0,
+  unverifiable: 0,
+  knownDenominator: 0,
+  thrashing: 0,
+};
+
+function envelope({
+  lanes = [],
+  census = DEFAULT_CENSUS,
+  workflowsStatus = 'fresh' as 'fresh' | 'fixture' | 'stale',
+  generatedAt = '2026-05-29T20:00:00.000Z',
+}: {
+  lanes?: WorkflowLane[];
+  census?: WorkflowCensus;
+  workflowsStatus?: 'fresh' | 'fixture' | 'stale';
+  generatedAt?: string;
+} = {}): DashboardSnapshot {
+  return {
+    generatedAt,
+    config: {
+      cityName: 'racoon-city',
+      cityRoot: '/tmp/x',
+      githubRepo: 'x/y',
+      useFixtures: false,
+    },
+    headline: {
+      activeAgents: { status: 'unavailable', source: 'city', error: 'unused' },
+      maxAgents: { status: 'unavailable', source: 'city', error: 'unused' },
+      activeSessions: { status: 'unavailable', source: 'city', error: 'unused' },
+      activeWorkflows: { status: 'available', value: lanes.length },
+    },
+    sources: {
+      city: { source: 'city', status: 'error', error: 'unused' },
+      resources: { source: 'resources', status: 'error', error: 'unused' },
+      workflows: {
+        source: 'workflows',
+        status: workflowsStatus,
+        fetchedAt: '2026-05-29T20:00:00.000Z',
+        staleAt: '2026-05-29T20:01:00.000Z',
+        error: { kind: 'none' },
+        data: {
+          totalActive: lanes.length,
+          totalHistorical: 0,
+          historicalLanes: [],
+          runCounts: {
+            total: lanes.length,
+            visible: lanes.length,
+            prReview: 0,
+            designReview: 0,
+            bugfix: 0,
+            blocked: 0,
+            other: 0,
+          },
+          lanes,
+          recentChanges: [],
+          census: { status: 'available', data: census },
+        },
+      },
+    },
+  };
+}
+
+function workflowsErrorEnvelope(): DashboardSnapshot {
+  const e = envelope();
+  e.sources.workflows = {
+    source: 'workflows',
+    status: 'error',
+    error: 'workflow source upstream timeout',
+  };
+  return e;
+}
+
+function censusUnavailableEnvelope(lanes: WorkflowLane[]): DashboardSnapshot {
+  const e = envelope({ lanes });
+  const wf = e.sources.workflows;
+  if (wf.status === 'error') throw new Error('test envelope precondition');
+  e.sources.workflows = {
+    ...wf,
+    data: {
+      ...wf.data,
+      census: { status: 'unavailable', error: 'workflow health has not been derived' },
+    },
+  };
+  return e;
+}
+
+function mount() {
+  return render(
+    <MemoryRouter
+      initialEntries={['/']}
+      future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
+    >
+      <NowProvider intervalMs={1_000_000}>
+        <AmbientHomePage />
+      </NowProvider>
+    </MemoryRouter>,
+  );
+}
+
+const NOW_AT = Date.parse('2026-05-29T20:00:00.000Z');
+
+beforeEach(() => {
+  mockSnapshot.mockReset();
+  invalidateKey('snapshot');
+  // Deterministic clock for the staleness derivation; useNow() seeds
+  // its state from Date.now() at first render. We don't need fake
+  // timers because the test snapshots only need ONE point in time and
+  // the NowProvider's interval is set to 1_000_000ms in mount().
+  vi.spyOn(Date, 'now').mockReturnValue(NOW_AT);
+});
+
+describe('AmbientHomePage', () => {
+  it('renders the calm-city case with no concern rows and NO maroon (R10 + One Mark)', async () => {
+    // Three known lanes, all fresh sessions, no thrashing, no
+    // needsOperator. R10: no rows. R6: no fallback prose.
+    const lanes = [
+      lane({ id: 'a', updatedAt: '2026-05-29T19:59:30.000Z', health: knownHealth() }),
+      lane({ id: 'b', updatedAt: '2026-05-29T19:59:30.000Z', health: knownHealth() }),
+      lane({ id: 'c', updatedAt: '2026-05-29T19:59:30.000Z', health: knownHealth() }),
+    ];
+    const census: WorkflowCensus = {
+      ...DEFAULT_CENSUS,
+      totalInFlight: 3,
+      knownDenominator: 3,
+      byPhase: { ...DEFAULT_CENSUS.byPhase, implementation: 3 },
+    };
+    mockSnapshot.mockResolvedValue(envelope({ lanes, census }));
+
+    const { container } = mount();
+    await waitFor(() => expect(screen.getByTestId('phase-census')).toBeTruthy());
+
+    // R6 floor: the status sentence is absent (collapses to null).
+    expect(screen.queryByTestId('status-sentence')).toBeNull();
+    // R10: the concern region is rendered with opacity 0 and no rows.
+    const region = screen.getByTestId('concern-region');
+    expect(region.children.length).toBe(0);
+    expect((region as HTMLElement).style.opacity).toBe('0');
+    // One Mark Rule: no .text-accent anywhere on the calm home.
+    expect(container.querySelectorAll('.text-accent').length).toBe(0);
+    // Failing clause reads 'nothing failing'; denominator omitted when unverifiable=0.
+    expect(screen.getByTestId('phase-census-failing').textContent).toContain('nothing failing');
+    expect(screen.getByTestId('phase-census-failing').textContent).not.toContain('of');
+  });
+
+  it('appends "(of N known)" denominator when unverifiable > 0 (R5)', async () => {
+    const lanes = [
+      lane({ id: 'a', updatedAt: '2026-05-29T19:59:30.000Z', health: knownHealth() }),
+      lane({ id: 'b', updatedAt: '2026-05-29T19:59:30.000Z', health: knownHealth() }),
+      lane({ id: 'c-inferred', updatedAt: '2026-05-29T19:59:30.000Z', health: inferredHealth() }),
+    ];
+    const census: WorkflowCensus = {
+      ...DEFAULT_CENSUS,
+      totalInFlight: 3,
+      knownDenominator: 2,
+      unverifiable: 1,
+      byPhase: { ...DEFAULT_CENSUS.byPhase, implementation: 3 },
+    };
+    mockSnapshot.mockResolvedValue(envelope({ lanes, census }));
+
+    mount();
+    await waitFor(() => expect(screen.getByTestId('phase-census')).toBeTruthy());
+    expect(screen.getByTestId('phase-census-failing').textContent).toContain(
+      'nothing failing (of 2 known)',
+    );
+  });
+
+  it('renders ONE maroon run-id token on the most-severe known-stalled lane and encodes the deep-link', async () => {
+    // Inferred lane is older but must never get the maroon (R2). The
+    // known lane wins the One Mark slot and the href has encoded
+    // stuckNode + scope params.
+    const stalledLane = lane({
+      id: 'stalled/with chars',
+      externalLabel: 'adopt-pr-271',
+      scopeKind: 'rig',
+      scopeRef: 'gascity',
+      updatedAt: '2026-05-29T18:00:00.000Z',
+      health: knownHealth({
+        thrashingDetected: true,
+        stuckNode: { status: 'available', id: 'review:check/2' },
+      }),
+    });
+    const inferredOlderLane = lane({
+      id: 'inferred-older',
+      updatedAt: '2026-05-29T10:00:00.000Z',
+      health: inferredHealth({ thrashingDetected: true }),
+    });
+    const census: WorkflowCensus = {
+      ...DEFAULT_CENSUS,
+      totalInFlight: 2,
+      knownDenominator: 1,
+      unverifiable: 1,
+      thrashing: 1, // already gated server-side to known
+      byPhase: { ...DEFAULT_CENSUS.byPhase, implementation: 2 },
+    };
+    mockSnapshot.mockResolvedValue(envelope({ lanes: [stalledLane, inferredOlderLane], census }));
+
+    const { container } = mount();
+    await waitFor(() => expect(screen.getByTestId('status-sentence')).toBeTruthy());
+
+    const token = screen.getByTestId('status-sentence-token');
+    expect(token.tagName.toLowerCase()).toBe('a');
+    expect(token.textContent).toBe('adopt-pr-271');
+    const href = (token as HTMLAnchorElement).getAttribute('href');
+    // Path segment encoding survives the URL pipeline as the consumer's
+    // useParams() will decode it once. Query params are encoded only once
+    // by URLSearchParams so the consumer's search.get('node') yields the
+    // raw 'review:check/2' — Phase 4 caught a pre-fix double-encode.
+    expect(href).toMatch(/^\/workflows\/stalled%2Fwith%20chars\?/);
+    expect(href).toContain('node=review%3Acheck%2F2');
+    expect(href).toContain('scope_kind=rig');
+    expect(href).toContain('scope_ref=gascity');
+
+    // One Mark Rule: exactly one .text-accent in the entire rendered tree.
+    expect(container.querySelectorAll('.text-accent').length).toBe(1);
+  });
+
+  it('NEVER paints the maroon token on an inferred lane (R2)', async () => {
+    // The only candidate is an inferred lane with thrashingDetected=true.
+    // Even though it looks structurally "stalled", R2 demands no maroon.
+    const inferredOnlyLane = lane({
+      id: 'inferred-only',
+      externalLabel: 'never-maroon',
+      updatedAt: '2026-05-29T10:00:00.000Z',
+      health: inferredHealth({
+        thrashingDetected: true,
+        stuckNode: { status: 'available', id: 'whatever' },
+      }),
+    });
+    const census: WorkflowCensus = {
+      ...DEFAULT_CENSUS,
+      totalInFlight: 1,
+      unverifiable: 1,
+      // Server-side gate excludes inferred, so even if backend miscounts
+      // here, the client sentence must not surface the maroon.
+      thrashing: 0,
+      byPhase: { ...DEFAULT_CENSUS.byPhase, implementation: 1 },
+    };
+    mockSnapshot.mockResolvedValue(envelope({ lanes: [inferredOnlyLane], census }));
+
+    const { container } = mount();
+    await waitFor(() => expect(screen.getByTestId('phase-census')).toBeTruthy());
+
+    expect(screen.queryByTestId('status-sentence')).toBeNull();
+    expect(container.querySelectorAll('.text-accent').length).toBe(0);
+  });
+
+  it('shows a needsOperator concern row even when no lane is failing', async () => {
+    // R10 boundary: healthy-in-flight stays withheld; needsOperator
+    // surfaces. No maroon on either.
+    const decisionLane = lane({
+      id: 'decide-me',
+      externalLabel: 'issue-99',
+      updatedAt: '2026-05-29T19:59:00.000Z',
+      health: knownHealth({ needsOperator: true }),
+    });
+    const calmLane = lane({
+      id: 'calm',
+      updatedAt: '2026-05-29T19:59:30.000Z',
+      health: knownHealth(),
+    });
+    const census: WorkflowCensus = {
+      ...DEFAULT_CENSUS,
+      totalInFlight: 2,
+      knownDenominator: 2,
+      byPhase: { ...DEFAULT_CENSUS.byPhase, implementation: 2 },
+    };
+    mockSnapshot.mockResolvedValue(envelope({ lanes: [decisionLane, calmLane], census }));
+
+    const { container } = mount();
+    await waitFor(() => expect(screen.getByTestId('phase-census')).toBeTruthy());
+
+    // Failing reads 'nothing failing'; the calm lane never appears.
+    expect(screen.getByTestId('phase-census-failing').textContent).toContain('nothing failing');
+    expect(screen.queryByTestId('concern-row-calm')).toBeNull();
+    expect(screen.getByTestId('concern-row-decide-me')).toBeTruthy();
+    expect(container.querySelectorAll('.text-accent').length).toBe(0);
+  });
+
+  it('renders a clear error when the workflows source is in error state', async () => {
+    mockSnapshot.mockResolvedValue(workflowsErrorEnvelope());
+    mount();
+    await waitFor(() =>
+      expect(screen.getByTestId('workflows-source-error')).toBeTruthy(),
+    );
+    expect(screen.queryByTestId('phase-census')).toBeNull();
+  });
+
+  it('renders the census-unavailable affordance (and only that) when the engine has not derived', async () => {
+    mockSnapshot.mockResolvedValue(censusUnavailableEnvelope([]));
+    mount();
+    await waitFor(() => expect(screen.getByTestId('census-unavailable')).toBeTruthy());
+    expect(screen.queryByTestId('phase-census')).toBeNull();
+    expect(screen.queryByTestId('status-sentence')).toBeNull();
+  });
+});
