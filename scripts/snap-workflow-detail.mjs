@@ -543,6 +543,10 @@ function snapshotFixture() {
       resources: sourceUnavailable('resources', 'resources unavailable in fixture'),
       workflows: sourceFixture('workflows', {
         totalActive: 1,
+        // yh5i: shared WorkflowSummary now carries totalHistorical +
+        // historicalLanes. This is a .mjs fixture and isn't typechecked,
+        // so the shape must be kept in lockstep with shared/src by hand.
+        totalHistorical: 0,
         runCounts: {
           total: 1,
           visible: 1,
@@ -553,6 +557,7 @@ function snapshotFixture() {
           other: 0,
         },
         lanes: [workflowLaneFixture()],
+        historicalLanes: [],
         recentChanges: [],
         census: {
           status: 'unavailable',

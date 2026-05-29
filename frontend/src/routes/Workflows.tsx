@@ -1,10 +1,14 @@
 import { useCallback, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { DashboardSnapshot, SourceStatus } from 'gas-city-dashboard-shared';
 import { api } from '../api/client';
 import { Button } from '../components/Button';
 import { PageHeader } from '../components/PageHeader';
 import { SseIndicator } from '../components/SseIndicator';
-import { WorkflowMap } from '../components/workflow/WorkflowMap';
+import {
+  WorkflowMap,
+  WORKFLOWS_HISTORICAL_SECTION_ID,
+} from '../components/workflow/WorkflowMap';
 import { useCachedData } from '../hooks/useCachedData';
 import { useGcEventRefresh } from '../hooks/useGcEvents';
 import { formatRelative } from '../hooks/time';
@@ -37,6 +41,8 @@ const TICK_MS = 5_000;
 const REFRESH_DEBOUNCE_MS = 10_000;
 const WORKFLOW_PHASE_GRAMMAR =
   'Phase grammar: intake, implementation, review, approval, finalization.';
+const HISTORY_QUERY_PARAM = 'history';
+const HISTORY_QUERY_VALUE = '1';
 
 export function WorkflowsPage() {
   const { data, loading, error, refresh } = useCachedData(
@@ -44,6 +50,12 @@ export function WorkflowsPage() {
     () => api.snapshot(),
     { refreshFetcher: () => api.snapshotRefresh(['workflows']) },
   );
+  const [searchParams, setSearchParams] = useSearchParams();
+  // gascity-dashboard-yh5i: ?history=1 toggles the historical lane
+  // section. Pure render-time state — the snapshot already carries both
+  // active + historical arrays, so the toggle does not trigger a fetch
+  // and useCachedData's 'snapshot' cache key stays stable across modes.
+  const showHistory = searchParams.get(HISTORY_QUERY_PARAM) === HISTORY_QUERY_VALUE;
   const [now, setNow] = useState(() => Date.now());
   const workflowsStatusRef = useRef<SourceStatus | null>(null);
   const loadingRef = useRef(loading);
@@ -53,6 +65,25 @@ export function WorkflowsPage() {
 
   const workflows = data?.sources.workflows ?? null;
   workflowsStatusRef.current = workflows?.status ?? null;
+  const totalHistorical =
+    workflows?.status === 'fresh' || workflows?.status === 'fixture' || workflows?.status === 'stale'
+      ? workflows.data.totalHistorical
+      : 0;
+
+  const toggleHistory = useCallback(() => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (showHistory) {
+          next.delete(HISTORY_QUERY_PARAM);
+        } else {
+          next.set(HISTORY_QUERY_PARAM, HISTORY_QUERY_VALUE);
+        }
+        return next;
+      },
+      { replace: false },
+    );
+  }, [showHistory, setSearchParams]);
 
   const onSseMatch = useCallback(() => {
     // Skip when supervisor is unreachable — every forced refresh under
@@ -113,6 +144,34 @@ export function WorkflowsPage() {
               </span>
             )}
             <SseIndicator state={sseState} />
+            <Button
+              size="sm"
+              onClick={toggleHistory}
+              // yh5i: disable only when the toggle is off AND there's
+              // nothing to show. If the user already opened history
+              // (showHistory=true) we must let them close it, even if
+              // the last historical lane has since dropped out — otherwise
+              // a back-button + SSE refresh sequence locks the toggle open.
+              disabled={!showHistory && totalHistorical === 0}
+              aria-expanded={showHistory}
+              // aria-controls only references the historical section's id
+              // when that element is actually in the DOM; the WAI-ARIA
+              // spec requires referenced ids to exist.
+              {...(showHistory ? { 'aria-controls': WORKFLOWS_HISTORICAL_SECTION_ID } : {})}
+              aria-label={
+                showHistory
+                  ? 'Hide historical workflow runs.'
+                  : totalHistorical === 0
+                    ? 'No completed workflow runs in the current window.'
+                    : `Show ${totalHistorical} completed workflow runs.`
+              }
+            >
+              {showHistory
+                ? 'Hide history'
+                : totalHistorical > 0
+                  ? `Show history (${totalHistorical})`
+                  : 'Show history'}
+            </Button>
             <Button size="sm" onClick={() => void refresh()} disabled={loading}>
               {loading ? 'Refreshing' : 'Refresh'}
             </Button>
@@ -123,7 +182,7 @@ export function WorkflowsPage() {
       {data === undefined || workflows === null ? (
         <p className="text-body text-fg-muted italic">Loading workflows.</p>
       ) : (
-        <WorkflowMap source={workflows} now={now} />
+        <WorkflowMap source={workflows} now={now} showHistory={showHistory} />
       )}
     </section>
   );

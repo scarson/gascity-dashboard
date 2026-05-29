@@ -105,8 +105,10 @@ function buildCaches(workflows: WorkflowSummary): SourceCacheMap {
 function summary(lanes: WorkflowLane[]): WorkflowSummary {
   return {
     totalActive: lanes.length,
+    totalHistorical: 0,
     runCounts: { total: lanes.length, visible: lanes.length, prReview: 0, designReview: 0, bugfix: 0, blocked: 0, other: 0 },
     lanes,
+    historicalLanes: [],
     recentChanges: [],
     census: { status: 'unavailable', error: 'workflow health has not been derived' },
   };

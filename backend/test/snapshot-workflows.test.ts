@@ -7,7 +7,8 @@ import {
   buildWorkflowSummary,
   createWorkflowsSourceCache,
   fromGcBead,
-  MAX_VISIBLE_WORKFLOW_LANES,
+  MAX_VISIBLE_ACTIVE_LANES,
+  MAX_VISIBLE_HISTORICAL_LANES,
   RECENT_WORKFLOW_FETCH_LIMIT,
   workflowBeadFilter,
 } from '../src/snapshot/collectors/workflows.js';
@@ -407,9 +408,9 @@ describe('buildWorkflowSummary', () => {
     assert.equal(summary.totalActive, 5);
   });
 
-  test('caps visible lanes at MAX_VISIBLE_WORKFLOW_LANES while preserving totalActive', () => {
+  test('caps visible lanes at MAX_VISIBLE_ACTIVE_LANES while preserving totalActive', () => {
     const summary = buildWorkflowSummary(
-      Array.from({ length: MAX_VISIBLE_WORKFLOW_LANES + 3 }, (_, idx) =>
+      Array.from({ length: MAX_VISIBLE_ACTIVE_LANES + 3 }, (_, idx) =>
         issue({
           id: `ga-workflow-${idx}`,
           title: `Workflow ${idx}`,
@@ -420,14 +421,14 @@ describe('buildWorkflowSummary', () => {
       ),
     );
 
-    assert.equal(summary.totalActive, MAX_VISIBLE_WORKFLOW_LANES + 3);
-    assert.equal(summary.runCounts.total, MAX_VISIBLE_WORKFLOW_LANES + 3);
-    assert.equal(summary.runCounts.visible, MAX_VISIBLE_WORKFLOW_LANES);
-    assert.equal(summary.lanes.length, MAX_VISIBLE_WORKFLOW_LANES);
+    assert.equal(summary.totalActive, MAX_VISIBLE_ACTIVE_LANES + 3);
+    assert.equal(summary.runCounts.total, MAX_VISIBLE_ACTIVE_LANES + 3);
+    assert.equal(summary.runCounts.visible, MAX_VISIBLE_ACTIVE_LANES);
+    assert.equal(summary.lanes.length, MAX_VISIBLE_ACTIVE_LANES);
     // Most recently updated lane sorts to position 0.
     assert.equal(
       summary.lanes[0]!.id,
-      `ga-workflow-${MAX_VISIBLE_WORKFLOW_LANES + 2}`,
+      `ga-workflow-${MAX_VISIBLE_ACTIVE_LANES + 2}`,
     );
   });
 
@@ -487,7 +488,12 @@ describe('buildWorkflowSummary', () => {
     assert.equal(summary.runCounts.blocked, 1);
   });
 
-  test('keeps recently completed graph.v2 workflow runs visible', () => {
+  test('keeps recently completed graph.v2 workflow runs visible in historicalLanes', () => {
+    // gascity-dashboard-yh5i: completed runs now land in historicalLanes
+    // (toggled visible via ?history=1 on the frontend) rather than the
+    // default-visible `lanes`. The intent of this test — "completed
+    // graph.v2 runs remain reachable, not silently dropped" — is
+    // preserved; the assertion just moves to the new shape.
     const summary = buildWorkflowSummary([
       issue({
         id: 'done-root',
@@ -511,10 +517,13 @@ describe('buildWorkflowSummary', () => {
       }),
     ]);
 
-    assert.equal(summary.lanes.length, 1);
-    assert.equal(summary.lanes[0]!.id, 'done-root');
-    assert.equal(summary.lanes[0]!.phase, 'complete');
-    assert.deepEqual(summary.lanes[0]!.statusCounts, { closed: 2 });
+    assert.equal(summary.lanes.length, 0, 'completed run is not in default-visible lanes');
+    assert.equal(summary.historicalLanes.length, 1);
+    assert.equal(summary.historicalLanes[0]!.id, 'done-root');
+    assert.equal(summary.historicalLanes[0]!.phase, 'complete');
+    assert.deepEqual(summary.historicalLanes[0]!.statusCounts, { closed: 2 });
+    assert.equal(summary.totalActive, 0);
+    assert.equal(summary.totalHistorical, 1);
   });
 
   test('excludes non-graph.v2 molecule groups that cannot open in workflow detail', () => {
@@ -607,6 +616,145 @@ describe('buildWorkflowSummary', () => {
       url: 'http://github.com/o/r/issues/2',
     });
   });
+
+  // gascity-dashboard-yh5i: /workflows defaults to active; toggle reveals
+  // historical (phase === 'complete'). The collector splits the sorted
+  // lane list into two arrays, each respecting its own cap, so complete
+  // lanes can never crowd active out of the 8-lane visible window.
+  // Active is `phase !== 'complete'`. Both `totalActive` and
+  // `WorkflowCensus.totalInFlight` include blocked lanes — a blocked
+  // lane still needs operator attention and is not "done". The split is
+  // active (default visible) vs historical (complete, behind toggle),
+  // not in-flight vs everything.
+
+  test('yh5i: splits sorted lanes into active and historical by phase', () => {
+    const summary = buildWorkflowSummary([
+      // Active lane #1 — in review
+      issue({
+        id: 'active-review-root',
+        title: 'Active review',
+        issue_type: 'molecule',
+        status: 'open',
+        updated_at: '2026-05-28T20:00:00Z',
+        metadata: graphWorkflowMetadata(),
+      }),
+      issue({
+        id: 'active-review-step',
+        title: 'review loop',
+        status: 'in_progress',
+        updated_at: '2026-05-28T20:00:00Z',
+        metadata: {
+          'gc.root_bead_id': 'active-review-root',
+          'review-loop.iteration.1': 'active',
+        },
+      }),
+      // Historical lane — complete (all steps closed)
+      issue({
+        id: 'historical-root',
+        title: 'Historical run',
+        issue_type: 'molecule',
+        status: 'closed',
+        updated_at: '2026-04-20T18:30:00Z',
+        metadata: graphWorkflowMetadata(),
+      }),
+      issue({
+        id: 'historical-step',
+        title: 'finalize',
+        status: 'closed',
+        updated_at: '2026-04-20T18:30:00Z',
+        metadata: {
+          'gc.root_bead_id': 'historical-root',
+        },
+      }),
+    ]);
+
+    assert.equal(summary.totalActive, 1, 'one active lane');
+    assert.equal(summary.totalHistorical, 1, 'one historical lane');
+    assert.deepEqual(
+      summary.lanes.map((l) => l.id),
+      ['active-review-root'],
+      'lanes contains only the active lane',
+    );
+    assert.deepEqual(
+      summary.historicalLanes.map((l) => l.id),
+      ['historical-root'],
+      'historicalLanes contains only the complete lane',
+    );
+    assert.equal(summary.lanes[0]?.phase !== 'complete', true, 'active phase is not complete');
+    assert.equal(summary.historicalLanes[0]?.phase, 'complete', 'historical phase is complete');
+  });
+
+  test('yh5i: blocked lanes go into active (not historical), matching census totalInFlight', () => {
+    // The census definition of in-flight excludes blocked, but for the
+    // /workflows split UX the blocked lane is operationally still
+    // "needs your attention" — keep it visible by default.
+    const summary = buildWorkflowSummary([
+      issue({
+        id: 'blocked-root',
+        title: 'Blocked workflow',
+        issue_type: 'molecule',
+        status: 'blocked',
+        metadata: graphWorkflowMetadata(),
+      }),
+    ]);
+
+    // The lane builder derives phase from constituent issues; a single
+    // blocked issue should phase=blocked.
+    assert.equal(summary.lanes[0]?.phase, 'blocked');
+    assert.equal(summary.totalActive, 1);
+    assert.equal(summary.totalHistorical, 0);
+    assert.equal(summary.historicalLanes.length, 0);
+  });
+
+  test('yh5i: empty input produces empty active + historical sets', () => {
+    const summary = buildWorkflowSummary([]);
+    assert.equal(summary.totalActive, 0);
+    assert.equal(summary.totalHistorical, 0);
+    assert.deepEqual(summary.lanes, []);
+    assert.deepEqual(summary.historicalLanes, []);
+  });
+
+  test('yh5i: independent caps — historical overflow does not steal active slots', () => {
+    // Build 10 active + 7 historical lanes (each cap is 8 + 5 respectively).
+    // Active cap = MAX_VISIBLE_ACTIVE_LANES (8), historical cap = MAX_VISIBLE_HISTORICAL_LANES (5).
+    // Expect: lanes.length === 8 (cap), historicalLanes.length === 5 (cap),
+    // totalActive === 10 (raw count), totalHistorical === 7 (raw count).
+    const issues = [];
+    for (let i = 0; i < 10; i += 1) {
+      issues.push(issue({
+        id: `active-${i}`,
+        title: `active ${i}`,
+        issue_type: 'molecule',
+        status: 'in_progress',
+        updated_at: `2026-05-28T${String(i).padStart(2, '0')}:00:00Z`,
+        metadata: graphWorkflowMetadata(),
+      }));
+    }
+    for (let i = 0; i < 7; i += 1) {
+      issues.push(issue({
+        id: `done-${i}`,
+        title: `done ${i}`,
+        issue_type: 'molecule',
+        status: 'closed',
+        updated_at: `2026-04-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+        metadata: graphWorkflowMetadata(),
+      }));
+    }
+
+    const summary = buildWorkflowSummary(issues);
+
+    assert.equal(summary.totalActive, 10, 'raw active count');
+    assert.equal(summary.totalHistorical, 7, 'raw historical count');
+    assert.equal(summary.lanes.length, MAX_VISIBLE_ACTIVE_LANES, 'active cap');
+    assert.equal(summary.historicalLanes.length, MAX_VISIBLE_HISTORICAL_LANES, 'historical cap');
+    // Crucially: no historical lane leaks into active and vice versa.
+    for (const lane of summary.lanes) {
+      assert.notEqual(lane.phase, 'complete', `lane ${lane.id} must not be complete`);
+    }
+    for (const lane of summary.historicalLanes) {
+      assert.equal(lane.phase, 'complete', `historicalLanes ${lane.id} must be complete`);
+    }
+  });
 });
 
 // ── createWorkflowsSourceCache (cache integration) ────────────────────────
@@ -694,7 +842,10 @@ describe('createWorkflowsSourceCache', () => {
       false,
     );
     if (result.status === 'fresh') {
-      assert.equal(result.data.lanes[0]?.id, 'done-root');
+      // yh5i: completed runs now land in historicalLanes (toggle-visible),
+      // not the default-visible lanes. The intent — "the completed run
+      // is reachable from the snapshot" — is preserved.
+      assert.equal(result.data.historicalLanes[0]?.id, 'done-root');
     }
   });
 
@@ -737,7 +888,8 @@ describe('createWorkflowsSourceCache', () => {
       },
     ]);
     if (result.status === 'fresh') {
-      assert.equal(result.data.lanes[0]?.id, 'done-root');
+      // yh5i: completed runs land in historicalLanes (toggle-visible).
+      assert.equal(result.data.historicalLanes[0]?.id, 'done-root');
     }
   });
 

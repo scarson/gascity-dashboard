@@ -48,6 +48,7 @@ const SAMPLE_CITY: CityStatusSummary = {
 
 const SAMPLE_WORKFLOWS: WorkflowSummary = {
   totalActive: 0,
+  totalHistorical: 0,
   runCounts: {
     total: 0,
     visible: 0,
@@ -58,6 +59,7 @@ const SAMPLE_WORKFLOWS: WorkflowSummary = {
     other: 0,
   },
   lanes: [],
+  historicalLanes: [],
   // gascity-dashboard-3ax: the health engine derives a census in the read
   // path; with no lanes it is the all-zero census the served data carries.
   census: {

@@ -40,7 +40,15 @@ import {
 export const WORKFLOWS_CACHE_TTL_MS = 60 * 1000;
 export const WORKFLOWS_FETCH_LIMIT = 1_000;
 export const RECENT_WORKFLOW_FETCH_LIMIT = 80;
-export const MAX_VISIBLE_WORKFLOW_LANES = 8;
+/**
+ * gascity-dashboard-yh5i: the lane set is split into active (default
+ * visible) and historical (toggle-visible). Each side has its own cap so
+ * complete lanes can never crowd active out of the visible window.
+ * Historical cap is intentionally smaller — the toggle is a "skim recent
+ * completions" tool, not a full archive.
+ */
+export const MAX_VISIBLE_ACTIVE_LANES = 8;
+export const MAX_VISIBLE_HISTORICAL_LANES = 5;
 const RECENT_CHANGES_CAP = 12;
 
 const ENGINEERING_TYPES = new Set([
@@ -117,15 +125,28 @@ export function buildWorkflowSummary(issues: WorkflowIssue[]): WorkflowSummary {
     isGraphV2WorkflowGroup(rootId, groupIssues),
   );
   const laneIssues = workflowGroups.flatMap(([, groupIssues]) => groupIssues);
-  const lanes = workflowGroups
+  const sortedLanes = workflowGroups
     .map(([rootId, groupIssues]) => workflowLane(rootId, groupIssues))
     .sort(compareLanes);
-  const visibleLanes = lanes.slice(0, MAX_VISIBLE_WORKFLOW_LANES);
+
+  // gascity-dashboard-yh5i: split by phase so the /workflows view can
+  // default to active lanes with historical behind a toggle. The split
+  // happens AFTER sorting so each side's visible window remains in
+  // compareLanes order (most-recent-first within each group). Blocked
+  // lanes go into ACTIVE (not historical) — they still need operator
+  // attention; the in-flight census disagrees only because totalInFlight
+  // is a different concept (currently-progressing work).
+  const activeLanes = sortedLanes.filter((lane) => lane.phase !== 'complete');
+  const historicalLanes = sortedLanes.filter((lane) => lane.phase === 'complete');
+  const visibleActive = activeLanes.slice(0, MAX_VISIBLE_ACTIVE_LANES);
+  const visibleHistorical = historicalLanes.slice(0, MAX_VISIBLE_HISTORICAL_LANES);
 
   return {
-    totalActive: lanes.length,
-    runCounts: runCounts(lanes, visibleLanes.length),
-    lanes: visibleLanes,
+    totalActive: activeLanes.length,
+    totalHistorical: historicalLanes.length,
+    runCounts: runCounts(activeLanes, visibleActive.length),
+    lanes: visibleActive,
+    historicalLanes: visibleHistorical,
     recentChanges: recentChanges(laneIssues),
     // census is engine-derived (gascity-dashboard-3ax) — the lane builder
     // has no session data and no phaseConfidence yet. deriveWorkflowHealth
@@ -782,6 +803,7 @@ function metadataString(issues: WorkflowIssue[], key: string): string {
 export function emptyWorkflowSummary(): WorkflowSummary {
   return {
     totalActive: 0,
+    totalHistorical: 0,
     runCounts: {
       total: 0,
       visible: 0,
@@ -792,6 +814,7 @@ export function emptyWorkflowSummary(): WorkflowSummary {
       other: 0,
     },
     lanes: [],
+    historicalLanes: [],
     recentChanges: [],
     census: workflowCensusUnavailable(),
   };

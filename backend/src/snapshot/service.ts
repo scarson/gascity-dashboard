@@ -411,8 +411,11 @@ function activeWorkflowCount(workflows: WorkflowSummary): number {
   if (workflows.census.status === 'available') {
     return workflows.census.data.totalInFlight;
   }
-
-  return workflows.lanes.filter((lane) => lane.phase !== 'complete').length;
+  // yh5i: `workflows.lanes` is the active subset (the collector splits
+  // complete lanes into `historicalLanes` before serving). The previous
+  // explicit phase filter was a defense against an older invariant
+  // where `lanes` held every phase; it's a no-op now.
+  return workflows.lanes.length;
 }
 
 function cityMetric(

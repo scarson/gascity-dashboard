@@ -141,9 +141,24 @@ export interface ResourceSample {
 // ── workflows ─────────────────────────────────────────────────────────────
 
 export interface WorkflowSummary {
+  /** Count of ACTIVE lanes (`phase !== 'complete'`). Blocked lanes ARE
+   *  included — a blocked lane still needs operator attention and is not
+   *  "done". Aligns with `WorkflowCensus.totalInFlight`, which also
+   *  excludes only complete. The headline `activeWorkflows` metric
+   *  counts this set (via census when available, this field as fallback). */
   totalActive: number;
+  /** Count of HISTORICAL lanes (phase === 'complete'). gascity-dashboard-yh5i:
+   *  /workflows defaults to showing the active set; toggling `?history=1`
+   *  reveals the historical section so the user can see recently-completed
+   *  runs without complete lanes crowding active out of the 8-cap window. */
+  totalHistorical: number;
   runCounts: WorkflowRunCounts;
+  /** Active lanes, sorted by compareLanes, capped at MAX_VISIBLE_ACTIVE_LANES. */
   lanes: WorkflowLane[];
+  /** Historical (phase === 'complete') lanes, sorted by compareLanes, capped at
+   *  MAX_VISIBLE_HISTORICAL_LANES. Frontend renders these only when the user
+   *  toggles ?history=1; backend always returns the array. */
+  historicalLanes: WorkflowLane[];
   recentChanges: WorkflowChange[];
   /**
    * City-level health census (gascity-dashboard-3ax). Threshold-INDEPENDENT

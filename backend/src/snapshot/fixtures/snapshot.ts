@@ -123,6 +123,7 @@ export const fixtureSnapshot = {
       error: { kind: 'none' },
       data: {
         totalActive: 6,
+        totalHistorical: 0,
         runCounts: {
           total: 6,
           visible: 1,
@@ -132,6 +133,7 @@ export const fixtureSnapshot = {
           blocked: 1,
           other: 0,
         },
+        historicalLanes: [],
         lanes: [
           {
             id: 'lane-1',

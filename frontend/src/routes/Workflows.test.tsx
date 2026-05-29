@@ -83,6 +83,8 @@ function buildEnvelope(
         error: { kind: 'none' },
         data: {
           totalActive: 0,
+          totalHistorical: 0,
+          historicalLanes: [],
           runCounts: {
             total: 0,
             visible: 0,
@@ -172,10 +174,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function mount() {
+function mount(initialPath = '/workflows') {
   return render(
     <MemoryRouter
-      initialEntries={['/workflows']}
+      initialEntries={[initialPath]}
       future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
     >
       <WorkflowsPage />
@@ -227,16 +229,18 @@ describe('WorkflowsPage — SSE wiring (gascity-dashboard-bqn)', () => {
     expect(screen.queryByText(/^0 active workflows/i)).toBeNull();
   });
 
-  it('shows completed workflow runs without relabeling them as active', async () => {
+  // yh5i: completed lanes now land in historicalLanes (toggle-visible),
+  // not the default-visible `lanes`. The test below pins the new contract;
+  // see the toggle tests further down for the ?history=1 reveal path.
+  it('yh5i: hides completed workflow runs from default view, shows them under ?history=1', async () => {
     const envelope = buildEnvelope('fresh');
     const lane = completedLane();
     const workflows = requireWorkflowData(envelope);
     envelope.headline.activeWorkflows = { status: 'available', value: 0 };
-    workflows.runCounts.total = 1;
-    workflows.runCounts.visible = 1;
-    workflows.runCounts.prReview = 1;
-    workflows.totalActive = 1;
-    workflows.lanes = [lane];
+    workflows.totalActive = 0;
+    workflows.totalHistorical = 1;
+    workflows.lanes = [];
+    workflows.historicalLanes = [lane];
     workflows.census = {
       status: 'available',
       data: {
@@ -258,13 +262,53 @@ describe('WorkflowsPage — SSE wiring (gascity-dashboard-bqn)', () => {
     };
     mockSnapshot.mockResolvedValue(envelope);
 
+    // Default view (/workflows): historical lane is hidden, empty-state
+    // trailer hints at the count.
     mount();
     await waitForMount();
+    expect(screen.queryByText('Completed formula run')).toBeNull();
+    expect(
+      screen.getByText(/No active workflow runs\. \(1 completed\.\)/i),
+    ).toBeTruthy();
+    // The toggle button is enabled (totalHistorical > 0) and labeled
+    // with the count.
+    const toggleDefault = screen.getByRole('button', { name: /show 1 completed/i }) as HTMLButtonElement;
+    expect(toggleDefault.disabled).toBe(false);
+    expect(toggleDefault.getAttribute('aria-expanded')).toBe('false');
+    cleanup();
 
-    expect(screen.getByText(/^0 active workflows/i)).toBeTruthy();
+    // History view (?history=1): the historical section renders the lane.
+    mount('/workflows?history=1');
+    await waitForMount();
     expect(screen.getByText('Completed formula run')).toBeTruthy();
-    expect(screen.getByText(/^Runs$/i)).toBeTruthy();
-    expect(screen.queryByText(/^No active workflows\\.$/i)).toBeNull();
+    const toggleHistory = screen.getByRole('button', { name: /hide historical/i }) as HTMLButtonElement;
+    expect(toggleHistory.getAttribute('aria-expanded')).toBe('true');
+    expect(toggleHistory.getAttribute('aria-controls')).toBeTruthy();
+  });
+
+  it('yh5i: toggle button is disabled when totalHistorical is 0', async () => {
+    // Default envelope has totalHistorical = 0.
+    mount();
+    await waitForMount();
+    const toggle = screen.getByRole('button', {
+      name: /no completed workflow runs in the current window/i,
+    }) as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    // aria-controls must NOT reference a non-existent DOM id when the
+    // historical section is not rendered (WAI-ARIA spec).
+    expect(toggle.getAttribute('aria-controls')).toBeNull();
+  });
+
+  it('yh5i: toggle stays enabled when showHistory=true even if totalHistorical drops to 0', async () => {
+    // Reachable via back-button + SSE refresh: URL has ?history=1 but the
+    // last historical lane has since rolled out. The user must still be
+    // able to dismiss the historical section.
+    mount('/workflows?history=1');
+    await waitForMount();
+    const toggle = screen.getByRole('button', { name: /hide historical/i }) as HTMLButtonElement;
+    expect(toggle.disabled).toBe(false);
+    expect(screen.getByText(/No completed runs in the current window/i)).toBeTruthy();
   });
 
   it('manual Refresh button calls api.snapshotRefresh([workflows]), not api.snapshot()', async () => {
