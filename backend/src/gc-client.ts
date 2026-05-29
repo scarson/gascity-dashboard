@@ -6,6 +6,7 @@ import type {
   GcMailList,
   GcEventList,
   GcFormulaDetail,
+  GcRigList,
   GcWorkflowSnapshot,
   SlingInput,
   SlingResponse,
@@ -58,6 +59,7 @@ const SUPERVISOR_PATHS = {
   formulasFeed: '/v0/city/{cityName}/formulas/feed',
   health: '/v0/city/{cityName}/health',
   mail: '/v0/city/{cityName}/mail',
+  rigs: '/v0/city/{cityName}/rigs',
   sessionStream: '/v0/city/{cityName}/session/{id}/stream',
   sessions: '/v0/city/{cityName}/sessions',
   sling: '/v0/city/{cityName}/sling',
@@ -306,6 +308,27 @@ export class GcClient {
       this.operationKey(SUPERVISOR_PATHS.sessions),
       gcSupervisorDecoders.listSessions,
       (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.sessions, {
+        params: { path: this.cityPathParams() },
+        signal: upstreamSignal,
+      }),
+      signal,
+    );
+  }
+
+  /**
+   * `GET /v0/city/{name}/rigs` — list of configured rigs for this city.
+   * Used by the cityStatus snapshot collector to source rigs from the
+   * HTTP API instead of parsing city.toml off the host filesystem
+   * (gascity-dashboard-19w). The supervisor's RigResponse carries more
+   * fields (agent_count, running_count, git status, etc.); the decoder
+   * narrows to name+path which is all the dashboard's CityRig contract
+   * uses today.
+   */
+  async listRigs(signal?: AbortSignal): Promise<GcRigList> {
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.rigs),
+      gcSupervisorDecoders.listRigs,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.rigs, {
         params: { path: this.cityPathParams() },
         signal: upstreamSignal,
       }),

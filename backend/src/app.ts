@@ -129,7 +129,6 @@ export function createDashboardApp(config: AdminConfig): DashboardApp {
   const snapshotService = createSnapshotService({
     gc,
     config: dashboardConfig,
-    cityPath: config.cityPath,
   });
   writeRouter.use('/snapshot', snapshotRouter(snapshotService));
 

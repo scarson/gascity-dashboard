@@ -6,6 +6,7 @@ import type {
   GcFormulaDetail,
   GcFormulaRunList,
   GcMailList,
+  GcRigList,
   GcSessionList,
   GcWorkflowSnapshot,
   SupervisorHealth,
@@ -83,6 +84,18 @@ const BeadSchema = z.object({
   dependent_count: z.number().finite().optional(),
   comment_count: z.number().finite().optional(),
   metadata: UnknownRecordSchema.optional(),
+}).passthrough();
+
+// Per-rig wire shape from `GET /v0/city/{name}/rigs`. The supervisor's
+// RigResponse carries agent_count, running_count, suspended, git status,
+// default_branch, prefix, last_activity — all of which we drop at the
+// edge because GcRig (shared) is intentionally narrow (name + path
+// only). Adding a field to GcRig means widening this schema first so the
+// SSOT contract stays one-way: shared.GcRig ⊆ supervisor.RigResponse.
+// gascity-dashboard-19w.
+const RigSchema = z.object({
+  name: z.string(),
+  path: z.string(),
 }).passthrough();
 
 const MailItemSchema = z.object({
@@ -270,6 +283,18 @@ export const gcSupervisorDecoders = {
       }).passthrough(),
       value,
       'listSessions',
+    );
+  },
+
+  listRigs(value: RawSupervisorSchema['ListBodyRigResponse']): GcRigList {
+    return decodeSupervisorPayload(
+      z.object({
+        items: listItemsField(RigSchema),
+        partial: PartialField,
+        partial_errors: PartialErrorsField,
+      }).passthrough(),
+      value,
+      'listRigs',
     );
   },
 

@@ -173,6 +173,33 @@ export interface TranscriptResult {
   truncated: boolean;
 }
 
+// ── Rigs (gascity-dashboard-19w) ─────────────────────────────────────────
+
+/**
+ * Per-rig shape returned by `GET /v0/city/{name}/rigs`. The supervisor's
+ * RigResponse carries more fields (agent_count, running_count, git status,
+ * suspended, last_activity, default_branch, prefix); only name + path are
+ * exposed here because that's all the snapshot collector's CityRig
+ * downstream contract needs. Other fields are intentionally dropped at
+ * the decoder edge — adding one means widening both the decoder Zod
+ * schema and the consumer (CityRig in snapshot/types.ts).
+ */
+export interface GcRig {
+  name: string;
+  path: string;
+}
+
+export interface GcRigList {
+  items: GcRig[];
+  /** True when the supervisor reports the list is incomplete (one or more
+   *  backends failed during aggregation). Wire shape is `items: null` +
+   *  `partial: true`; the decoder normalizes items to `[]` so consumers
+   *  always have an array, but the degradation signal survives here. */
+  partial?: boolean;
+  /** Human-readable errors from backends that failed during aggregation. */
+  partial_errors?: readonly string[];
+}
+
 // ── Beads ─────────────────────────────────────────────────────────────────
 
 export type BeadStatus =

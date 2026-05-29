@@ -1,16 +1,15 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import type { GcSession, GcSessionList } from 'gas-city-dashboard-shared';
+import type { GcRigList, GcSession, GcSessionList } from 'gas-city-dashboard-shared';
 
 import {
   aggregateSessionsByProvider,
   collectCityStatus,
-  parseCityToml,
-  quotedTomlValue,
 } from '../src/snapshot/collectors/cityStatus.js';
 
-// cityStatus collector coverage for gascity-dashboard-8nj.
+// cityStatus collector coverage for gascity-dashboard-8nj /
+// gascity-dashboard-19w.
 //
 // Per gascity-dashboard-dkb Q4 resolution (and upstream issue
 // gastownhall/gascity#2508): the dashboard does NOT title-parse to infer
@@ -18,6 +17,15 @@ import {
 // GcSession.provider is populated. Sessions without provider are TOLERATED
 // (treated as 'unknown provider') and EXCLUDED from the breakdown.
 // Demo-dash's inferProviderFromTitle is intentionally NOT ported.
+//
+// Per gascity-dashboard-19w: rigs are sourced from the supervisor's
+// `GET /v0/city/{name}/rigs` HTTP API instead of parsing city.toml off
+// the host filesystem. maxSessions is permanently 'unavailable' because
+// the supervisor's HTTP API does NOT expose a city-level
+// max_active_sessions field today — verified in upstream
+// gastownhall/gascity@main: handler_status.go's StatusBody construction
+// and handler_config.go's workspaceResponse/configAgentResponse both
+// omit it. Tracked for upstream exposure in a follow-up bead.
 
 function sess(partial: Partial<GcSession>): GcSession {
   return {
@@ -85,7 +93,7 @@ describe('aggregateSessionsByProvider', () => {
 });
 
 describe('collectCityStatus', () => {
-  test('builds CityStatusSummary from sessions + explicit max-session state when cityPath unset', async () => {
+  test('builds CityStatusSummary from sessions + rigs HTTP responses; maxSessions stays unavailable', async () => {
     const sessionList: GcSessionList = {
       items: [
         sess({ id: 't-1', provider: 'codex', state: 'active' }),
@@ -93,10 +101,16 @@ describe('collectCityStatus', () => {
         sess({ id: 't-3', provider: 'claude', state: 'active' }),
       ],
     };
+    const rigList: GcRigList = {
+      items: [
+        { name: 'rig-a', path: '/data/rig-a' },
+        { name: 'rig-b', path: '/data/rig-b' },
+      ],
+    };
 
     const summary = await collectCityStatus({
       listSessions: async () => sessionList,
-      cityPath: '',
+      listRigs: async () => rigList,
     });
 
     assert.equal(summary.activeAgents, 2);
@@ -106,9 +120,12 @@ describe('collectCityStatus', () => {
     assert.deepEqual(summary.maxSessions, {
       status: 'unavailable',
       source: 'city',
-      error: 'city path not configured',
+      error: 'supervisor HTTP API does not expose city-level max_active_sessions',
     });
-    assert.deepEqual(summary.rigs, []);
+    assert.deepEqual(summary.rigs, [
+      { name: 'rig-a', path: '/data/rig-a' },
+      { name: 'rig-b', path: '/data/rig-b' },
+    ]);
     // Sort: active desc, then provider asc. codex and claude both have
     // active=1, so alpha tiebreak puts claude first.
     assert.deepEqual(summary.sessionsByProvider, [
@@ -117,38 +134,10 @@ describe('collectCityStatus', () => {
     ]);
   });
 
-  test('parses max_active_sessions and rigs from city.toml when reader returns one', async () => {
-    const sessionList: GcSessionList = {
-      items: [sess({ id: 't-1', provider: 'codex', state: 'active' })],
-    };
-
+  test('empty sessions and empty rigs remain zero counts; maxSessions still unavailable', async () => {
     const summary = await collectCityStatus({
-      listSessions: async () => sessionList,
-      cityPath: '/fake/city',
-      readCityToml: async () => ({
-        maxSessions: { status: 'available', value: 100 },
-        rigs: [{ name: 'rig-a', path: '/data/rig-a' }],
-      }),
-    });
-
-    assert.deepEqual(summary.maxSessions, { status: 'available', value: 100 });
-    assert.deepEqual(summary.rigs, [{ name: 'rig-a', path: '/data/rig-a' }]);
-  });
-
-  test('empty sessions remain known zero counts and missing city.toml is explicit state', async () => {
-    const sessionList: GcSessionList = { items: [] };
-
-    const summary = await collectCityStatus({
-      listSessions: async () => sessionList,
-      cityPath: '/fake/city',
-      readCityToml: async () => ({
-        maxSessions: {
-          status: 'unavailable',
-          source: 'city',
-          error: 'city.toml not found',
-        },
-        rigs: [],
-      }),
+      listSessions: async () => ({ items: [] }),
+      listRigs: async () => ({ items: [] }),
     });
 
     assert.equal(summary.activeAgents, 0);
@@ -158,79 +147,24 @@ describe('collectCityStatus', () => {
     assert.deepEqual(summary.maxSessions, {
       status: 'unavailable',
       source: 'city',
-      error: 'city.toml not found',
+      error: 'supervisor HTTP API does not expose city-level max_active_sessions',
     });
     assert.deepEqual(summary.rigs, []);
   });
-});
 
-describe('quotedTomlValue (gascity-dashboard-ddz)', () => {
-  test('extracts value for a simple key', () => {
-    assert.equal(quotedTomlValue('name = "rig-a"', 'name'), 'rig-a');
-    assert.equal(quotedTomlValue('path = "/data/rig-a"', 'path'), '/data/rig-a');
-  });
-
-  test('returns null when key does not match the line', () => {
-    assert.equal(quotedTomlValue('path = "/data"', 'name'), null);
-  });
-
-  test('does not match when key is a prefix of the line key', () => {
-    // 'nameX = ...' must NOT match key='name'.
-    assert.equal(quotedTomlValue('nameX = "x"', 'name'), null);
-  });
-
-  test('preserves greedy last-quote semantics for values with embedded quotes', () => {
-    // The original regex used /(.*)/ which greedily matches to the last
-    // double-quote. We preserve that — embedded escaped quotes are not
-    // de-escaped, but they are kept inside the captured value.
-    assert.equal(quotedTomlValue('name = "a\\"b"', 'name'), 'a\\"b');
-  });
-
-  test('does not treat regex metacharacters in the key as wildcards', () => {
-    // REGRESSION (gascity-dashboard-ddz): the previous implementation
-    // built `new RegExp(\`^${key}...\`)` from the raw key string. A key
-    // containing a regex metachar like '.' would silently match unintended
-    // lines. With the non-regex parser, dots are treated literally.
-
-    // The dotted key 'max.sessions' must only match a line whose literal
-    // key text is 'max.sessions', not lines like 'maxXsessions'.
-    assert.equal(quotedTomlValue('maxXsessions = "10"', 'max.sessions'), null);
-    assert.equal(quotedTomlValue('max.sessions = "10"', 'max.sessions'), '10');
-  });
-
-  test('returns null for lines without a quoted value', () => {
-    assert.equal(quotedTomlValue('name = 10', 'name'), null);
-    assert.equal(quotedTomlValue('name =', 'name'), null);
-    assert.equal(quotedTomlValue('# comment', 'name'), null);
-  });
-
-  test('returns null for empty quoted value (pinned contract)', () => {
-    // `name = ""` is syntactically valid TOML but semantically useless for
-    // rig name/path. Contract pinned in wave-p3p4-clean Phase 4: return
-    // null so the exported API matches parseCityToml's truthy guard.
-    assert.equal(quotedTomlValue('name = ""', 'name'), null);
-    assert.equal(quotedTomlValue('path = ""', 'path'), null);
-  });
-});
-
-describe('parseCityToml (regression for ddz)', () => {
-  test('parses [[rigs]] name and path correctly after quotedTomlValue rewrite', () => {
-    const toml = `
-max_active_sessions = 50
-
-[[rigs]]
-name = "rig-a"
-path = "/data/rig-a"
-
-[[rigs]]
-name = "rig-b"
-path = "/data/rig-b"
-`;
-    const summary = parseCityToml(toml);
-    assert.deepEqual(summary.maxSessions, { status: 'available', value: 50 });
-    assert.deepEqual(summary.rigs, [
-      { name: 'rig-a', path: '/data/rig-a' },
-      { name: 'rig-b', path: '/data/rig-b' },
-    ]);
+  test('rigs collector failure surfaces — no swallow', async () => {
+    // gascity-dashboard-19w: listRigs is awaited; if the supervisor 5xx's,
+    // the collector throws so the city source goes to status='error' per
+    // the failure-isolation contract. We do NOT silently aggregate an
+    // empty rigs list, which would mask the upstream outage.
+    await assert.rejects(
+      collectCityStatus({
+        listSessions: async () => ({ items: [] }),
+        listRigs: async () => {
+          throw new Error('gc supervisor returned 502');
+        },
+      }),
+      /gc supervisor returned 502/,
+    );
   });
 });

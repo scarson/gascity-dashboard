@@ -88,8 +88,6 @@ export interface CreateSnapshotServiceOptions {
    */
   sessions?: SourceCache<GcSessionList> | undefined;
   config: DashboardRuntimeConfig;
-  /** Optional path to city.toml directory (for cityStatus collector). */
-  cityPath?: string | undefined;
   now?: (() => Date) | undefined;
   uptimeSeconds?: (() => number) | undefined;
 }
@@ -266,13 +264,12 @@ function buildDefaultCaches(
       'createSnapshotService requires either { gc } (to build default caches) or { caches } (pre-built).',
     );
   }
-  const { gc, config, cityPath, now } = options;
+  const { gc, config, now } = options;
   const useFixture = config.useFixtures;
 
   return {
     city: createCityStatusSourceCache({
       gc,
-      cityPath: cityPath ?? '',
       now,
       useFixture,
       loadFixture: useFixture ? fixtureSourceLoader('city') : undefined,
