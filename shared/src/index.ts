@@ -553,8 +553,13 @@ export interface GcFormulaRunList {
   /** True when the supervisor reports the list is incomplete (one or more
    *  backends failed during aggregation). Wire shape is `items: null` +
    *  `partial: true`; decoder normalizes items to `[]` so consumers always
-   *  have an array. */
-  partial?: boolean;
+   *  have an array.
+   *
+   *  Required (not optional) because the supervisor's OpenAPI declares
+   *  `FormulaFeedBody.partial` as required `boolean` — distinct from the
+   *  other List* envelopes whose `partial` is optional. Tracked in
+   *  gascity-dashboard-mfb9. */
+  partial: boolean;
   /** Human-readable errors from backends that failed during aggregation. */
   partial_errors?: readonly string[];
 }
