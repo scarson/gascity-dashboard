@@ -249,6 +249,72 @@ describe('buildWorkflowSummary', () => {
     assert.equal(summary.runCounts.prReview, 1);
   });
 
+  // gascity-dashboard-3vaz (follow-up to e7hj): the lane-builder's
+  // workflowFormula() title fallback used to fire on ANY title starting
+  // with 'mol-', even on graph.v2 roots that had no gc.run_target —
+  // exactly the false-positive condition the run-detail page now flags
+  // with the e7hj warn tone. Match the resolveWorkflowFormulaName guard:
+  // title fallback only when root has graph.v2 contract AND gc.run_target.
+  test('3vaz: lane formula stays unavailable for graph.v2 root with mol-* title but no gc.run_target', () => {
+    const summary = buildWorkflowSummary([
+      issue({
+        id: 'ga-root',
+        title: 'mol-foo',
+        issue_type: 'molecule',
+        status: 'open',
+        // graph.v2 contract (so it enters the lane builder) but no
+        // gc.run_target — an operator-edited descriptive title on a
+        // closed root, not a runnable formula name.
+        metadata: graphWorkflowMetadata(),
+      }),
+    ]);
+
+    assert.equal(summary.lanes.length, 1);
+    assert.deepEqual(summary.lanes[0]!.formula, {
+      status: 'unavailable',
+      error: 'workflow formula unavailable',
+    });
+  });
+
+  test('3vaz: lane formula uses title fallback when graph.v2 root has both contract and gc.run_target', () => {
+    const summary = buildWorkflowSummary([
+      issue({
+        id: 'ga-root',
+        title: 'mol-focus-review',
+        issue_type: 'molecule',
+        status: 'open',
+        metadata: graphWorkflowMetadata({
+          'gc.run_target': '/home/ds/gascity/polecat',
+        }),
+      }),
+    ]);
+
+    assert.deepEqual(summary.lanes[0]!.formula, {
+      status: 'known',
+      name: 'mol-focus-review',
+    });
+  });
+
+  test('3vaz: explicit gc.formula wins over the gated title fallback', () => {
+    const summary = buildWorkflowSummary([
+      issue({
+        id: 'ga-root',
+        title: 'mol-misleading-title',
+        issue_type: 'molecule',
+        status: 'open',
+        metadata: graphWorkflowMetadata({
+          'gc.formula': 'mol-adopt-pr-v2',
+          'gc.run_target': '/home/ds/gascity/polecat',
+        }),
+      }),
+    ]);
+
+    assert.deepEqual(summary.lanes[0]!.formula, {
+      status: 'known',
+      name: 'mol-adopt-pr-v2',
+    });
+  });
+
   test('carries active workflow progress as an explicit state', () => {
     const summary = buildWorkflowSummary([
       issue({

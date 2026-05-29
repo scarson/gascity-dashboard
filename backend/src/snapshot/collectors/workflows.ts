@@ -232,7 +232,7 @@ function workflowLane(
 ): WorkflowLane {
   const phase = mapWorkflowPhase(issues);
   const updatedAt = latestUpdatedAt(issues);
-  const formula = workflowFormula(issues);
+  const formula = workflowFormula(rootId, issues);
   const formulaName = workflowFormulaName(formula);
   const stages = stageProgress(phase, formulaName, issues);
   const foundStageIndex = stages.findIndex((s) => s.status === 'active');
@@ -784,15 +784,36 @@ function compareLanes(a: WorkflowLane, b: WorkflowLane): number {
   return bTime - aTime || a.id.localeCompare(b.id);
 }
 
-function workflowFormula(issues: WorkflowIssue[]): WorkflowLane['formula'] {
-  const name =
+// gascity-dashboard-3vaz (follow-up to e7hj): the title-startswith-'mol-'
+// fallback only fires when the root bead is a fully-instantiated runnable
+// graph.v2 root (has both gc.formula_contract='graph.v2' and gc.run_target).
+// Mirrors the resolveWorkflowFormulaName guard so the lane card does not
+// surface an operator-edited descriptive title on a closed root as a
+// canonical formula name — exactly the false-positive condition the
+// run-detail page now flags with the e7hj warn tone. WorkflowLaneFormula
+// intentionally has no `source` discriminant; the lane card does not warn
+// on title-fallback provenance today.
+function workflowFormula(
+  rootId: string,
+  issues: WorkflowIssue[],
+): WorkflowLane['formula'] {
+  const explicit =
     metadataString(issues, 'pr_review.workflow_formula') ||
-    metadataString(issues, 'gc.formula') ||
-    issues.map((i) => i.title).find((t) => t.startsWith('mol-')) ||
-    null;
-  return name === null
-    ? { status: 'unavailable', error: 'workflow formula unavailable' }
-    : { status: 'known', name };
+    metadataString(issues, 'gc.formula');
+  if (explicit) return { status: 'known', name: explicit };
+
+  const root = issues.find((i) => i.id === rootId);
+  if (
+    stringValue(root?.metadata?.['gc.formula_contract']) === 'graph.v2' &&
+    stringValue(root?.metadata?.['gc.run_target']).length > 0
+  ) {
+    const fallback = issues
+      .map((i) => i.title)
+      .find((t) => t.startsWith('mol-'));
+    if (fallback) return { status: 'known', name: fallback };
+  }
+
+  return { status: 'unavailable', error: 'workflow formula unavailable' };
 }
 
 function workflowFormulaName(formula: WorkflowLane['formula']): string | null {
