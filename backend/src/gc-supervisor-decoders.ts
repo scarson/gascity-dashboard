@@ -248,7 +248,14 @@ const HealthSchema = z.object({
 function listItemsField<T extends z.ZodTypeAny>(itemSchema: T) {
   return z.array(itemSchema).nullish().transform((v) => v ?? []);
 }
+// The supervisor's OpenAPI declares `partial` as optional on ListBodyBead,
+// ListBodySessionResponse, MailListBody, and ListBodyWireEvent — `PartialField`
+// mirrors that contract. FormulaFeedBody is the lone outlier: its `partial` is
+// declared `boolean` (required), so `listFormulaRuns` uses `RequiredPartialField`
+// instead. Keeping the two named helpers separate prevents the wire-shape drift
+// from leaking back into the optional-side decoders.
 const PartialField = z.boolean().optional();
+const RequiredPartialField = z.boolean();
 const PartialErrorsField = z.array(z.string())
   .nullish()
   .transform((v) => (v ?? undefined));
@@ -313,7 +320,11 @@ export const gcSupervisorDecoders = {
     return decodeSupervisorPayload(
       z.object({
         items: listItemsField(FormulaRunSchema),
-        partial: PartialField,
+        // mfb9: FormulaFeedBody.partial is required (`boolean`) per OpenAPI —
+        // unlike its List* siblings whose `partial` is optional. The required
+        // helper here locks the dashboard-side contract so a missing field
+        // surfaces at the decoder edge instead of silently becoming `undefined`.
+        partial: RequiredPartialField,
         partial_errors: PartialErrorsField,
       }).passthrough(),
       value,

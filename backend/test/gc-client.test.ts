@@ -736,6 +736,10 @@ describe('GcClient error handling', () => {
             run_detail_available: true,
           },
         ],
+        // mfb9: FormulaFeedBody.partial is declared `boolean` (required) in
+        // the supervisor's OpenAPI — keep the fixture aligned with the wire
+        // contract so the decoder's RequiredPartialField test passes.
+        partial: false,
       }));
     });
     const gc = new GcClient({
@@ -785,6 +789,29 @@ describe('GcClient error handling', () => {
     await assert.rejects(
       () => gc.listFormulaRuns({ scopeKind: 'city', scopeRef: 'ds-research' }),
       /invalid gc supervisor listFormulaRuns payload/i,
+    );
+  });
+
+  test('mfb9: listFormulaRuns rejects payload missing required `partial` field', async () => {
+    // The supervisor's OpenAPI declares FormulaFeedBody.partial as required
+    // boolean (unlike the other List* envelopes whose partial is optional).
+    // Locking the dashboard-side contract: a body with valid items but no
+    // `partial` field must fail decoding, so a future supervisor regression
+    // that drops the field surfaces at the decoder edge instead of leaking
+    // `undefined` into consumers typed as `partial: boolean`.
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ items: [] }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await assert.rejects(
+      () => gc.listFormulaRuns({ scopeKind: 'city', scopeRef: 'ds-research' }),
+      /invalid gc supervisor listFormulaRuns payload.*partial/i,
     );
   });
 
