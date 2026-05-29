@@ -10,6 +10,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { api } from '../api/client';
 import { invalidateKey } from '../api/cache';
 import { NowProvider } from '../contexts/NowContext';
+import { assertAtMostOneMark } from '../test/assertions/oneMarkRule';
 import { AmbientHomePage } from './AmbientHome';
 
 // gascity-dashboard-kb3 — AmbientHome integration coverage.
@@ -18,7 +19,9 @@ import { AmbientHomePage } from './AmbientHome';
 // component primitives cover their respective derivations. These
 // integration tests pin the contract surfaces the bead's acceptance
 // criteria are written against:
-//   • One Mark Rule       — at most 1 .text-accent in the rendered DOM.
+//   • One Mark Rule       — at most 1 .text-accent in the rendered DOM
+//                           (delegated to assertAtMostOneMark — the
+//                           shared mechanical gate per gascity-dashboard-mz8).
 //   • R10 withholding     — a fully-calm city renders NO concern rows.
 //   • R2 maroon-on-inferred — inferred lanes never produce a maroon token.
 //   • Non-fresh paths     — workflows.status='error' and census.unavailable.
@@ -267,8 +270,9 @@ describe('AmbientHomePage', () => {
     const region = screen.getByTestId('concern-region');
     expect(region.children.length).toBe(0);
     expect((region as HTMLElement).style.opacity).toBe('0');
-    // One Mark Rule: no .text-accent anywhere on the calm home.
-    expect(container.querySelectorAll('.text-accent').length).toBe(0);
+    // One Mark Rule (DESIGN.md): at most one maroon per viewport — here
+    // R10 makes it zero since the calm city has no concern row to mark.
+    assertAtMostOneMark(container);
     // Failing clause reads 'nothing failing'; denominator omitted when unverifiable=0.
     expect(screen.getByTestId('phase-census-failing').textContent).toContain('nothing failing');
     expect(screen.getByTestId('phase-census-failing').textContent).not.toContain('of');
@@ -342,8 +346,11 @@ describe('AmbientHomePage', () => {
     expect(href).toContain('scope_kind=rig');
     expect(href).toContain('scope_ref=gascity');
 
-    // One Mark Rule: exactly one .text-accent in the entire rendered tree.
-    expect(container.querySelectorAll('.text-accent').length).toBe(1);
+    // One Mark Rule (DESIGN.md): the single maroon fires here — the
+    // shared helper pins the <=1 invariant; the surrounding assertions
+    // (status-sentence-token presence, the maroon anchor's text/href)
+    // already pin that exactly one is present, on the right element.
+    assertAtMostOneMark(container);
   });
 
   it('NEVER paints the maroon token on an inferred lane (R2)', async () => {
@@ -373,7 +380,10 @@ describe('AmbientHomePage', () => {
     await waitFor(() => expect(screen.getByTestId('phase-census')).toBeTruthy());
 
     expect(screen.queryByTestId('status-sentence')).toBeNull();
-    expect(container.querySelectorAll('.text-accent').length).toBe(0);
+    // R2 floor: the One Mark Rule MUST hold even though an inferred
+    // lane is structurally "stalled" — the helper enforces <=1; the
+    // status-sentence absence above pins that it's zero here.
+    assertAtMostOneMark(container);
   });
 
   it('shows a needsOperator concern row even when no lane is failing', async () => {
@@ -405,7 +415,10 @@ describe('AmbientHomePage', () => {
     expect(screen.getByTestId('phase-census-failing').textContent).toContain('nothing failing');
     expect(screen.queryByTestId('concern-row-calm')).toBeNull();
     expect(screen.getByTestId('concern-row-decide-me')).toBeTruthy();
-    expect(container.querySelectorAll('.text-accent').length).toBe(0);
+    // One Mark Rule: a needsOperator row alone never paints maroon
+    // (the mark fires only on the maroon run-id token); the helper
+    // pins <=1, the status-sentence absence pins that it's zero.
+    assertAtMostOneMark(container);
   });
 
   it('renders a clear error when the workflows source is in error state', async () => {
