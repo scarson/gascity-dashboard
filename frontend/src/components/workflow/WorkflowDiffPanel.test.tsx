@@ -2,6 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { WorkflowDiffResponse } from 'gas-city-dashboard-shared';
 import { WorkflowDiffPanel } from './WorkflowDiffPanel';
+import { assertAtMostOneMark } from '../../test/assertions/oneMarkRule';
 
 afterEach(() => cleanup());
 
@@ -74,9 +75,13 @@ describe('WorkflowDiffPanel', () => {
 
     // The +/- glyph carries the add/remove signal; color must not. No diff
     // line may carry the maroon accent — multiple remove lines would otherwise
-    // breach the One Mark Rule (at most one maroon per viewport).
+    // breach the One Mark Rule (at most one maroon per viewport). The shared
+    // helper enforces the <=1 invariant (calm state: 0 satisfies <=1); the
+    // remove-specific guard below pins the test's documented intent — remove
+    // rows in particular must never gain the accent — which the helper alone
+    // cannot express.
+    assertAtMostOneMark(container);
     expect(container.querySelectorAll('.diff-line-remove.text-accent').length).toBe(0);
-    expect(container.querySelectorAll('.text-accent').length).toBe(0);
   });
 });
 

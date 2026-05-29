@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EntityLinkView } from 'gas-city-dashboard-shared';
 import { RelatedEntities, isStale } from './RelatedEntities';
+import { assertAtMostOneMark } from '../test/assertions/oneMarkRule';
 
 afterEach(() => cleanup());
 
@@ -72,10 +73,17 @@ describe('RelatedEntities (R5/R6/RK3)', () => {
     });
     const { container } = renderRelated(v);
     fireEvent.click(screen.getByRole('button', { name: /show detail/i }));
-    const accents = container.querySelectorAll('.text-accent');
-    expect(accents.length).toBeLessThanOrEqual(1);
-    // The summary line carries the one maroon.
-    expect(accents.length).toBe(1);
+    // One Mark Rule (DESIGN.md): the shared helper pins the <=1 invariant.
+    // The exact-1 claim below is load-bearing — without it a broken
+    // aggregation that paints zero maroon would pass the helper (0<=1)
+    // silently. The strict equality is what this test is actually about
+    // (three unresolved links cross the threshold → one aggregate
+    // maroon). Mirrors the AmbientHome.test.tsx mz8 precedent of pairing
+    // the helper with surrounding assertions that pin exactly-1
+    // compositionally. (A future assertExactlyOneMark sibling — tracked
+    // as mz8.1 — would express this in one call.)
+    assertAtMostOneMark(container);
+    expect(container.querySelectorAll('.text-accent').length).toBe(1);
   });
 
   it('clicking a resolved bead row invokes the open handler', () => {
