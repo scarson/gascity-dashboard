@@ -63,11 +63,24 @@ export interface AdminConfig {
   maintainerSlingTarget: string;
   /**
    * Default agent alias for `gc sling` dispatch when intent='triage'.
-   * Env: MAINTAINER_TRIAGE_TARGET. Default: 'chief-of-staff'.
-   * Triage dispatch routes to the chief-of-staff so they can dispatch
-   * the appropriate project-lead; the generic sling target stays at
-   * 'mayor' for review/draft intents. Bad env values fall back with
-   * the same warn pattern as maintainerSlingTarget.
+   * Env: MAINTAINER_TRIAGE_TARGET. Default: 'mayor'.
+   *
+   * Why 'mayor': the mayor is the top-level dispatcher present in every
+   * Gas City deployment, so a fresh install with no env override always
+   * has a live agent to claim slings. Earlier this defaulted to
+   * 'chief-of-staff', but that role can be suspended in a deployment's
+   * agent roster (observed 2026-05-29 with oversight-rig.chief-of-staff:
+   * suspended) — when suspended, the supervisor accepts the sling but
+   * no agent ever claims it, so the work just ages on the maintainer
+   * 'slung awaiting agent' panel.
+   *
+   * Deployments that DO provision a chief-of-staff (or other role) can
+   * still opt in via MAINTAINER_TRIAGE_TARGET. Bad env values fall back
+   * with the same warn pattern as maintainerSlingTarget.
+   *
+   * Note: roster-aware startup validation (refuse to start if the
+   * configured target isn't a live agent) is a separate follow-up that
+   * depends on gascity-dashboard-ay6's listAgents adoption.
    */
   maintainerTriageTarget: string;
   /**
@@ -119,7 +132,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdminConfig {
     maintainerTriageTarget: parseSlingTarget(
       'MAINTAINER_TRIAGE_TARGET',
       env.MAINTAINER_TRIAGE_TARGET,
-      'chief-of-staff',
+      'mayor',
     ),
     useFixtures: env.SNAPSHOT_USE_FIXTURES === '1',
   };

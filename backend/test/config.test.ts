@@ -50,11 +50,14 @@ describe('loadConfig', () => {
     assert.equal(loadConfig({ SNAPSHOT_USE_FIXTURES: '' }).useFixtures, false);
   });
 
-  test('maintainerTriageTarget defaults to chief-of-staff', () => {
-    // gascity-dashboard-0nn: triage intent routes to chief-of-staff so
-    // bulk-sling fans out without per-request target resolution.
+  test('maintainerTriageTarget defaults to mayor (always-present dispatcher)', () => {
+    // gascity-dashboard-cus8: default was 'chief-of-staff' but that role
+    // can be suspended in a deployment's agent roster (observed
+    // 2026-05-29 with oversight-rig.chief-of-staff: suspended), causing
+    // slings to silently fail. mayor is the top-level dispatcher present
+    // in every Gas City deployment.
     const cfg = loadConfig({});
-    assert.equal(cfg.maintainerTriageTarget, 'chief-of-staff');
+    assert.equal(cfg.maintainerTriageTarget, 'mayor');
   });
 
   test('maintainerTriageTarget honours MAINTAINER_TRIAGE_TARGET when valid', () => {
@@ -62,19 +65,27 @@ describe('loadConfig', () => {
     assert.equal(cfg.maintainerTriageTarget, 'project-lead');
   });
 
+  test('maintainerTriageTarget still accepts chief-of-staff as an explicit override', () => {
+    // Deployments where chief-of-staff IS provisioned can still opt in.
+    // The default change in cus8 is about safe fresh-install behaviour,
+    // not about removing chief-of-staff as a valid target.
+    const cfg = loadConfig({ MAINTAINER_TRIAGE_TARGET: 'chief-of-staff' });
+    assert.equal(cfg.maintainerTriageTarget, 'chief-of-staff');
+  });
+
   test('maintainerTriageTarget silently falls back on invalid env (no startup crash)', () => {
     // Same precedent as maintainerSlingTarget: a typo in one optional env
     // should not dark the dashboard.
     const cfg = loadConfig({ MAINTAINER_TRIAGE_TARGET: 'bad alias!!' });
-    assert.equal(cfg.maintainerTriageTarget, 'chief-of-staff');
+    assert.equal(cfg.maintainerTriageTarget, 'mayor');
   });
 
   test('maintainerSlingTarget and maintainerTriageTarget resolve independently', () => {
     const cfg = loadConfig({
       MAINTAINER_SLING_TARGET: 'mayor',
-      MAINTAINER_TRIAGE_TARGET: 'chief-of-staff',
+      MAINTAINER_TRIAGE_TARGET: 'project-lead',
     });
     assert.equal(cfg.maintainerSlingTarget, 'mayor');
-    assert.equal(cfg.maintainerTriageTarget, 'chief-of-staff');
+    assert.equal(cfg.maintainerTriageTarget, 'project-lead');
   });
 });
