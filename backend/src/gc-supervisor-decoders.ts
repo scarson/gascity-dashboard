@@ -144,6 +144,13 @@ const FormulaPreviewEdgeSchema = z.object({
 // Zod object preserves the SSOT contract. (Previously used
 // UnknownRecordSchema, which accepted any keys and laundered the
 // mismatch via the t5l6 decoder cast.)
+//
+// Intentionally no .passthrough(): the rest of this file's schemas allow
+// passthrough at the top level so the decoder remains forward-compatible
+// with unknown supervisor fields, but THIS schema must strip unknown keys
+// to remain a faithful surface for Record<string, never>. Adding
+// .passthrough() here would widen the element type back to
+// {[k: string]: unknown}, defeating the SSOT alignment.
 const EmptyObjectSchema = z.object({});
 
 const WorkflowSnapshotSchema = z.object({

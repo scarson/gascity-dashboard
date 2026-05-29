@@ -1327,4 +1327,77 @@ describe('createWorkflowsSourceCache', () => {
       });
     }
   });
+
+  // gascity-dashboard-d3xp Phase-4 security finding M1: the supervisor feed's
+  // scope_ref is consumed as authoritative; if the supervisor sends a value
+  // that wouldn't pass SCOPE_REF_RE (the same regex the routes layer uses to
+  // gate inbound query params), we must drop it rather than propagate a
+  // malformed scope that the deep-link would later 400 on. Defends boundary
+  // consistency against a misbehaving or compromised supervisor.
+  test('d3xp/M1: feed scope_ref failing SCOPE_REF_RE is dropped (lane scope stays unavailable)', async () => {
+    const cache = createWorkflowsSourceCache({
+      gc: {
+        listBeads: async (_signal: AbortSignal | undefined, rawParams: unknown) => {
+          const params = (rawParams ?? {}) as { rig?: string; type?: string; all?: boolean; limit?: number };
+          if (params.rig === undefined && params.type === undefined && params.all !== true) {
+            return { items: [], total: 0 };
+          }
+          if (params.rig === 'gascity' && params.type === 'task' && params.all === true) {
+            return {
+              items: [
+                gcBead({
+                  id: 'malformed-feed-root',
+                  title: 'mol-focus-review',
+                  status: 'in_progress',
+                  issue_type: 'task',
+                  metadata: graphWorkflowMetadata({
+                    'gc.root_store_ref': 'rig:gascity',
+                  }),
+                }),
+              ],
+              total: 1,
+            };
+          }
+          if (params.type === 'molecule' && params.all === true) {
+            return { items: [], total: 0 };
+          }
+          assert.fail(`unexpected listBeads params: ${JSON.stringify(params)}`);
+        },
+        listFormulaRuns: async () => ({
+          items: [
+            {
+              id: 'malformed-feed-root',
+              type: 'formula',
+              status: 'pending',
+              title: 'mol-focus-review',
+              scope_kind: 'rig',
+              // Leading hyphen — SCOPE_REF_RE requires [A-Za-z0-9] first.
+              // A real malformed value would also trigger the route's 400.
+              scope_ref: '-bad scope ref!',
+              target: '/home/ds/gascity/polecat',
+              started_at: '2026-05-28T00:00:00Z',
+              updated_at: '2026-05-28T00:00:00Z',
+              workflow_id: 'malformed-feed-root',
+              root_bead_id: 'malformed-feed-root',
+              root_store_ref: 'rig:gascity',
+              run_detail_available: true,
+            },
+          ],
+        }),
+        cityName: 'ds-research',
+      } as never,
+      limit: 1000,
+    });
+
+    const result = await cache.get();
+    assert.equal(result.status, 'fresh');
+    if (result.status === 'fresh') {
+      const lane = result.data.lanes.find((l) => l.id === 'malformed-feed-root');
+      assert.ok(lane, 'lane should still be discoverable; only its scope is dropped');
+      assert.deepEqual(lane.scope, {
+        status: 'unavailable',
+        error: 'workflow scope metadata unavailable',
+      });
+    }
+  });
 });

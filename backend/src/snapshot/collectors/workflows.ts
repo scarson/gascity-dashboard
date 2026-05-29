@@ -1,10 +1,11 @@
-import type {
-  GcBead,
-  WorkflowChange,
-  WorkflowLane,
-  WorkflowRunCounts,
-  WorkflowStage,
-  WorkflowSummary,
+import {
+  SCOPE_REF_RE,
+  type GcBead,
+  type WorkflowChange,
+  type WorkflowLane,
+  type WorkflowRunCounts,
+  type WorkflowStage,
+  type WorkflowSummary,
 } from 'gas-city-dashboard-shared';
 
 import type { GcClient } from '../../gc-client.js';
@@ -1023,7 +1024,16 @@ async function discoverFromFeed(gc: GcClient): Promise<FeedDiscovery> {
       }
       const rootId = run.root_bead_id ?? run.workflow_id ?? null;
       const scopeKind = parseWorkflowScopeKind(run.scope_kind);
-      if (rootId !== null && scopeKind !== null && run.scope_ref.length > 0) {
+      // Gate on SCOPE_REF_RE so a malformed supervisor scope_ref can't be
+      // propagated into a lane that the routes layer would reject when the
+      // user clicks the deep-link. Validation here matches the inbound gate
+      // at backend/src/routes/workflows.ts; SSOT regex lives in shared.
+      if (
+        rootId !== null &&
+        scopeKind !== null &&
+        run.scope_ref.length > 0 &&
+        SCOPE_REF_RE.test(run.scope_ref)
+      ) {
         scopes.set(rootId, {
           scopeKind,
           scopeRef: run.scope_ref,

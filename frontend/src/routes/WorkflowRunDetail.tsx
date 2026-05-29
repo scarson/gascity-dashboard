@@ -175,24 +175,33 @@ function FormulaMeta({ formula }: { formula: WorkflowRunDetailData['formula'] })
   if (formula.kind !== 'known') {
     return <Meta label="Formula" value={`unavailable (${formula.reason})`} />;
   }
-  if (formula.source === 'metadata') {
-    return <Meta label="Formula" value={formula.name} />;
+  switch (formula.source) {
+    case 'metadata':
+      return <Meta label="Formula" value={formula.name} />;
+    case 'title_fallback':
+      return (
+        <div>
+          <dt className="text-label uppercase tracking-wider text-fg-faint">Formula</dt>
+          <dd
+            className="text-body text-warn break-all tnum"
+            title={TITLE_FALLBACK_TOOLTIP}
+            aria-label={`${formula.name} (${TITLE_FALLBACK_TOOLTIP})`}
+          >
+            {formula.name}
+            <span className="ml-2 text-label uppercase tracking-wider text-warn">
+              inferred from bead title
+            </span>
+          </dd>
+        </div>
+      );
+    default: {
+      // Exhaustiveness: a new WorkflowFormulaSource variant must declare its
+      // own render path — falling through to a default warn tone would
+      // silently misrepresent its provenance.
+      const _exhaustive: never = formula.source;
+      return _exhaustive;
+    }
   }
-  return (
-    <div>
-      <dt className="text-label uppercase tracking-wider text-fg-faint">Formula</dt>
-      <dd
-        className="text-body text-warn break-all tnum"
-        title={TITLE_FALLBACK_TOOLTIP}
-        aria-label={`${formula.name} (${TITLE_FALLBACK_TOOLTIP})`}
-      >
-        {formula.name}
-        <span className="ml-2 text-label uppercase tracking-wider text-warn">
-          inferred from bead title
-        </span>
-      </dd>
-    </div>
-  );
 }
 
 function snapshotLabel(
