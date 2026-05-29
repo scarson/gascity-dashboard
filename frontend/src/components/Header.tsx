@@ -5,7 +5,11 @@ import { useViewingAs, OPERATOR_ALIAS } from '../contexts/ViewingAsContext';
 import { displayLabel } from '../hooks/aliasPriority';
 import { useCachedData } from '../hooks/useCachedData';
 
-const ROUTES: { to: string; label: string }[] = [
+const ROUTES: { to: string; label: string; end?: boolean }[] = [
+  // gascity-dashboard-kb3: Home is the L0 ambient page at `/`.
+  // `end: true` so the NavLink active-state matches `/` exactly
+  // (otherwise every nested route would also be 'active').
+  { to: '/', label: 'Home', end: true },
   { to: '/agents', label: 'Agents' },
   { to: '/beads', label: 'Beads' },
   { to: '/workflows', label: 'Workflows' },
@@ -53,6 +57,7 @@ export function Header() {
               <li key={r.to}>
                 <NavLink
                   to={r.to}
+                  {...(r.end ? { end: true } : {})}
                   className={({ isActive }) =>
                     [
                       'text-title transition-colors duration-150 ease-out-quart focus-mark',
