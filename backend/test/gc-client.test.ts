@@ -24,7 +24,10 @@ function startFake(): Promise<Fake> {
     let handler: Handler = (_req, res) => {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: [] }));
+      // 6bv7 F14: every list envelope in the supervisor's OpenAPI declares
+      // `total` required — include it in the default-fake response so list
+      // calls don't trip the decoder before the per-test handler is wired.
+      res.end(JSON.stringify({ items: [], total: 0 }));
     };
     let hits = 0;
     const sockets = new Set<import('node:net').Socket>();
@@ -166,7 +169,7 @@ describe('GcClient request coalescing', () => {
       const release = () => {
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ items: [] }));
+        res.end(JSON.stringify({ items: [], total: 0 }));
       };
       if (pending) {
         // Subsequent hits should NOT happen if coalescing works.
@@ -231,7 +234,7 @@ describe('GcClient request coalescing', () => {
     fake.setHandler((_req, res) => {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: [] }));
+      res.end(JSON.stringify({ items: [], total: 0 }));
     });
     const gc = new GcClient({
       baseUrl: fake.baseUrl,
@@ -496,7 +499,9 @@ describe('GcClient error handling', () => {
     fake.setHandler((_req, res) => {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: null, partial: true }));
+      // 6bv7 F14: OpenAPI ListBodySessionResponse declares total required —
+      // even degraded responses must carry it.
+      res.end(JSON.stringify({ items: null, total: 0, partial: true }));
     });
     const gc = new GcClient({
       baseUrl: fake.baseUrl,
@@ -506,13 +511,19 @@ describe('GcClient error handling', () => {
     const out = await gc.listSessions();
     assert.deepEqual(out.items, []);
     assert.equal(out.partial, true);
+    assert.equal(out.total, 0);
   });
 
   test('F3: listMail accepts items=null and normalizes to []', async () => {
     fake.setHandler((_req, res) => {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: null, partial: true, partial_errors: ['provider/foo timeout'] }));
+      res.end(JSON.stringify({
+        items: null,
+        total: 0,
+        partial: true,
+        partial_errors: ['provider/foo timeout'],
+      }));
     });
     const gc = new GcClient({
       baseUrl: fake.baseUrl,
@@ -529,7 +540,7 @@ describe('GcClient error handling', () => {
     fake.setHandler((_req, res) => {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: null }));
+      res.end(JSON.stringify({ items: null, total: 0 }));
     });
     const gc = new GcClient({
       baseUrl: fake.baseUrl,
@@ -538,6 +549,7 @@ describe('GcClient error handling', () => {
     });
     const out = await gc.listEvents();
     assert.deepEqual(out.items, []);
+    assert.equal(out.total, 0);
   });
 
   test('F3: listBeads with non-array items (e.g. number) still rejects', async () => {
@@ -802,7 +814,7 @@ describe('GcClient error handling', () => {
     fake.setHandler((_req, res) => {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: [] }));
+      res.end(JSON.stringify({ items: [], total: 0 }));
     });
     const gc = new GcClient({
       baseUrl: fake.baseUrl,
@@ -1131,6 +1143,267 @@ describe('GcClient error handling', () => {
     await assert.rejects(
       () => gc.fetchTranscript('gc-session-1'),
       /invalid gc supervisor fetchTranscript payload/i,
+    );
+  });
+
+  // ── 6bv7 wire-shape tightening regression tests ────────────────────────
+  //
+  // These pin the decoder edge against the OpenAPI ground truth so a future
+  // change that re-loosens a required field or re-adds a phantom one fails
+  // at the supervisor boundary instead of leaking past the SSOT.
+
+  test('6bv7 F10: listSessions rejects a session missing provider', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        items: [
+          {
+            id: 'gc-1',
+            template: 't',
+            state: 'active',
+            created_at: '2026-05-29T00:00:00Z',
+            attached: false,
+            session_name: 'gc-1',
+            title: 'gc-1',
+            running: true,
+            // provider missing
+          },
+        ],
+        total: 1,
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await assert.rejects(
+      () => gc.listSessions(),
+      /invalid gc supervisor listSessions payload.*provider/i,
+    );
+  });
+
+  test('6bv7 F12: listEvents rejects an event missing actor or payload', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        items: [{ seq: 1, type: 'bead.created', ts: '2026-05-29T00:00:00Z' }],
+        total: 1,
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await assert.rejects(
+      () => gc.listEvents(),
+      /invalid gc supervisor listEvents payload/i,
+    );
+  });
+
+  test('6bv7 F13/F14: listEvents forwards total; phantom "next" key is no longer in the typed interior', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      // Supplying the old phantom `next` key must NOT crash the decoder
+      // (.passthrough()), even though the typed GcEventList interface no
+      // longer declares it. Any consumer that still tries to read `next`
+      // through GcEventList would now fail tsc.
+      res.end(JSON.stringify({
+        items: [],
+        next: 12345,
+        total: 17,
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listEvents();
+    assert.equal(out.total, 17);
+    // Compile-time contract: `next` is no longer on GcEventList, so the
+    // following access is only valid via an explicit cast. That cast is
+    // the new tripwire — any consumer using `next` will need it, and any
+    // ungated `eventList.next` access fails tsc.
+    const ts = out as unknown as { next?: number };
+    void ts;
+  });
+
+  test('6bv7 F14: listBeads rejects a payload missing total', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ items: [] }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await assert.rejects(
+      () => gc.listBeads(undefined, { limit: 10 }),
+      /invalid gc supervisor listBeads payload.*total/i,
+    );
+  });
+
+  test('6bv7 F11: listBeads tightens metadata to Record<string,string>', async () => {
+    // Non-string metadata values must fail the decoder — the prior
+    // UnknownRecordSchema laundered any value type through the SSOT.
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        items: [{
+          ...validBead('td-1'),
+          metadata: { count: 42 },
+        }],
+        total: 1,
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await assert.rejects(
+      () => gc.listBeads(undefined, { limit: 10 }),
+      /invalid gc supervisor listBeads payload.*metadata/i,
+    );
+  });
+
+  test('6bv7 F15: listBeads surfaces parent/from/ephemeral/needs/dependencies from the wire', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        items: [{
+          ...validBead('td-1'),
+          parent: 'td-parent',
+          from: 'mayor',
+          ephemeral: true,
+          needs: ['td-pre-1', 'td-pre-2'],
+          dependencies: [
+            { depends_on_id: 'td-pre-1', issue_id: 'td-1', type: 'blocks' },
+          ],
+        }],
+        total: 1,
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listBeads(undefined, { limit: 10 });
+    const bead = out.items[0];
+    assert.equal(bead?.parent, 'td-parent');
+    assert.equal(bead?.from, 'mayor');
+    assert.equal(bead?.ephemeral, true);
+    assert.deepEqual(bead?.needs, ['td-pre-1', 'td-pre-2']);
+    assert.deepEqual(bead?.dependencies, [
+      { depends_on_id: 'td-pre-1', issue_id: 'td-1', type: 'blocks' },
+    ]);
+  });
+
+  test('6bv7 F16: GcBead typed interior no longer declares owner/updated_at/closed_at/dependency_count/dependent_count/comment_count', async () => {
+    // These fields were never in the OpenAPI Bead schema. After 6bv7 the
+    // typed GcBead interface drops them, so any frontend consumer reading
+    // `bead.updated_at` now fails tsc. Runtime payloads may still include
+    // them (passthrough()) — that is intentional so a future supervisor
+    // that DOES add one of these doesn't crash the dash before the SSOT
+    // catches up. The contract that matters is the type, not the runtime
+    // snapshot.
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        items: [{ ...validBead('td-1'), owner: 'phantom' }],
+        total: 1,
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listBeads(undefined, { limit: 10 });
+    const bead = out.items[0];
+    assert.ok(bead);
+    // Tripwire: accessing the removed field requires an explicit cast,
+    // which is the compile-time signal a future reviewer must explain.
+    // @ts-expect-error owner removed from GcBead in 6bv7 (F16)
+    void bead.owner;
+    // @ts-expect-error updated_at removed from GcBead in 6bv7 (F16)
+    void bead.updated_at;
+    // @ts-expect-error closed_at removed from GcBead in 6bv7 (F16)
+    void bead.closed_at;
+    // @ts-expect-error dependency_count removed from GcBead in 6bv7 (F16)
+    void bead.dependency_count;
+    // @ts-expect-error dependent_count removed from GcBead in 6bv7 (F16)
+    void bead.dependent_count;
+    // @ts-expect-error comment_count removed from GcBead in 6bv7 (F16)
+    void bead.comment_count;
+  });
+
+  test('6bv7 F17: listMail surfaces priority/cc/reply_to when the supervisor emits them', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        items: [{
+          id: 'mail-1',
+          from: 'agent',
+          to: 'human',
+          subject: 's',
+          body: 'b',
+          created_at: '2026-05-29T00:00:00Z',
+          read: false,
+          priority: 7,
+          cc: ['cc@example.test'],
+          reply_to: 'reply@example.test',
+        }],
+        total: 1,
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listMail();
+    const item = out.items[0];
+    assert.equal(item?.priority, 7);
+    assert.deepEqual(item?.cc, ['cc@example.test']);
+    assert.equal(item?.reply_to, 'reply@example.test');
+  });
+
+  test('6bv7 F19: getFormulaDetail rejects a preview node missing title or kind', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        name: 'mol-x',
+        preview: {
+          nodes: [{ id: 'n1' }], // title + kind missing
+        },
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await assert.rejects(
+      () => gc.getFormulaDetail(
+        'mol-x',
+        { scopeKind: 'city', scopeRef: 'test' },
+        '/tmp/x',
+      ),
+      /invalid gc supervisor getFormulaDetail payload/i,
     );
   });
 });

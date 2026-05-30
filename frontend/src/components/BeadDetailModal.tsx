@@ -232,30 +232,9 @@ function BeadBody({ bead }: { bead: GcBead }) {
         </Field>
         <Field label="Type">{bead.issue_type}</Field>
         <Field label="Assignee">{bead.assignee || '·'}</Field>
-        <Field label="Owner">{bead.owner || '·'}</Field>
         <Field label="Created">
           <span className="tnum">{formatDate(bead.created_at)}</span>
         </Field>
-        {bead.updated_at && (
-          <Field label="Updated">
-            <span className="tnum">{formatDate(bead.updated_at)}</span>
-          </Field>
-        )}
-        {bead.closed_at && (
-          <Field label="Closed">
-            <span className="tnum">{formatDate(bead.closed_at)}</span>
-          </Field>
-        )}
-        {typeof bead.dependency_count === 'number' && bead.dependency_count > 0 && (
-          <Field label="Blocked by">
-            <span className="tnum">{bead.dependency_count}</span>
-          </Field>
-        )}
-        {typeof bead.dependent_count === 'number' && bead.dependent_count > 0 && (
-          <Field label="Blocks">
-            <span className="tnum">{bead.dependent_count}</span>
-          </Field>
-        )}
       </dl>
 
       {kind === 'template' && (wf.formulaContract || wf.originBeadId || wf.runTarget) && (

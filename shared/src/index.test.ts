@@ -19,6 +19,12 @@ function sess(partial: Partial<GcSession>): GcSession {
     state: 'active',
     created_at: '2026-05-19T00:00:00-04:00',
     attached: true,
+    // 6bv7 F10: session_name/title/running/provider tightened to required
+    // in the shared GcSession contract, matching OpenAPI SessionResponse.
+    session_name: 'gc-test',
+    title: 'gc-test',
+    running: true,
+    provider: 'claude',
     ...partial,
   };
 }

@@ -19,13 +19,14 @@ import type { WorkflowIssue } from '../src/snapshot/collectors/phaseMapping.js';
 // where applicable; gascity-specific additions cover the filter rules
 // (C1 in plan review) and the error pass-through contract (H5).
 
+// 6bv7 F16: OpenAPI Bead exposes no updated_at — fixtures use created_at
+// for time-based ordering instead.
 const baseGcBead = {
   description: '',
   status: 'open',
   issue_type: 'task',
   priority: 2,
   created_at: '2026-05-10T19:00:00Z',
-  updated_at: '2026-05-10T20:00:00Z',
   metadata: {},
 } satisfies Partial<GcBead>;
 
@@ -133,14 +134,15 @@ describe('workflowBeadFilter', () => {
 // ── fromGcBead adapter ────────────────────────────────────────────────────
 
 describe('fromGcBead', () => {
-  test('maps standard fields verbatim, falls back to created_at when updated_at is absent', () => {
+  test('maps standard fields verbatim, sourcing updated_at from created_at', () => {
+    // 6bv7 F16: OpenAPI Bead has no updated_at field; the adapter sources
+    // its WorkflowIssue.updated_at slot from created_at directly now.
     const source = gcBead({
       id: 'a',
       title: 'Implement',
       assignee: 'alice',
       metadata: { foo: 'bar' },
     });
-    delete source.updated_at;
 
     const adapted = fromGcBead(source);
     assert.equal(adapted.id, 'a');

@@ -38,26 +38,38 @@ export type GcDecoder<RawValue, DecodedValue> = (value: RawValue) => DecodedValu
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const StringRecordSchema = z.record(z.string(), z.string());
 
+// 6bv7 F10: provider, running, session_name, title are declared REQUIRED in
+// OpenAPI SessionResponse and present in 73/73 live sessions. Tighten here
+// so a future supervisor that drops one of them fails at the decoder edge
+// instead of leaking undefined into UI code that no longer guards for it.
 const SessionSchema = z.object({
   id: z.string(),
   template: z.string(),
   state: z.string(),
   created_at: z.string(),
   attached: z.boolean(),
+  provider: z.string(),
+  running: z.boolean(),
+  session_name: z.string(),
+  title: z.string(),
   alias: z.string().optional(),
-  title: z.string().optional(),
   reason: z.string().optional(),
   display_name: z.string().optional(),
-  session_name: z.string().optional(),
   last_active: z.string().optional(),
   rig: z.string().optional(),
   pool: z.string().optional(),
   agent_kind: z.string().optional(),
   model: z.string().optional(),
   activity: z.string().optional(),
-  running: z.boolean().optional(),
   context_pct: z.number().finite().optional(),
   context_window: z.number().finite().optional(),
+}).passthrough();
+
+// 6bv7 F15: structured dependency rows surfaced under OpenAPI Bead.dependencies.
+const BeadDepSchema = z.object({
+  depends_on_id: z.string(),
+  issue_id: z.string(),
+  type: z.string(),
 }).passthrough();
 
 const BeadSchema = z.object({
@@ -76,16 +88,22 @@ const BeadSchema = z.object({
   priority: z.number().finite().nullish().transform((v) => v ?? null),
   created_at: z.string(),
   description: z.string().optional(),
-  owner: z.string().optional(),
   assignee: z.string().optional(),
-  updated_at: z.string().optional(),
-  closed_at: z.string().optional(),
   ref: z.string().optional(),
   labels: z.array(z.string()).optional(),
-  dependency_count: z.number().finite().optional(),
-  dependent_count: z.number().finite().optional(),
-  comment_count: z.number().finite().optional(),
-  metadata: UnknownRecordSchema.optional(),
+  // 6bv7 F11: OpenAPI Bead.metadata is declared as `{[key: string]: string}`.
+  // Tighten to StringRecordSchema so consumers can drop the defensive
+  // `typeof === 'string'` checks that were guarding against the prior
+  // UnknownRecordSchema laundering arbitrary value types through the SSOT.
+  metadata: StringRecordSchema.optional(),
+  // 6bv7 F15: parent/from/ephemeral/needs/dependencies are emitted in live
+  // data and declared in the OpenAPI Bead schema; surfacing them eliminates
+  // the `as any` casts callers were using to read them off passthrough().
+  parent: z.string().optional(),
+  from: z.string().optional(),
+  ephemeral: z.boolean().optional(),
+  needs: z.array(z.string()).nullable().optional(),
+  dependencies: z.array(BeadDepSchema).nullable().optional(),
 }).passthrough();
 
 // Per-rig wire shape from `GET /v0/city/{name}/rigs`. The supervisor's
@@ -135,6 +153,9 @@ const AgentSchema = z.object({
   session: AgentSessionSchema.optional(),
 }).passthrough();
 
+// 6bv7 F17: priority/cc/reply_to live in OpenAPI Message but were missing
+// from the decoder, forcing callers that wanted them to `as any` past
+// passthrough(). Surface them so the SSOT contract covers the full Message.
 const MailItemSchema = z.object({
   id: z.string(),
   from: z.string(),
@@ -145,16 +166,23 @@ const MailItemSchema = z.object({
   read: z.boolean(),
   thread_id: z.string().optional(),
   rig: z.string().optional(),
+  priority: z.number().finite().optional(),
+  cc: z.array(z.string()).nullable().optional(),
+  reply_to: z.string().optional(),
 }).passthrough();
 
+// 6bv7 F12: actor + payload are declared REQUIRED across every
+// TypedEventStreamEnvelope variant in OpenAPI and present in 200/200
+// sampled live events. Tighten to required so a future supervisor that
+// drops one fails at the decoder edge.
 const EventSchema = z.object({
   seq: z.number().finite(),
   type: z.string(),
   ts: z.string(),
-  actor: z.string().optional(),
+  actor: z.string(),
+  payload: UnknownRecordSchema,
   subject: z.string().optional(),
   message: z.string().optional(),
-  payload: UnknownRecordSchema.optional(),
 }).passthrough();
 
 const WorkflowBeadSchema = z.object({
@@ -176,10 +204,11 @@ const WorkflowDepSchema = z.object({
   kind: z.string().optional(),
 }).passthrough();
 
+// 6bv7 F19: OpenAPI FormulaPreviewNodeResponse declares title + kind REQUIRED.
 const FormulaPreviewNodeSchema = z.object({
   id: z.string(),
-  title: z.string().optional(),
-  kind: z.string().optional(),
+  title: z.string(),
+  kind: z.string(),
 }).passthrough();
 
 const FormulaPreviewEdgeSchema = z.object({
@@ -315,6 +344,8 @@ export const gcSupervisorDecoders = {
     return decodeSupervisorPayload(
       z.object({
         items: listItemsField(SessionSchema),
+        // 6bv7 F14: OpenAPI ListBodySessionResponse declares total required.
+        total: z.number().finite(),
         partial: PartialField,
         partial_errors: PartialErrorsField,
       }).passthrough(),
@@ -359,7 +390,8 @@ export const gcSupervisorDecoders = {
     return decodeSupervisorPayload(
       z.object({
         items: listItemsField(BeadSchema),
-        total: z.number().finite().optional(),
+        // 6bv7 F14: OpenAPI ListBodyBead declares total required.
+        total: z.number().finite(),
         partial: PartialField,
         partial_errors: PartialErrorsField,
       }).passthrough(),
@@ -372,7 +404,8 @@ export const gcSupervisorDecoders = {
     return decodeSupervisorPayload(
       z.object({
         items: listItemsField(MailItemSchema),
-        total: z.number().finite().optional(),
+        // 6bv7 F14: OpenAPI MailListBody declares total required.
+        total: z.number().finite(),
         partial: PartialField,
         partial_errors: PartialErrorsField,
       }).passthrough(),
@@ -385,7 +418,11 @@ export const gcSupervisorDecoders = {
     return decodeSupervisorPayload(
       z.object({
         items: listItemsField(EventSchema),
-        next: z.number().finite().optional(),
+        // 6bv7 F13/F14: OpenAPI ListBodyWireEvent declares total required and
+        // has no `next` field — only `next_cursor: string`. The previous
+        // `next: z.number()` schema bound to a phantom field; passthrough()
+        // strips it cleanly.
+        total: z.number().finite(),
         partial: PartialField,
         partial_errors: PartialErrorsField,
       }).passthrough(),

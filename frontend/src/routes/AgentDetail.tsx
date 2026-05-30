@@ -123,16 +123,13 @@ export function AgentDetailPage() {
     candidates.add(session.id);
     return beads.filter((b) => {
       if (b.assignee !== undefined && candidates.has(b.assignee)) return true;
+      // 6bv7: GcBead.metadata is Record<string, string> per OpenAPI (F11)
+      // and session_name is required (F10), so neither check needs the
+      // prior runtime guards.
       const md = b.metadata;
-      if (md && typeof md === 'object') {
-        const sid = (md as Record<string, unknown>).session_id;
-        if (typeof sid === 'string' && sid === session.id) return true;
-        const sname = (md as Record<string, unknown>).session_name;
-        if (
-          typeof sname === 'string' &&
-          session.session_name !== undefined &&
-          sname === session.session_name
-        ) {
+      if (md) {
+        if (md.session_id === session.id) return true;
+        if (md.session_name && md.session_name === session.session_name) {
           return true;
         }
       }

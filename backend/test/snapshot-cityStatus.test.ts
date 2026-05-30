@@ -28,12 +28,22 @@ import {
 // omit it. Tracked for upstream exposure in a follow-up bead.
 
 function sess(partial: Partial<GcSession>): GcSession {
+  // 6bv7 F10: running is required on the wire — default it from `state`
+  // (gc supervisor marks asleep/closed sessions as running=false) so the
+  // factory mirrors live data instead of forcing running=true for every
+  // fixture regardless of lifecycle state.
+  const state = partial.state ?? 'active';
+  const running = partial.running ?? state === 'active';
   return {
     id: 't-1',
     template: 'codex',
-    state: 'active',
+    session_name: partial.id ?? 't-1',
+    title: partial.id ?? 't-1',
+    state,
     created_at: '2026-05-22T00:00:00.000Z',
     attached: false,
+    running,
+    provider: 'codex',
     ...partial,
   };
 }
@@ -59,14 +69,16 @@ describe('aggregateSessionsByProvider', () => {
     ]);
   });
 
-  test('excludes sessions without provider (no title-parsing fallback)', () => {
-    // Mix: some with provider, some without. Sessions without provider
-    // are silently dropped from the aggregation — they are NOT inferred
-    // from title even when title text contains 'codex'/'claude'/'gemini'.
+  test('skips sessions with empty provider string (defensive against degenerate wire)', () => {
+    // 6bv7 F10 tightened GcSession.provider to required `string` per OpenAPI,
+    // but the aggregator still skips empty-string providers as a defensive
+    // guard against a degenerate supervisor response (the wire contract is
+    // `string`, not "non-empty string"). Title text is NEVER consulted —
+    // no inference fallback (ZFC).
     const sessions: GcSession[] = [
       sess({ id: 't-1', provider: 'codex', state: 'active' }),
-      sess({ id: 't-2', title: 'codex/research', state: 'active' }), // no provider
-      sess({ id: 't-3', title: 'claude/triage', state: 'active' }), // no provider
+      sess({ id: 't-2', title: 'codex/research', provider: '', state: 'active' }),
+      sess({ id: 't-3', title: 'claude/triage', provider: '', state: 'active' }),
       sess({ id: 't-4', provider: 'claude', state: 'asleep' }),
     ];
 
@@ -78,10 +90,10 @@ describe('aggregateSessionsByProvider', () => {
     ]);
   });
 
-  test('returns empty array when no session has provider', () => {
+  test('returns empty array when every provider is the empty string', () => {
     const sessions: GcSession[] = [
-      sess({ id: 't-1', title: 'codex/x' }),
-      sess({ id: 't-2', title: 'claude/y' }),
+      sess({ id: 't-1', title: 'codex/x', provider: '' }),
+      sess({ id: 't-2', title: 'claude/y', provider: '' }),
     ];
 
     assert.deepEqual(aggregateSessionsByProvider(sessions), []);
@@ -100,6 +112,7 @@ describe('collectCityStatus', () => {
         sess({ id: 't-2', provider: 'codex', state: 'asleep' }),
         sess({ id: 't-3', provider: 'claude', state: 'active' }),
       ],
+      total: 3,
     };
     const rigList: GcRigList = {
       items: [
@@ -136,7 +149,7 @@ describe('collectCityStatus', () => {
 
   test('empty sessions and empty rigs remain zero counts; maxSessions still unavailable', async () => {
     const summary = await collectCityStatus({
-      listSessions: async () => ({ items: [] }),
+      listSessions: async () => ({ items: [], total: 0 }),
       listRigs: async () => ({ items: [] }),
     });
 
@@ -159,7 +172,7 @@ describe('collectCityStatus', () => {
     // empty rigs list, which would mask the upstream outage.
     await assert.rejects(
       collectCityStatus({
-        listSessions: async () => ({ items: [] }),
+        listSessions: async () => ({ items: [], total: 0 }),
         listRigs: async () => {
           throw new Error('gc supervisor returned 502');
         },
@@ -182,7 +195,7 @@ describe('collectCityStatus', () => {
     };
 
     const summary = await collectCityStatus({
-      listSessions: async () => ({ items: [] }),
+      listSessions: async () => ({ items: [], total: 0 }),
       listRigs: async () => rigList,
     });
 
@@ -200,7 +213,7 @@ describe('collectCityStatus', () => {
     };
 
     const summary = await collectCityStatus({
-      listSessions: async () => ({ items: [] }),
+      listSessions: async () => ({ items: [], total: 0 }),
       listRigs: async () => rigList,
     });
 
@@ -217,7 +230,7 @@ describe('collectCityStatus', () => {
     };
 
     const summary = await collectCityStatus({
-      listSessions: async () => ({ items: [] }),
+      listSessions: async () => ({ items: [], total: 0 }),
       listRigs: async () => rigList,
     });
 
@@ -228,7 +241,7 @@ describe('collectCityStatus', () => {
     // Happy path: clean response has no rigsPartial in the summary
     // (the field is optional so callers can use truthy checks).
     const summary = await collectCityStatus({
-      listSessions: async () => ({ items: [] }),
+      listSessions: async () => ({ items: [], total: 0 }),
       listRigs: async () => ({ items: [{ name: 'rig-a', path: '/data/rig-a' }] }),
     });
 

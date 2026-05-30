@@ -31,7 +31,9 @@ function startFake(): Promise<Fake> {
     let handler: Handler = (_req, res) => {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: [] }));
+      // 6bv7 F14: every list envelope in the supervisor's OpenAPI declares
+      // `total` required.
+      res.end(JSON.stringify({ items: [], total: 0 }));
     };
     const sockets = new Set<import('node:net').Socket>();
     const server = http.createServer((_req, res) => handler(_req, res));
@@ -77,6 +79,11 @@ function validSession(id: string) {
     state: 'running',
     created_at: '2026-01-01T00:00:00.000Z',
     attached: false,
+    // 6bv7 F10: required per OpenAPI SessionResponse.
+    session_name: id,
+    title: id,
+    provider: 'codex',
+    running: true,
   };
 }
 
@@ -477,7 +484,7 @@ describe('routes: upstream timeout -> HTTP 504', () => {
     fake.setHandler((_req, res) => {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: corpus }));
+      res.end(JSON.stringify({ items: corpus, total: corpus.length }));
     });
     const { app } = buildApp(fake.baseUrl);
     const { url, close } = await startApp(app);
@@ -540,7 +547,7 @@ describe('routes: upstream timeout -> HTTP 504', () => {
     fake.setHandler((_req, res) => {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: [validSession('td-foo')] }));
+      res.end(JSON.stringify({ items: [validSession('td-foo')], total: 1 }));
     });
     const { app } = buildApp(fake.baseUrl);
     const { url, close } = await startApp(app);
@@ -895,7 +902,7 @@ describe('sessionsRouter timeout bound', () => {
     fake.setHandler((_req, res) => {
       res.statusCode = 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ items: [validSession('gc-abc')] }));
+      res.end(JSON.stringify({ items: [validSession('gc-abc')], total: 1 }));
     });
     const gc = new GcClient({
       baseUrl: fake.baseUrl,
