@@ -42,6 +42,23 @@ function stubFetch() {
               last_activity: '2026-05-29T20:56:31-04:00',
             },
           },
+          // ay6.2: orphan agent — configured roster entry with no
+          // bound live session. AgentDetail will show "no session
+          // matches" for these; the name-link in this view must
+          // pre-empt the confusion with a distinct title tooltip.
+          // Uses `control-dispatcher` so the agent lands in the
+          // non-collapsible Orchestration group (otherwise the row
+          // would be hidden behind a collapsed `(no rig)` header in
+          // the test render).
+          {
+            name: 'control-dispatcher',
+            available: true,
+            running: false,
+            suspended: false,
+            state: 'asleep',
+            display_name: 'Claude (Account 7)',
+            provider: 'claude-5',
+          },
         ],
       });
     }
@@ -130,5 +147,29 @@ describe('AgentsPage (post-ay6 regressions)', () => {
     });
     // Belt-and-suspenders: assert the buggy URL was NEVER attempted.
     expect(fetchUrls).not.toContain('/api/sessions/mayor/peek');
+  });
+
+  it('orphan agent name-link carries a different title tooltip than a session-bound one (ay6.2)', async () => {
+    render(
+      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+        <AgentsPage />
+      </MemoryRouter>,
+    );
+
+    // Both rows render their alias as a Link, but the title must
+    // differ — session-bound agents promise a real drilldown; orphan
+    // agents warn that the detail page will show no live session.
+    const mayorLink = await screen.findByRole('link', { name: /mayor/i });
+    const orphanLink = await screen.findByRole('link', { name: /control-dispatcher/i });
+
+    const mayorTitle = mayorLink.getAttribute('title') ?? '';
+    const orphanTitle = orphanLink.getAttribute('title') ?? '';
+
+    expect(mayorTitle.length).toBeGreaterThan(0);
+    expect(orphanTitle.length).toBeGreaterThan(0);
+    expect(orphanTitle).not.toBe(mayorTitle);
+    // The orphan title must mention the missing-session situation so
+    // the operator understands why the drilldown will be empty.
+    expect(orphanTitle.toLowerCase()).toMatch(/not running|no live session|configured/);
   });
 });

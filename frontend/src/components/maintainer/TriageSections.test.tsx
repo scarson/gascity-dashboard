@@ -72,6 +72,55 @@ describe('maintainer triage sections', () => {
     expect(screen.getByText(/1 item/i)).toBeTruthy();
   });
 
+  it('shows "N of M items" when a filter is active (filtered count differs from unfiltered)', () => {
+    const section: TriageTierSection = {
+      tier: 'regression_breaking',
+      clusters: [],
+      unclustered: [item({ kind: 'issue', number: 1 })],
+    };
+
+    render(
+      <TierSection
+        section={section}
+        counts={{ vetted: 2, awaiting: 3 }}
+        unfilteredItemCount={5}
+        collapsed={false}
+        onToggle={() => {}}
+        isCollapsed={() => false}
+        toggleCluster={() => {}}
+        selection={new Set()}
+        onToggleSelect={null}
+      />,
+    );
+
+    expect(screen.getByText(/1 of 5 items/i)).toBeTruthy();
+  });
+
+  it('still renders plain "N items" when unfilteredItemCount equals the rendered count', () => {
+    const section: TriageTierSection = {
+      tier: 'regression_breaking',
+      clusters: [],
+      unclustered: [item({ kind: 'issue', number: 1 }), item({ kind: 'issue', number: 2 })],
+    };
+
+    render(
+      <TierSection
+        section={section}
+        counts={{ vetted: 0, awaiting: 2 }}
+        unfilteredItemCount={2}
+        collapsed={false}
+        onToggle={() => {}}
+        isCollapsed={() => false}
+        toggleCluster={() => {}}
+        selection={new Set()}
+        onToggleSelect={null}
+      />,
+    );
+
+    expect(screen.getByText(/2 items/i)).toBeTruthy();
+    expect(screen.queryByText(/of 2 items/i)).toBeNull();
+  });
+
   it('renders issue row policy without importing the route module', () => {
     render(
       <IssueRow

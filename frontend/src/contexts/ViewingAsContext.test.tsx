@@ -2,7 +2,7 @@ import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { useEffect } from 'react';
 import { api } from '../api/client';
-import { ViewingAsProvider, useViewingAs } from './ViewingAsContext';
+import { ViewingAsProvider, useViewingAs, getSessionsRetryDelay } from './ViewingAsContext';
 
 // gascity-dashboard-5gg: bounded retry for /api/sessions in the alias
 // prefetch. Tests cover:
@@ -255,5 +255,51 @@ describe('ViewingAsProvider — loadAliases initial flag transitions', () => {
     });
     await flushPromises();
     expect(mockListSessions).toHaveBeenCalledTimes(1);
+  });
+});
+
+// gascity-dashboard-7ky: the sessions retry table is read by index, and
+// under `noUncheckedIndexedAccess` the read is typed `number | undefined`.
+// If the caller's bounds check ever weakens, `setTimeout(fn, undefined)`
+// would fire at 0 ms — a busy-loop retry storm. `getSessionsRetryDelay`
+// is the safe accessor that returns `null` for any out-of-bounds index
+// instead of leaking `undefined` to a timer.
+describe('getSessionsRetryDelay — out-of-bounds guard', () => {
+  // Phase-4 H1: getSessionsRetryDelay returns null silently for ALL
+  // invalid inputs (negative / non-integer / NaN / out-of-bounds) —
+  // frontend production code runs under `no-console: error`. The
+  // silent-null contract is what the caller relies on; surfacing
+  // a warning is the caller's choice.
+
+  it('returns the scheduled delay for in-range indices', () => {
+    expect(getSessionsRetryDelay(0)).toBe(30_000);
+    expect(getSessionsRetryDelay(1)).toBe(90_000);
+    expect(getSessionsRetryDelay(2)).toBe(270_000);
+  });
+
+  it('returns null (never undefined, never a fallback number) for an index just past the end', () => {
+    const result = getSessionsRetryDelay(3);
+    expect(result).toBeNull();
+    // Critically: not undefined and not a number. A `setTimeout` call
+    // with this value would no-op via the caller's `null` check rather
+    // than fire at 0 ms.
+    expect(result).not.toBe(undefined);
+    expect(typeof result).not.toBe('number');
+  });
+
+  it('returns null for a large out-of-bounds index', () => {
+    expect(getSessionsRetryDelay(99)).toBeNull();
+  });
+
+  it('returns null for a negative index', () => {
+    expect(getSessionsRetryDelay(-1)).toBeNull();
+  });
+
+  it('returns null for a non-integer index', () => {
+    expect(getSessionsRetryDelay(1.5)).toBeNull();
+  });
+
+  it('returns null for NaN', () => {
+    expect(getSessionsRetryDelay(Number.NaN)).toBeNull();
   });
 });

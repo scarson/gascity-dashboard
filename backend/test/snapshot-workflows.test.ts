@@ -25,6 +25,13 @@ import type { GcClient } from '../src/gc-client.js';
 // while keeping the final widen-to-GcClient explicit at the call site.
 type GcClientMock = Partial<Pick<GcClient, 'listBeads' | 'listFormulaRuns' | 'cityName'>>;
 
+// mfb9.1.1: type the mock's listBeads second-arg via the real client's
+// own parameter type so a future shape change to GcClient.listBeads breaks
+// the mocks at compile time instead of silently widening to `unknown` (which
+// `satisfies` accepts contravariantly). Drop the in-body `as { ... }` cast
+// at every mock site — params is now narrowly typed at the boundary.
+type ListBeadsParams = Parameters<GcClient['listBeads']>[1];
+
 // Lane builder + filter + cache tests for the workflows collector
 // (gascity-dashboard-0t6). Ported from demo-dash's workflows.test.ts
 // where applicable; gascity-specific additions cover the filter rules
@@ -1058,13 +1065,8 @@ describe('createWorkflowsSourceCache', () => {
     }> = [];
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: unknown) => {
-          const params = rawParams as {
-            limit?: number;
-            type?: string;
-            rig?: string;
-            all?: boolean;
-          };
+        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
+          const params = rawParams ?? {};
           seenParams.push(params);
           if (params.all !== true) {
             return {
@@ -1142,10 +1144,10 @@ describe('createWorkflowsSourceCache', () => {
     const seenParams: unknown[] = [];
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, params: unknown) => {
+        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
+          const params = rawParams ?? {};
           seenParams.push(params);
-          const typed = params as { all?: boolean; type?: string };
-          if (typed.all === true && typed.type === 'molecule') {
+          if (params.all === true && params.type === 'molecule') {
             return {
               items: [
                 gcBead({
@@ -1230,8 +1232,8 @@ describe('createWorkflowsSourceCache', () => {
     let listFormulaRunsCalls = 0;
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: unknown) => {
-          const params = (rawParams ?? {}) as { rig?: string; type?: string; all?: boolean; limit?: number };
+        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
+          const params = rawParams ?? {};
           listBeadsCalls.push(params);
           // City-scoped initial query returns NO workflow roots — this is
           // the exact ej9y trigger condition on live ds-research.
@@ -1321,8 +1323,8 @@ describe('createWorkflowsSourceCache', () => {
   test('ej9y: listBeads-only path still works when listFormulaRuns throws', async () => {
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: unknown) => {
-          const params = (rawParams ?? {}) as { rig?: string; type?: string; all?: boolean; limit?: number };
+        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
+          const params = rawParams ?? {};
           if (params.rig === undefined && params.type === undefined && params.all !== true) {
             return {
               items: [
@@ -1372,8 +1374,8 @@ describe('createWorkflowsSourceCache', () => {
     const rigQueryCalls: string[] = [];
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: unknown) => {
-          const params = (rawParams ?? {}) as { rig?: string; type?: string; all?: boolean; limit?: number };
+        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
+          const params = rawParams ?? {};
           if (params.rig === undefined && params.type === undefined && params.all !== true) {
             // City-level result that references rig=shared via gc.root_store_ref.
             return {
@@ -1445,8 +1447,8 @@ describe('createWorkflowsSourceCache', () => {
   test('d3xp: lane gets scope=available from feed when rig-stored bead lacks gc.scope_kind metadata', async () => {
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: unknown) => {
-          const params = (rawParams ?? {}) as { rig?: string; type?: string; all?: boolean; limit?: number };
+        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
+          const params = rawParams ?? {};
           if (params.rig === undefined && params.type === undefined && params.all !== true) {
             return { items: [], total: 0 };
           }
@@ -1525,8 +1527,8 @@ describe('createWorkflowsSourceCache', () => {
   test('d3xp/M1: feed scope_ref failing SCOPE_REF_RE is dropped (lane scope stays unavailable)', async () => {
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: unknown) => {
-          const params = (rawParams ?? {}) as { rig?: string; type?: string; all?: boolean; limit?: number };
+        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
+          const params = rawParams ?? {};
           if (params.rig === undefined && params.type === undefined && params.all !== true) {
             return { items: [], total: 0 };
           }

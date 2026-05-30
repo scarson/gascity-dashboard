@@ -28,14 +28,24 @@ const MAX_FIELD_LENGTH = 240;
 // supervisor output, but the same control-char surface applies.
 const OSC_RE = /\x1b\][^\x07]*\x07/g;
 const CSI_RE = /\x1b\[[?0-9;]*[a-zA-Z]/g;
-// All control chars (<0x20 plus DEL); \t/\n/\r are dropped here too because
-// the whitespace normalize below would collapse them anyway, and dropping
-// them up front makes the strip-before-normalize ordering invariant
-// uniform regardless of which control bytes the input carries.
-const CTRL_RE = /[\x00-\x1f\x7f]/g;
+// All control chars: C0 (<0x20), DEL (\x7f), and C1 (\x80-\x9f). \t/\n/\r
+// are dropped here too because the whitespace normalize below would
+// collapse them anyway, and dropping them up front makes the
+// strip-before-normalize ordering invariant uniform regardless of which
+// control bytes the input carries. gascity-dashboard-3sxy added the C1
+// range (\x80-\x9f) — legacy 8-bit controls some terminals still
+// interpret as alternative escape introducers, same threat class as C0.
+const CTRL_RE = /[\x00-\x1f\x7f-\x9f]/g;
+// See exec.ts BIDI_RE — same 12-codepoint trojan-source set from
+// CVE-2021-42574 (U+061C, U+200E, U+200F, U+202A-202E, U+2066-2069).
+const BIDI_RE = /[؜‎‏‪-‮⁦-⁩]/g;
 
 function stripNonPrintable(value: string): string {
-  return value.replace(OSC_RE, '').replace(CSI_RE, '').replace(CTRL_RE, '');
+  return value
+    .replace(OSC_RE, '')
+    .replace(CSI_RE, '')
+    .replace(CTRL_RE, '')
+    .replace(BIDI_RE, '');
 }
 
 export function clientErrorsRouter(opts: ClientErrorsRouterOptions = {}): Router {

@@ -195,14 +195,26 @@ export function AgentsPage() {
         const secondary = r.display_name && r.display_name !== r.name
           ? r.display_name
           : (r.provider ?? r.model ?? '');
+        // ay6.2: orphan agents (no bound session) still render a link
+        // to /agents/<slug>, but AgentDetail will resolve nothing and
+        // show "no session matches" — a confusing dead-end if the
+        // operator clicks expecting a drilldown. A distinct title
+        // tooltip and a muted color pre-empt the surprise without
+        // disabling the link (the configured-but-not-running detail
+        // page is sd4's scope). Dispatchers keep their italic cue.
+        const orphan = !r.session;
+        const linkTitle = orphan
+          ? `${r.name} — configured but not running; detail will show no live session`
+          : `Open drilldown for ${r.name}`;
+        const linkColor = orphan ? 'text-fg-muted' : 'text-fg';
         return (
           <div className="min-w-0">
             <Link
               to={`/agents/${encodeURIComponent(agentSlug(r))}`}
-              className={`block text-fg truncate hover:text-accent focus-mark ${
+              className={`block ${linkColor} truncate hover:text-accent focus-mark ${
                 dispatcher ? 'font-normal italic' : 'font-medium'
               }`}
-              title={`Open drilldown for ${r.name}`}
+              title={linkTitle}
             >
               {r.name}
             </Link>

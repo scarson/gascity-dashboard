@@ -395,11 +395,26 @@ export function MaintainerPage() {
                 let view = tier;
                 if (needsPrOnly) view = filterTierByNeedsPr(view);
                 if (awaitingOnly) view = filterTierByAwaitingTriage(view);
+                // When any filter chip is active the rendered tier is a
+                // subset of the original; surface the unfiltered total so
+                // the header reads "N of M items" rather than an ambiguous
+                // "N items" (gascity-dashboard-3lf). Spread the prop only
+                // when the filter is on — exactOptionalPropertyTypes
+                // forbids passing `undefined` directly.
+                const filterActive = needsPrOnly || awaitingOnly;
+                const filterProps = filterActive
+                  ? {
+                      unfilteredItemCount:
+                        tier.clusters.reduce((n, c) => n + c.items.length, 0) +
+                        tier.unclustered.length,
+                    }
+                  : {};
                 return (
                   <TierSection
                     key={tier.tier}
                     section={view}
                     counts={counts}
+                    {...filterProps}
                     collapsed={collapse.isCollapsed(`tier:${tier.tier}`)}
                     onToggle={() => collapse.toggle(`tier:${tier.tier}`)}
                     isCollapsed={collapse.isCollapsed}
@@ -524,7 +539,20 @@ export function SelectionActionBar({
           <Button size="sm" onClick={onSend} disabled={isSending || count === 0}>
             {sending === 'triage' ? 'Sending' : 'Send to triage agent'}
           </Button>
-          <Button size="sm" onClick={onSendDraft} disabled={isSending || count === 0}>
+          {/*
+            Draft is the secondary intent in this dual-action bar
+            (gascity-dashboard-4co). Triage is what the operator
+            reaches for first — vetting a batch before any PR work.
+            Drop draft to tone='quiet' so the visual weight matches
+            the intent hierarchy; both buttons sharing the default
+            border made them read as equal-weight choices.
+          */}
+          <Button
+            size="sm"
+            tone="quiet"
+            onClick={onSendDraft}
+            disabled={isSending || count === 0}
+          >
             {sending === 'draft' ? 'Sending' : 'Send to draft agent'}
           </Button>
           <Button size="sm" tone="quiet" onClick={onClear} disabled={isSending}>

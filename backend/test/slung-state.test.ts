@@ -149,6 +149,63 @@ describe('readSlungState', () => {
     });
   });
 
+  // gascity-dashboard-jo07: a mixed legacy + modern + legacy file must
+  // emit a SINGLE migration warning per read, not one per legacy entry.
+  // The warning is operator-facing — repeated lines for the same upgrade
+  // event would spam the log and obscure unrelated maintainer warnings.
+  // Pair with the multi-legacy assertion to lock in count==2 migrated
+  // entries surface as one consolidated log line.
+  test('emits a single migration warning for a mixed map with multiple legacy entries', async () => {
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({
+        // two legacy entries (both missing resolved_session_name)
+        'pr:1': {
+          slung_at: '2026-05-24T12:00:00.000Z',
+          target: 'chief-of-staff',
+          bead_id: 'gastown-legacy-1',
+        },
+        'pr:2': {
+          slung_at: '2026-05-24T12:01:00.000Z',
+          target: 'chief-of-staff',
+          bead_id: 'gastown-legacy-2',
+        },
+        // one modern entry — should not trigger a per-entry warning
+        'issue:3': {
+          slung_at: '2026-05-24T12:05:00.000Z',
+          target: 'project-lead',
+          bead_id: 'gastown-modern',
+          resolved_session_name: 'project-lead-session',
+        },
+      }),
+      'utf-8',
+    );
+
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (line: string) => {
+      warnings.push(line);
+    };
+    try {
+      const state = await readSlungState(statePath);
+      assert.equal(Object.keys(state).length, 3);
+      assert.equal(state['pr:1']?.resolved_session_name, null);
+      assert.equal(state['pr:2']?.resolved_session_name, null);
+      assert.equal(state['issue:3']?.resolved_session_name, 'project-lead-session');
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    const migrationWarnings = warnings.filter((w) => w.includes('normalized'));
+    assert.equal(
+      migrationWarnings.length,
+      1,
+      `expected exactly one consolidated migration warning, got ${migrationWarnings.length}: ${JSON.stringify(migrationWarnings)}`,
+    );
+    // Plural form ("entries") proves the count was aggregated, not per-entry.
+    assert.match(migrationWarnings[0]!, /normalized 2 pre-55b entries/);
+  });
+
   test('returns empty map when an entry has resolved_session_name of the wrong type', async () => {
     // Regression guard: legacy tolerance is for ABSENT only. A present
     // field that is neither null nor string is still a shape violation

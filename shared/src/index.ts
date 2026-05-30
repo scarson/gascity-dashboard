@@ -755,22 +755,53 @@ export type TriageItemStatus =
  * `vetted_score` lives on the SAME numeric scale as `TriageItem.triage_score`
  * so comparators sort correctly when a tier mixes vetted + unvetted items.
  *
- * `source` is `'agent'` for the only path that lands in this bead. The
- * `'manual'` arm is reserved for a future maintainer ack path; no manual
- * signal lands today.
+ * `source` is `'agent'` for every path that lands in this bead today
+ * (gascity-dashboard-lmr). A future maintainer-ack path would widen
+ * the union when (and only when) a manual signal actually flows; the
+ * `'manual'` arm was reserved speculatively and went unused, so it
+ * was dropped per YAGNI.
  *
  * `notes` is currently always empty string. When the gh ingest path wires
  * it up (see ParseTriageAssessmentOptions.notes), the contents will be
  * extracted from PR/issue comment bodies, which are third-party-author
  * controllable on incoming PRs. Treat as untrusted: any consumer MUST
- * render it as plain text (React auto-escapes), never via
- * `dangerouslySetInnerHTML`, and never as unescaped markdown or HTML.
- * The ingest-side bead must also length-cap and strip control chars at
- * parse time. See gascity-dashboard-8h3 for the contract.
+ * render it as plain text — React auto-escapes HTML but does NOT strip
+ * Unicode formatting characters; Bidi/RTL stripping must happen at the
+ * ingest writer per the field-level JSDoc below. Never render via
+ * `dangerouslySetInnerHTML`; never render as unescaped markdown or HTML.
+ * Non-React consumers (logs, downloads, copy-to-clipboard) inherit the
+ * same untrusted-input posture and must apply their own stripping if
+ * the ingest contract is bypassed. See gascity-dashboard-8h3 for the
+ * full contract.
  */
 export interface TriageAssessment {
   vetted_score: number;
-  source: 'agent' | 'manual';
+  source: 'agent';
+  /**
+   * Free-form agent-authored note about the assessment. Currently always
+   * empty string; populated by the gh ingest path (see
+   * ParseTriageAssessmentOptions.notes) from PR/issue comment bodies,
+   * which are third-party-author controllable on incoming PRs.
+   *
+   * Sanitisation contract (gascity-dashboard-8h3 + gascity-dashboard-cnu) —
+   * the ingest writer is responsible, every reader assumes it has been
+   * enforced:
+   *
+   *   1. Length-cap (~2000 chars).
+   *   2. Strip C0 control bytes (\x00-\x1f except \t/\n), DEL (\x7f),
+   *      and C1 control bytes (\x80-\x9f).
+   *   3. Strip ALL 12 Unicode Bidi / RTL codepoints from CVE-2021-42574:
+   *      U+061C (ALM), U+200E (LRM), U+200F (RLM), U+202A-202E (LRE/RLE/
+   *      PDF/LRO/RLO), U+2066-2069 (LRI/RLI/FSI/PDI) — the "trojan
+   *      source" vector.
+   *   4. Strip ANSI CSI / OSC escape sequences.
+   *
+   * Every consumer MUST render this as plain text only — never via
+   * `dangerouslySetInnerHTML`, never as unescaped markdown or HTML.
+   * React's default JSX text rendering satisfies this; any non-React
+   * surface (logs, downloads, copy-to-clipboard) inherits the same
+   * untrusted-input posture.
+   */
   notes: string;
   vetted_at: IsoTimestamp;
 }
@@ -822,6 +853,16 @@ export interface SlungState {
    *
    * Null means the sling succeeded but no running session could be resolved
    * for the target role at write time.
+   *
+   * Stale-after-restart: this field is captured at sling time and never
+   * refreshed. If the resolved session is killed and re-spawned (operator
+   * restart, supervisor crash recovery, role re-pool), the persisted id
+   * may point at a now-dead session. The frontend's `/agents/<id>` route
+   * is expected to fall back gracefully on a 404 — the sling record itself
+   * is intentionally NOT re-resolved on read, because the historical
+   * sling-time mapping is what the operator slung against and re-resolving
+   * would silently rewrite history. Treat this value as "best-known
+   * session at sling time", not "currently live session for the role".
    */
   resolved_session_name: string | null;
 }
