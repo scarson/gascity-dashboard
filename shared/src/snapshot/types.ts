@@ -139,6 +139,16 @@ export interface CityStatusSummary {
    * `=== false`.
    */
   rigsPartial?: true;
+  /**
+   * Same degradation signal for the agent roster. sd4.1: since sd4 made
+   * /agents the authoritative source for sessionsByProvider, a partial
+   * agent list silently produces an under-counted breakdown. Surfacing
+   * this lets the operator distinguish "no agents configured" from "agent
+   * backends degraded." Optional literal `true` per the rigsPartial
+   * convention (gascity-dashboard-19w.1.1) — the collector only assigns
+   * `true` or omits the field.
+   */
+  agentsPartial?: true;
 }
 
 export interface CitySessionProvider {
