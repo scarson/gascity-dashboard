@@ -54,7 +54,45 @@ const ALIAS_RE = /^[a-z][a-z0-9_./-]{1,63}$/i;
 // with growing backoff so a recovering supervisor flips the footnote
 // off; after the third failure the flag stays sticky (matching the old
 // terminal behaviour).
-const SESSIONS_RETRY_DELAYS_MS: ReadonlyArray<number> = [30_000, 90_000, 270_000];
+//
+// `as const` pins the literal tuple shape so the array can't be silently
+// mutated or re-assigned to a different length elsewhere. Combined with
+// the `getSessionsRetryDelay` runtime guard below, an out-of-bounds index
+// can never reach `setTimeout` as `undefined` — which would otherwise fire
+// at 0 ms and produce a busy-loop retry storm (gascity-dashboard-7ky).
+const SESSIONS_RETRY_DELAYS_MS = [30_000, 90_000, 270_000] as const;
+
+// Safe-by-construction accessor for the retry schedule. Returns the delay
+// for the given attempt index, or `null` when the index is out of bounds.
+// The caller MUST treat `null` as "stop retrying" — never substitute a
+// fallback delay and never coerce it to a number. Co-locating the bounds
+// check with the indexed read closes the noUncheckedIndexedAccess gap:
+// even if a future refactor weakens the caller's own bounds check, this
+// accessor cannot return `undefined`. Out-of-bounds calls emit a warning
+// so the guard violation is visible in the console rather than silent.
+export function getSessionsRetryDelay(attemptIndex: number): number | null {
+  if (!Number.isInteger(attemptIndex) || attemptIndex < 0) {
+    console.warn(
+      `[${COMPONENT}] getSessionsRetryDelay called with invalid index ${attemptIndex}; refusing to schedule retry.`,
+    );
+    return null;
+  }
+  if (attemptIndex >= SESSIONS_RETRY_DELAYS_MS.length) {
+    return null;
+  }
+  const delay = SESSIONS_RETRY_DELAYS_MS[attemptIndex];
+  if (delay === undefined) {
+    // Defense in depth: the bounds check above already excludes this
+    // branch, but noUncheckedIndexedAccess types the read as
+    // `number | undefined`. Surfacing the impossible case as a warning
+    // beats letting `setTimeout(fn, undefined)` fire at 0 ms.
+    console.warn(
+      `[${COMPONENT}] getSessionsRetryDelay: bounds check passed but delay at index ${attemptIndex} was undefined; refusing to schedule retry.`,
+    );
+    return null;
+  }
+  return delay;
+}
 
 interface ViewingAsContextValue {
   viewingAs: ViewingAs;
@@ -160,12 +198,13 @@ export function ViewingAsProvider({ children }: { children: ReactNode }) {
   // `attemptIndex` is the 0-based index of the NEXT retry attempt
   // (i.e. after `attemptIndex` failed retries have already happened, or
   // `attemptIndex === 0` for the first retry after the initial failure).
-  // After the final delay is exhausted the flag stays sticky.
+  // `getSessionsRetryDelay` returns `null` once the schedule is
+  // exhausted, after which the flag stays sticky.
   const scheduleSessionsRetry = useCallback(
     (attemptIndex: number) => {
-      if (attemptIndex >= SESSIONS_RETRY_DELAYS_MS.length) return;
       if (!mountedRef.current) return;
-      const delay = SESSIONS_RETRY_DELAYS_MS[attemptIndex];
+      const delay = getSessionsRetryDelay(attemptIndex);
+      if (delay === null) return;
       sessionsRetryTimerRef.current = setTimeout(() => {
         sessionsRetryTimerRef.current = null;
         if (!mountedRef.current) return;

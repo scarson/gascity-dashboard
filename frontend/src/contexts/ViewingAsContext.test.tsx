@@ -2,7 +2,7 @@ import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { useEffect } from 'react';
 import { api } from '../api/client';
-import { ViewingAsProvider, useViewingAs } from './ViewingAsContext';
+import { ViewingAsProvider, useViewingAs, getSessionsRetryDelay } from './ViewingAsContext';
 
 // gascity-dashboard-5gg: bounded retry for /api/sessions in the alias
 // prefetch. Tests cover:
@@ -255,5 +255,60 @@ describe('ViewingAsProvider — loadAliases initial flag transitions', () => {
     });
     await flushPromises();
     expect(mockListSessions).toHaveBeenCalledTimes(1);
+  });
+});
+
+// gascity-dashboard-7ky: the sessions retry table is read by index, and
+// under `noUncheckedIndexedAccess` the read is typed `number | undefined`.
+// If the caller's bounds check ever weakens, `setTimeout(fn, undefined)`
+// would fire at 0 ms — a busy-loop retry storm. `getSessionsRetryDelay`
+// is the safe accessor that returns `null` for any out-of-bounds index
+// instead of leaking `undefined` to a timer.
+describe('getSessionsRetryDelay — out-of-bounds guard', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('returns the scheduled delay for in-range indices', () => {
+    expect(getSessionsRetryDelay(0)).toBe(30_000);
+    expect(getSessionsRetryDelay(1)).toBe(90_000);
+    expect(getSessionsRetryDelay(2)).toBe(270_000);
+  });
+
+  it('returns null (never undefined, never a fallback number) for an index just past the end', () => {
+    const result = getSessionsRetryDelay(3);
+    expect(result).toBeNull();
+    // Critically: not undefined and not a number. A `setTimeout` call
+    // with this value would no-op via the caller's `null` check rather
+    // than fire at 0 ms.
+    expect(result).not.toBe(undefined);
+    expect(typeof result).not.toBe('number');
+  });
+
+  it('returns null for a large out-of-bounds index', () => {
+    expect(getSessionsRetryDelay(99)).toBeNull();
+  });
+
+  it('returns null and warns for a negative index', () => {
+    expect(getSessionsRetryDelay(-1)).toBeNull();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatch(/invalid index -1/);
+  });
+
+  it('returns null and warns for a non-integer index', () => {
+    expect(getSessionsRetryDelay(1.5)).toBeNull();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatch(/invalid index 1.5/);
+  });
+
+  it('returns null and warns for NaN', () => {
+    expect(getSessionsRetryDelay(Number.NaN)).toBeNull();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 });
