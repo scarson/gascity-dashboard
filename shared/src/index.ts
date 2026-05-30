@@ -755,9 +755,11 @@ export type TriageItemStatus =
  * `vetted_score` lives on the SAME numeric scale as `TriageItem.triage_score`
  * so comparators sort correctly when a tier mixes vetted + unvetted items.
  *
- * `source` is `'agent'` for the only path that lands in this bead. The
- * `'manual'` arm is reserved for a future maintainer ack path; no manual
- * signal lands today.
+ * `source` is `'agent'` for every path that lands in this bead today
+ * (gascity-dashboard-lmr). A future maintainer-ack path would widen
+ * the union when (and only when) a manual signal actually flows; the
+ * `'manual'` arm was reserved speculatively and went unused, so it
+ * was dropped per YAGNI.
  *
  * `notes` is currently always empty string. When the gh ingest path wires
  * it up (see ParseTriageAssessmentOptions.notes), the contents will be
@@ -770,7 +772,7 @@ export type TriageItemStatus =
  */
 export interface TriageAssessment {
   vetted_score: number;
-  source: 'agent' | 'manual';
+  source: 'agent';
   notes: string;
   vetted_at: IsoTimestamp;
 }

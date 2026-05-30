@@ -396,6 +396,23 @@ describe('SelectionActionBar — dual-intent buttons', () => {
     // The triage button keeps its static label.
     expect(screen.getByRole('button', { name: /send to triage agent/i })).toBeTruthy();
   });
+
+  // gascity-dashboard-4co: visual hierarchy in the dual-intent bar.
+  // Triage is the primary intent (the operator wants prioritisation
+  // for a batch before any code is written); draft is the loud option
+  // that asks an agent to write a PR. Rendering both at the same
+  // visual weight ties — the design contract is that secondary
+  // intents drop to tone='quiet' so the eye lands on the primary.
+  it("renders the draft button in tone='quiet' so triage is visually primary", () => {
+    renderBar();
+    const triage = screen.getByRole('button', { name: /send to triage agent/i });
+    const draft = screen.getByRole('button', { name: /send to draft agent/i });
+    // 'default' tone carries a visible hairline border; 'quiet' uses
+    // border-transparent. Assert the contract via the class hook the
+    // Button component renders (TONE map in Button.tsx).
+    expect(triage.className).toContain('border-rule');
+    expect(draft.className).toContain('border-transparent');
+  });
 });
 
 // gascity-dashboard-2yr: the in-flight "Slung · awaiting agent" section.

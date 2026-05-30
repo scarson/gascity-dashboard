@@ -17,6 +17,7 @@ export type ToggleSelect =
 export function TierSection({
   section,
   counts,
+  unfilteredItemCount,
   collapsed,
   onToggle,
   isCollapsed,
@@ -26,6 +27,16 @@ export function TierSection({
 }: {
   section: TriageTierSection;
   counts: { vetted: number; awaiting: number };
+  /**
+   * Total item count from the unfiltered tier (gascity-dashboard-3lf).
+   * When a filter chip (needs-PR / awaiting-only) is active, the rendered
+   * `section` only contains the surviving items, which would make a bare
+   * "N items" label misread as the tier's true size. When this prop is
+   * supplied AND differs from the post-filter count, the header reads
+   * "N of M items" to disambiguate. Pass `undefined` (or equal to the
+   * rendered count) to keep the plain label.
+   */
+  unfilteredItemCount?: number;
   collapsed: boolean;
   onToggle: () => void;
   isCollapsed: (id: string) => boolean;
@@ -36,6 +47,8 @@ export function TierSection({
   const itemCount =
     section.clusters.reduce((n, c) => n + c.items.length, 0) +
     section.unclustered.length;
+  const showFilteredOf =
+    unfilteredItemCount !== undefined && unfilteredItemCount !== itemCount;
 
   return (
     <section>
@@ -63,7 +76,9 @@ export function TierSection({
             </span>
             <span aria-hidden>·</span>
             <span>
-              {itemCount} {itemCount === 1 ? 'item' : 'items'}
+              {showFilteredOf
+                ? `${itemCount} of ${unfilteredItemCount} items`
+                : `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`}
             </span>
           </span>
         </button>
