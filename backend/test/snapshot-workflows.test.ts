@@ -1065,8 +1065,8 @@ describe('createWorkflowsSourceCache', () => {
     }> = [];
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
-          const params = rawParams ?? {};
+        listBeads: async (_signal: AbortSignal | undefined, params: ListBeadsParams) => {
+          assert.ok(params, 'collector must always pass an explicit params arg');
           seenParams.push(params);
           if (params.all !== true) {
             return {
@@ -1144,8 +1144,8 @@ describe('createWorkflowsSourceCache', () => {
     const seenParams: unknown[] = [];
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
-          const params = rawParams ?? {};
+        listBeads: async (_signal: AbortSignal | undefined, params: ListBeadsParams) => {
+          assert.ok(params, 'collector must always pass an explicit params arg');
           seenParams.push(params);
           if (params.all === true && params.type === 'molecule') {
             return {
@@ -1232,8 +1232,8 @@ describe('createWorkflowsSourceCache', () => {
     let listFormulaRunsCalls = 0;
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
-          const params = rawParams ?? {};
+        listBeads: async (_signal: AbortSignal | undefined, params: ListBeadsParams) => {
+          assert.ok(params, 'collector must always pass an explicit params arg');
           listBeadsCalls.push(params);
           // City-scoped initial query returns NO workflow roots — this is
           // the exact ej9y trigger condition on live ds-research.
@@ -1323,8 +1323,8 @@ describe('createWorkflowsSourceCache', () => {
   test('ej9y: listBeads-only path still works when listFormulaRuns throws', async () => {
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
-          const params = rawParams ?? {};
+        listBeads: async (_signal: AbortSignal | undefined, params: ListBeadsParams) => {
+          assert.ok(params, 'collector must always pass an explicit params arg');
           if (params.rig === undefined && params.type === undefined && params.all !== true) {
             return {
               items: [
@@ -1374,8 +1374,8 @@ describe('createWorkflowsSourceCache', () => {
     const rigQueryCalls: string[] = [];
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
-          const params = rawParams ?? {};
+        listBeads: async (_signal: AbortSignal | undefined, params: ListBeadsParams) => {
+          assert.ok(params, 'collector must always pass an explicit params arg');
           if (params.rig === undefined && params.type === undefined && params.all !== true) {
             // City-level result that references rig=shared via gc.root_store_ref.
             return {
@@ -1447,8 +1447,8 @@ describe('createWorkflowsSourceCache', () => {
   test('d3xp: lane gets scope=available from feed when rig-stored bead lacks gc.scope_kind metadata', async () => {
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
-          const params = rawParams ?? {};
+        listBeads: async (_signal: AbortSignal | undefined, params: ListBeadsParams) => {
+          assert.ok(params, 'collector must always pass an explicit params arg');
           if (params.rig === undefined && params.type === undefined && params.all !== true) {
             return { items: [], total: 0 };
           }
@@ -1527,8 +1527,8 @@ describe('createWorkflowsSourceCache', () => {
   test('d3xp/M1: feed scope_ref failing SCOPE_REF_RE is dropped (lane scope stays unavailable)', async () => {
     const cache = createWorkflowsSourceCache({
       gc: {
-        listBeads: async (_signal: AbortSignal | undefined, rawParams: ListBeadsParams) => {
-          const params = rawParams ?? {};
+        listBeads: async (_signal: AbortSignal | undefined, params: ListBeadsParams) => {
+          assert.ok(params, 'collector must always pass an explicit params arg');
           if (params.rig === undefined && params.type === undefined && params.all !== true) {
             return { items: [], total: 0 };
           }
