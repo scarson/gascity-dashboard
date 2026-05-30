@@ -33,7 +33,17 @@ export type { ExecResult };
 // content reaches the browser; ansi_up on the client only ever sees
 // safe SGR sequences (or none).
 const CSI_NON_SGR_RE = /\x1b\[[?0-9;]*[a-ln-zA-LN-Z]/g; // CSI but excluding 'm' (SGR)
-const OSC_RE = /\x1b\][^\x07]*\x07/g;
+// OSC sequences end in one of two terminators:
+//   - BEL (\x07) — the xterm-legacy form.
+//   - ST as ESC \\ (\x1b\\) — the spec form most modern terminals emit
+//     (iTerm2, foot, wezterm). The single-byte C1 ST (\x9c) is handled
+//     by CTRL_RE which strips the whole \x80-\x9f range.
+// gascity-dashboard-3sxy.1: prior to this we only matched the BEL form,
+// so ST-terminated OSC payloads survived the strip — CTRL_RE removed
+// the leading and trailing ESC bytes but the bracketed payload was
+// left as visible plain text. The char-class excludes \x1b so an
+// unterminated OSC cannot consume a following ANSI escape.
+const OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 // C0 (everything < 0x20 except \t \n) + DEL + C1 (\x80-\x9f).
 // gascity-dashboard-3sxy: C1 controls are legacy 8-bit control codes
 // some terminals still interpret as alternative escape introducers;

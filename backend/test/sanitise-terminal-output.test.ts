@@ -53,6 +53,53 @@ describe('sanitiseTerminalOutput', () => {
     assert.equal(cleaned, 'foobarbaz');
   });
 
+  test('strips OSC sequences terminated by ST (ESC \\) — gascity-dashboard-3sxy.1', () => {
+    // Modern terminals (iTerm2, foot, wezterm) emit OSC sequences
+    // terminated by the two-byte String Terminator ESC + '\' rather than
+    // BEL. Prior to 3sxy.1 the OSC_RE only matched BEL-terminated OSC,
+    // so the ST-terminated payload survived: CTRL_RE stripped the
+    // leading ESC and the trailing ESC of ST, leaving "]0;title\"
+    // as visible plain text in the rendered transcript.
+    const input = 'before \x1b]0;title\x1b\\ after';
+    const cleaned = sanitiseTerminalOutput(input);
+    assert.doesNotMatch(cleaned, /\x1b/);
+    // Neither the OSC payload nor the ST backslash leak through.
+    assert.doesNotMatch(cleaned, /title/);
+    assert.doesNotMatch(cleaned, /0;/);
+    assert.doesNotMatch(cleaned, /\\/);
+    assert.match(cleaned, /before/);
+    assert.match(cleaned, /after/);
+  });
+
+  test('strips both BEL- and ST-terminated OSC in the same payload', () => {
+    // Realistic case: one terminal emitter uses BEL, another uses ST;
+    // a transcript pulled from multiple sources mixes both.
+    const input = 'A\x1b]0;bel-title\x07B\x1b]0;st-title\x1b\\C';
+    const cleaned = sanitiseTerminalOutput(input);
+    assert.equal(cleaned, 'ABC');
+  });
+
+  test('OSC regex is non-greedy across adjacent OSCs', () => {
+    // Two ST-terminated OSCs back to back. A greedy or mis-bounded regex
+    // would consume the inter-OSC text along with both payloads.
+    const input = '\x1b]0;one\x1b\\MID\x1b]2;two\x1b\\';
+    const cleaned = sanitiseTerminalOutput(input);
+    assert.equal(cleaned, 'MID');
+  });
+
+  test('unterminated OSC does not swallow trailing escape sequences', () => {
+    // The char-class exclusion of \x1b inside OSC_RE means the regex
+    // cannot run past an unterminated OSC into a following CSI; the
+    // unterminated payload falls through to CSI/CTRL strips instead,
+    // which still removes every escape byte. The point is: no live
+    // \x1b reaches the client even on malformed input.
+    const input = 'pre \x1b]0;never-closed then \x1b[31mred\x1b[0m post';
+    const cleaned = sanitiseTerminalOutput(input);
+    assert.doesNotMatch(cleaned, /\x1b/);
+    assert.match(cleaned, /pre/);
+    assert.match(cleaned, /post/);
+  });
+
   test('strips C1 control characters (\\x80-\\x9f)', () => {
     // C1 controls — the 0x80..0x9F range. Building the fixture
     // programmatically keeps the source file plain-ASCII while still
