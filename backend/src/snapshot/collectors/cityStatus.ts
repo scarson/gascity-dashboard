@@ -8,6 +8,7 @@ import type {
   GcSessionList,
 } from 'gas-city-dashboard-shared';
 import { type GcClient } from '../../gc-client.js';
+import { LOG_COMPONENT, logWarn, sanitizeForLog } from '../../logging.js';
 import { SourceCache } from '../cache.js';
 
 // City status collector — gascity-dashboard-8nj + gascity-dashboard-19w.
@@ -100,7 +101,25 @@ export async function collectCityStatus(
   const sessionsByProvider = aggregateSessionsByProvider(sessions);
   const activeSessions = countActiveSessions(sessions);
 
-  return {
+  // gascity-dashboard-19w.1: supervisor-reported wire-partial on a 200
+  // response (one or more rig backends failed during aggregation) is a
+  // degradation signal, not an outage — propagate it so the operator
+  // sees "rigs degraded" rather than an apparent "no rigs configured."
+  // Mirrors the convention in backend/src/routes/links.ts and
+  // routes/mail.ts. Per CLAUDE.md "Don't Swallow Errors".
+  const rigsPartial =
+    rigList.partial === true || (rigList.partial_errors?.length ?? 0) > 0;
+  if (rigsPartial) {
+    const detail = rigList.partial_errors && rigList.partial_errors.length > 0
+      ? rigList.partial_errors.map(sanitizeForLog).join(', ')
+      : 'no detail';
+    logWarn(
+      LOG_COMPONENT.snapshot,
+      `supervisor reported partial rig list (${detail}); rigs degraded`,
+    );
+  }
+
+  const summary: CityStatusSummary = {
     activeAgents: countActiveAgents(sessions),
     totalAgents: sessions.length,
     activeSessions,
@@ -109,6 +128,10 @@ export async function collectCityStatus(
     sessionsByProvider,
     rigs: rigList.items.map(toCityRig),
   };
+  if (rigsPartial) {
+    summary.rigsPartial = true;
+  }
+  return summary;
 }
 
 /**

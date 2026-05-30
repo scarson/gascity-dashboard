@@ -167,4 +167,71 @@ describe('collectCityStatus', () => {
       /gc supervisor returned 502/,
     );
   });
+
+  test('rigs partial: true surfaces degradation via rigsPartial — does not silently report empty', async () => {
+    // gascity-dashboard-19w.1: when the supervisor returns
+    // `partial: true` with `items` normalized to `[]` (one or more rig
+    // backends failed during aggregation), the collector MUST surface
+    // the degradation signal so the operator sees "rigs degraded"
+    // rather than "no rigs configured." Convention mirrors
+    // backend/src/routes/links.ts:118 and routes/mail.ts:62.
+    const rigList: GcRigList = {
+      items: [],
+      partial: true,
+      partial_errors: ['backend A: connection refused', 'backend B: 502'],
+    };
+
+    const summary = await collectCityStatus({
+      listSessions: async () => ({ items: [] }),
+      listRigs: async () => rigList,
+    });
+
+    assert.equal(summary.rigsPartial, true);
+    assert.deepEqual(summary.rigs, []);
+  });
+
+  test('rigs partial: true with some items still surfaces degradation AND retains items', async () => {
+    // Supervisor can return both: some backends succeeded (items present)
+    // AND some backends failed (partial: true). Both signals must reach
+    // the operator — we keep the items we got AND mark degradation.
+    const rigList: GcRigList = {
+      items: [{ name: 'rig-a', path: '/data/rig-a' }],
+      partial: true,
+    };
+
+    const summary = await collectCityStatus({
+      listSessions: async () => ({ items: [] }),
+      listRigs: async () => rigList,
+    });
+
+    assert.equal(summary.rigsPartial, true);
+    assert.deepEqual(summary.rigs, [{ name: 'rig-a', path: '/data/rig-a' }]);
+  });
+
+  test('rigs partial_errors non-empty without partial: true still surfaces degradation', async () => {
+    // Defensive parity with links.ts:118 / mail.ts:62: either signal
+    // (partial===true OR partial_errors non-empty) is sufficient.
+    const rigList: GcRigList = {
+      items: [{ name: 'rig-a', path: '/data/rig-a' }],
+      partial_errors: ['backend X: timeout'],
+    };
+
+    const summary = await collectCityStatus({
+      listSessions: async () => ({ items: [] }),
+      listRigs: async () => rigList,
+    });
+
+    assert.equal(summary.rigsPartial, true);
+  });
+
+  test('rigs without partial signal — rigsPartial omitted', async () => {
+    // Happy path: clean response has no rigsPartial in the summary
+    // (the field is optional so callers can use truthy checks).
+    const summary = await collectCityStatus({
+      listSessions: async () => ({ items: [] }),
+      listRigs: async () => ({ items: [{ name: 'rig-a', path: '/data/rig-a' }] }),
+    });
+
+    assert.equal(summary.rigsPartial, undefined);
+  });
 });
