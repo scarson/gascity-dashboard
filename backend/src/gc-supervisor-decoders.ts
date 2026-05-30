@@ -7,7 +7,11 @@ import type {
   GcEventList,
   GcFormulaDetail,
   GcFormulaRunList,
+  GcFormulaRunsResponse,
   GcMailList,
+  GcOrderHistoryDetail,
+  GcOrderHistoryList,
+  GcOrdersFeedResponse,
   GcRigList,
   GcSessionList,
   GcWorkflowSnapshot,
@@ -305,6 +309,42 @@ const FormulaRunSchema = z.object({
   run_detail_available: z.boolean().optional(),
 }).passthrough();
 
+// gascity-dashboard-hvx: per-formula run history. One entry from
+// FormulaRunsResponse.recent_runs. Mirrors supervisor `FormulaRecentRunResponse`
+// — workflow_id + target + status + the two timestamps are all required.
+const FormulaRecentRunSchema = z.object({
+  workflow_id: z.string(),
+  target: z.string(),
+  status: z.string(),
+  started_at: z.string(),
+  updated_at: z.string(),
+}).passthrough();
+
+// gascity-dashboard-hvx: one entry from OrderHistoryListBody.entries.
+// Mirrors supervisor `OrderHistoryEntry`. duration_ms / exit_code / signal
+// are strings on the wire — the supervisor formats numerics for downstream
+// consumers; preserved as-is so the SSOT contract stays one-way:
+// shared.GcOrderHistoryEntry ⊆ supervisor.OrderHistoryEntry. `labels` is
+// declared `T[] | null` (required + nullable) — preserve null so consumers
+// can distinguish "no labels" from "missing field" (the latter must fail
+// decoding instead of laundering into null).
+const OrderHistoryEntrySchema = z.object({
+  bead_id: z.string(),
+  name: z.string(),
+  scoped_name: z.string(),
+  created_at: z.string(),
+  capture_output: z.boolean(),
+  has_output: z.boolean(),
+  labels: z.array(z.string()).nullable(),
+  store_ref: z.string(),
+  duration_ms: z.string().optional(),
+  exit_code: z.string().optional(),
+  signal: z.string().optional(),
+  error: z.string().optional(),
+  rig: z.string().optional(),
+  wisp_root_id: z.string().optional(),
+}).passthrough();
+
 const HealthSchema = z.object({
   status: z.string(),
   // izgc F7/F8: OpenAPI declares both city + version optional. Present in
@@ -444,6 +484,71 @@ export const gcSupervisorDecoders = {
       }).passthrough(),
       value,
       'listFormulaRuns',
+    );
+  },
+
+  // gascity-dashboard-hvx: per-formula recent runs. Distinct from
+  // listFormulaRuns (cross-formula /formulas/feed) — this is the supervisor's
+  // `formulas/{name}/runs` endpoint, scoped to a single named formula.
+  // FormulaRunsResponse declares `formula` + `run_count` + `partial`
+  // required; `recent_runs` is `T[] | null` (the listItemsField pattern).
+  listFormulaRunsByName(value: RawSupervisorSchema['FormulaRunsResponse']): GcFormulaRunsResponse {
+    return decodeSupervisorPayload(
+      z.object({
+        formula: z.string(),
+        run_count: z.number().finite(),
+        recent_runs: listItemsField(FormulaRecentRunSchema),
+        partial: RequiredPartialField,
+        partial_errors: PartialErrorsField,
+      }).passthrough(),
+      value,
+      'listFormulaRunsByName',
+    );
+  },
+
+  // gascity-dashboard-hvx: orders/feed shares the per-item shape
+  // (MonitorFeedItemResponse) with formulas/feed — reuse FormulaRunSchema.
+  // OrdersFeedBody.partial is required (mirrors FormulaFeedBody).
+  listOrdersFeed(value: RawSupervisorSchema['OrdersFeedBody']): GcOrdersFeedResponse {
+    return decodeSupervisorPayload(
+      z.object({
+        items: listItemsField(FormulaRunSchema),
+        partial: RequiredPartialField,
+        partial_errors: PartialErrorsField,
+      }).passthrough(),
+      value,
+      'listOrdersFeed',
+    );
+  },
+
+  // gascity-dashboard-hvx: full history for one named order. The supervisor's
+  // OrderHistoryListBody is intentionally narrow — entries only, no
+  // partial/partial_errors/total envelope. `entries: T[] | null` follows the
+  // listItemsField pattern.
+  listOrderHistory(value: RawSupervisorSchema['OrderHistoryListBody']): GcOrderHistoryList {
+    return decodeSupervisorPayload(
+      z.object({
+        entries: listItemsField(OrderHistoryEntrySchema),
+      }).passthrough(),
+      value,
+      'listOrderHistory',
+    );
+  },
+
+  // gascity-dashboard-hvx: one historical order-run detail. All five fields
+  // declared required in OpenAPI; `labels` is `T[] | null` (preserve null so
+  // consumers can distinguish "no labels" from "missing field").
+  getOrderHistoryDetail(value: RawSupervisorSchema['OrderHistoryDetailResponse']): GcOrderHistoryDetail {
+    return decodeSupervisorPayload(
+      z.object({
+        bead_id: z.string(),
+        store_ref: z.string(),
+        created_at: z.string(),
+        labels: z.array(z.string()).nullable(),
+        output: z.string(),
+      }).passthrough(),
+      value,
+      'getOrderHistoryDetail',
     );
   },
 

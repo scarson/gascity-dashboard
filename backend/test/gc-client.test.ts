@@ -1638,6 +1638,372 @@ describe('GcClient.sendMail', () => {
   });
 });
 
+// gascity-dashboard-hvx: per-formula run history + order feed/history.
+// The cross-formula /formulas/feed is covered above (listFormulaRuns); this
+// block covers the four neighbouring endpoints that have no dashboard
+// consumer yet — adding them here pins the GcClient boundary so the future
+// formula-detail / orders pages don't reinvent the decoder edge.
+describe('GcClient formula/order run history', () => {
+  let fake: Fake;
+  beforeEach(async () => {
+    fake = await startFake();
+  });
+  afterEach(async () => {
+    await fake.close();
+  });
+
+  // ── listFormulaRunsByName ───────────────────────────────────────────────
+
+  test('hvx: listFormulaRunsByName decodes a populated runs payload', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        formula: 'mol-adopt-pr-v2',
+        run_count: 2,
+        recent_runs: [
+          {
+            workflow_id: 'gc-aaa',
+            target: '/home/ds/gascity/polecat',
+            status: 'done',
+            started_at: '2026-05-28T20:00:00Z',
+            updated_at: '2026-05-28T20:42:00Z',
+          },
+          {
+            workflow_id: 'gc-bbb',
+            target: '/home/ds/gascity/polecat',
+            status: 'in_progress',
+            started_at: '2026-05-29T01:11:00Z',
+            updated_at: '2026-05-29T01:15:00Z',
+          },
+        ],
+        partial: false,
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listFormulaRunsByName('mol-adopt-pr-v2', {
+      scopeKind: 'city',
+      scopeRef: 'ds-research',
+    });
+    assert.equal(out.formula, 'mol-adopt-pr-v2');
+    assert.equal(out.run_count, 2);
+    assert.equal(out.recent_runs.length, 2);
+    assert.equal(out.recent_runs[0]?.workflow_id, 'gc-aaa');
+    assert.equal(out.partial, false);
+  });
+
+  test('hvx: listFormulaRunsByName accepts recent_runs=null + partial signal', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        formula: 'mol-adopt-pr-v2',
+        run_count: 0,
+        recent_runs: null,
+        partial: true,
+        partial_errors: ['index backend degraded'],
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listFormulaRunsByName('mol-adopt-pr-v2', {
+      scopeKind: 'city',
+      scopeRef: 'ds-research',
+    });
+    assert.deepEqual(out.recent_runs, []);
+    assert.equal(out.partial, true);
+    assert.deepEqual(out.partial_errors, ['index backend degraded']);
+  });
+
+  test('hvx: listFormulaRunsByName rejects payload missing required formula field', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      // Missing `formula` — supervisor's OpenAPI declares it required.
+      res.end(JSON.stringify({ run_count: 0, recent_runs: [], partial: false }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await assert.rejects(
+      () => gc.listFormulaRunsByName('mol-adopt-pr-v2', {
+        scopeKind: 'city',
+        scopeRef: 'ds-research',
+      }),
+      /invalid gc supervisor listFormulaRunsByName payload.*formula/i,
+    );
+  });
+
+  test('hvx: listFormulaRunsByName URL-encodes the formula path segment', async () => {
+    // Some formula names embed '/' (e.g. namespaced 'pack/mol-thing'); the
+    // OpenAPI client must encode the path param. The handler observes the
+    // actual URL the client built.
+    let observedPath = '';
+    fake.setHandler((req, res) => {
+      observedPath = req.url ?? '';
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        formula: 'pack/mol-thing',
+        run_count: 0,
+        recent_runs: [],
+        partial: false,
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await gc.listFormulaRunsByName('pack/mol-thing', {
+      scopeKind: 'city',
+      scopeRef: 'ds',
+    });
+    assert.match(observedPath, /formulas\/pack%2Fmol-thing\/runs/);
+  });
+
+  // ── listOrdersFeed ──────────────────────────────────────────────────────
+
+  test('hvx: listOrdersFeed decodes a populated feed', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        items: [
+          {
+            id: 'gc-order1',
+            type: 'order',
+            status: 'pending',
+            title: 'check-mail',
+            scope_kind: 'city',
+            scope_ref: 'ds-research',
+            target: '/home/ds/gascity/polecat',
+            started_at: '2026-05-29T01:00:00Z',
+            updated_at: '2026-05-29T01:00:00Z',
+          },
+        ],
+        partial: false,
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listOrdersFeed();
+    assert.equal(out.items.length, 1);
+    assert.equal(out.items[0]?.type, 'order');
+    assert.equal(out.items[0]?.title, 'check-mail');
+    assert.equal(out.partial, false);
+  });
+
+  test('hvx: listOrdersFeed accepts items=null + partial signal', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        items: null,
+        partial: true,
+        partial_errors: ['monitor backend degraded'],
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listOrdersFeed();
+    assert.deepEqual(out.items, []);
+    assert.equal(out.partial, true);
+    assert.deepEqual(out.partial_errors, ['monitor backend degraded']);
+  });
+
+  test('hvx: listOrdersFeed rejects payload missing required partial field', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      // OrdersFeedBody.partial is required (mirrors FormulaFeedBody, mfb9).
+      res.end(JSON.stringify({ items: [] }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await assert.rejects(
+      () => gc.listOrdersFeed(),
+      /invalid gc supervisor listOrdersFeed payload.*partial/i,
+    );
+  });
+
+  // ── listOrderHistory ────────────────────────────────────────────────────
+
+  test('hvx: listOrderHistory decodes a populated history list', async () => {
+    fake.setHandler((req, res) => {
+      // Verify scoped_name query param is forwarded.
+      assert.match(req.url ?? '', /scoped_name=city%3Acheck-mail/);
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        entries: [
+          {
+            bead_id: 'gc-run1',
+            name: 'check-mail',
+            scoped_name: 'city:check-mail',
+            created_at: '2026-05-29T00:00:00Z',
+            capture_output: true,
+            has_output: true,
+            labels: ['gc:order'],
+            store_ref: 'city:ds-research',
+            duration_ms: '4321',
+            exit_code: '0',
+          },
+        ],
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listOrderHistory('city:check-mail');
+    assert.equal(out.entries.length, 1);
+    assert.equal(out.entries[0]?.bead_id, 'gc-run1');
+    assert.equal(out.entries[0]?.scoped_name, 'city:check-mail');
+    assert.deepEqual(out.entries[0]?.labels, ['gc:order']);
+    assert.equal(out.entries[0]?.duration_ms, '4321');
+  });
+
+  test('hvx: listOrderHistory accepts entries=null (preserves wire shape)', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ entries: null }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listOrderHistory('city:check-mail');
+    assert.deepEqual(out.entries, []);
+  });
+
+  test('hvx: listOrderHistory rejects entry missing required bead_id', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        entries: [
+          {
+            // bead_id missing — OpenAPI declares it required.
+            name: 'check-mail',
+            scoped_name: 'city:check-mail',
+            created_at: '2026-05-29T00:00:00Z',
+            capture_output: true,
+            has_output: true,
+            labels: null,
+            store_ref: 'city:ds-research',
+          },
+        ],
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await assert.rejects(
+      () => gc.listOrderHistory('city:check-mail'),
+      /invalid gc supervisor listOrderHistory payload.*bead_id/i,
+    );
+  });
+
+  // ── getOrderHistoryDetail ───────────────────────────────────────────────
+
+  test('hvx: getOrderHistoryDetail decodes a populated detail payload', async () => {
+    fake.setHandler((req, res) => {
+      // Verify path parameter encoding and optional store_ref query.
+      assert.match(req.url ?? '', /\/order\/history\/gc-run1/);
+      assert.match(req.url ?? '', /store_ref=city%3Ads-research/);
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        bead_id: 'gc-run1',
+        store_ref: 'city:ds-research',
+        created_at: '2026-05-29T00:00:00Z',
+        labels: ['gc:order'],
+        output: 'hello from check-mail\n',
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.getOrderHistoryDetail('gc-run1', {
+      storeRef: 'city:ds-research',
+    });
+    assert.equal(out.bead_id, 'gc-run1');
+    assert.equal(out.output, 'hello from check-mail\n');
+    assert.deepEqual(out.labels, ['gc:order']);
+  });
+
+  test('hvx: getOrderHistoryDetail accepts labels=null (preserves wire shape)', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        bead_id: 'gc-run1',
+        store_ref: 'city:ds-research',
+        created_at: '2026-05-29T00:00:00Z',
+        labels: null,
+        output: '',
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.getOrderHistoryDetail('gc-run1');
+    assert.equal(out.labels, null);
+    assert.equal(out.output, '');
+  });
+
+  test('hvx: getOrderHistoryDetail rejects payload missing required output field', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        bead_id: 'gc-run1',
+        store_ref: 'city:ds-research',
+        created_at: '2026-05-29T00:00:00Z',
+        labels: null,
+        // output missing — OpenAPI declares it required.
+      }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await assert.rejects(
+      () => gc.getOrderHistoryDetail('gc-run1'),
+      /invalid gc supervisor getOrderHistoryDetail payload.*output/i,
+    );
+  });
+});
+
 function validBead(id: string) {
   return {
     id,
