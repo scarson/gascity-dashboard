@@ -540,6 +540,10 @@ async function applySlungOverlay(
     // placeholder while waiting) and stay in their tier.
     const active = persisted !== undefined && item.triage_assessment == null;
     item.slung = active ? persisted : null;
+    // Stamp the run-detail cross-link (gascity-dashboard-djpk): only
+    // active-slung items can carry a run id, and only when the sling
+    // captured a bead_id (null otherwise → slung-but-no-run-yet).
+    if (active) item.workflow_run_id = persisted.bead_id ?? null;
     item.is_marked = item.tier !== null && isMarkCandidate(item, item.tier);
     if (active) slung.push(item);
   }

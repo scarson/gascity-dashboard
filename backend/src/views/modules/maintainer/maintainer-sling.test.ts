@@ -795,8 +795,48 @@ describe('GET /api/maintainer/triage — slung overlay', { concurrency: false },
     assert.ok(slungItem?.slung, 'item 47 should carry slung state in slung_section');
     assert.equal(slungItem!.slung.target, 'mayor');
     assert.equal(slungItem!.slung.bead_id, 'gc-255139');
+    assert.equal(
+      slungItem!.workflow_run_id,
+      'gc-255139',
+      'active-slung item stamps workflow_run_id from the persisted bead_id (gascity-dashboard-djpk)',
+    );
     assert.equal(slungItem!.is_marked, false, 'slung item should not carry the mark');
     assert.equal(nextMarked?.is_marked, true, 'mark should move to the next candidate');
+  });
+
+  test('workflow_run_id is null on an active-slung item whose sling carried no bead id', async () => {
+    h = await buildApp();
+    await writeEnvelope(h, envelopeWithMarkedCandidates([makePr({ number: 90 })]));
+
+    await writeSlungEntry(slungStatePathFor(h), slungKey('pr', 90), {
+      slung_at: '2026-05-24T00:00:00Z',
+      target: 'chief-of-staff',
+      bead_id: null,
+      resolved_session_name: null,
+    });
+
+    const env = await fetch(`${h.url}/api/maintainer/triage`).then((r) => r.json()) as MaintainerTriage;
+    const item = env.slung_section?.find((it) => it.number === 90);
+    assert.ok(item, 'item 90 present in slung_section');
+    assert.equal(
+      item!.workflow_run_id,
+      null,
+      'slung-but-no-bead → workflow_run_id is null (no run to link to yet)',
+    );
+  });
+
+  test('workflow_run_id is absent (undefined) on a never-slung item', async () => {
+    h = await buildApp();
+    await writeEnvelope(h, envelopeWithMarkedCandidates([makePr({ number: 91 })]));
+
+    const env = await fetch(`${h.url}/api/maintainer/triage`).then((r) => r.json()) as MaintainerTriage;
+    const item = env.tiers[0]!.unclustered.find((it) => it.number === 91);
+    assert.ok(item, 'item 91 present in its tier');
+    assert.equal(
+      item!.workflow_run_id,
+      undefined,
+      'never-slung item leaves workflow_run_id undefined (absent on the wire)',
+    );
   });
 
   test('vetted item with stale slung-state entry: overlay forces slung=null', async () => {
@@ -827,6 +867,14 @@ describe('GET /api/maintainer/triage — slung overlay', { concurrency: false },
     assert.equal(item.slung, null, 'vetted-overrides-slung: overlay must zero out slung even if file says otherwise');
     // And the vetted item remains a mark candidate (it's not slung in the overlay's view).
     assert.equal(item.is_marked, true);
+    // gascity-dashboard-djpk: the run-link stamp is gated on `active`, which is false
+    // for a vetted-overridden item — so it must NOT carry a linkable run id even though
+    // the stale slung-state entry above planted a bead_id ('gc-stale').
+    assert.equal(
+      item.workflow_run_id,
+      undefined,
+      'vetted-overrides-slung must not stamp workflow_run_id even when the stale entry has a bead_id',
+    );
   });
 
   test('slung-state entry for an item no longer in the envelope: silently dropped, no error', async () => {

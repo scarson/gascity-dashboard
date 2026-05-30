@@ -343,6 +343,20 @@ describe('WorkflowRunDetailPage', () => {
     expect(screen.getByText(/partial snapshot/i)).toBeTruthy();
   });
 
+  it('renders a back-link to the maintainer needs-you view when from=triage (gascity-dashboard-djpk)', async () => {
+    renderPage('/workflows/gc-adopt-pr-active?from=triage');
+
+    const back = await screen.findByRole('link', { name: /triage/i });
+    expect(back.getAttribute('href')).toBe('/maintainer?view=needs-you');
+  });
+
+  it('renders no triage back-link when from=triage is absent', async () => {
+    renderPage('/workflows/gc-adopt-pr-active');
+
+    await screen.findByRole('heading', { name: /adopt pr #42/i });
+    expect(screen.queryByRole('link', { name: /triage/i })).toBeNull();
+  });
+
   it('shows no-graph and selected-node-without-session empty states', async () => {
     currentDetail = {
       ...detail,

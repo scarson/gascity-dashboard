@@ -69,6 +69,12 @@ export async function writeCache(
 // The `satisfies` clause is load-bearing: it makes a rename on TriageItem
 // (e.g. `triage_assessment` → `triage_result`) a compile error here, so the
 // CONTRACT comment above is enforced by the type system rather than memory.
+//
+// Intentionally absent: optional, serve-time-only fields like
+// `workflow_run_id` (stamped by applySlungOverlay after a cache read, never
+// persisted) must NOT be listed here — a cache missing them is valid, and
+// requiring them would wrongly reject every envelope written before the
+// overlay runs.
 const REQUIRED_TRIAGE_ITEM_KEYS = [
   'number',
   'kind',

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { SlungState, TriageKind } from 'gas-city-dashboard-shared';
 import { LOG_COMPONENT, errorMessage, logWarn } from '../../../logging.js';
+import { BEAD_ID_RE } from '../../../lib/beadId.js';
 
 // Active sling state persistence (gascity-dashboard-9qs).
 //
@@ -135,6 +136,11 @@ function isValidStateMap(v: unknown): v is PrenormalizedSlungStateMap {
     if (!('slung_at' in e) || typeof e.slung_at !== 'string') return false;
     if (!('target' in e) || typeof e.target !== 'string') return false;
     if (!('bead_id' in e) || (e.bead_id !== null && typeof e.bead_id !== 'string')) return false;
+    // gascity-dashboard-djpk: bead_id flows to the wire as TriageItem.workflow_run_id
+    // and into a run-detail link, so validate it against the same allowlist the write
+    // side uses (routes/beads.ts, workflows.ts) at this disk-read trust boundary rather
+    // than relying solely on the downstream route validator.
+    if (typeof e.bead_id === 'string' && !BEAD_ID_RE.test(e.bead_id)) return false;
     // gascity-dashboard-oc4l: resolved_session_name is OPTIONAL on disk.
     // Pre-55b entries (written before gascity-dashboard-55b added
     // resolved_session_name persistence) don't carry the field;

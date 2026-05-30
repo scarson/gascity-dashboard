@@ -36,6 +36,27 @@ export function TriageScore({
   return null;
 }
 
+export function RunLink({ item }: { item: Pick<TriageItem, 'workflow_run_id'> }) {
+  // Tri-state (gascity-dashboard-djpk): undefined = never slung, null =
+  // slung but no run yet — both render nothing. Only a string run id is
+  // linkable, used directly as the /workflows/:workflowId route key.
+  const runId = item.workflow_run_id;
+  if (runId === undefined || runId === null) return null;
+  return (
+    <>
+      <span aria-hidden>·</span>
+      <Link
+        to={`/workflows/${encodeURIComponent(runId)}?from=triage`}
+        className="text-fg-faint hover:text-fg focus-mark"
+        title="open the workflow run this item was slung against"
+        aria-label="open workflow run detail"
+      >
+        run →
+      </Link>
+    </>
+  );
+}
+
 export function SlungLink({ item }: { item: Pick<TriageItem, 'slung'> }) {
   if (item.slung === null) return null;
   const { target, resolved_session_name } = item.slung;

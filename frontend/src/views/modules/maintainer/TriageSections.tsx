@@ -8,7 +8,7 @@ import type {
   TriageTierSection,
 } from 'gas-city-dashboard-shared';
 import { selectionKey } from './selectionKey';
-import { SlungLink, TriageScore } from './TriageSignals';
+import { RunLink, SlungLink, TriageScore } from './TriageSignals';
 
 export type ToggleSelect =
   | ((item: { kind: 'pr' | 'issue'; number: number }) => void)
@@ -455,6 +455,7 @@ function RowMeta({
       </a>
       <TriageScore item={item} />
       <SlungLink item={item} />
+      <RunLink item={item} />
 
       <span aria-hidden>·</span>
       <ContributorByline author={item.author} />

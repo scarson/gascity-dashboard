@@ -1,7 +1,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { SlungLink, TriageScore } from './TriageSignals';
+import { RunLink, SlungLink, TriageScore } from './TriageSignals';
 
 describe('maintainer triage row signals', () => {
   afterEach(() => {
@@ -46,5 +46,36 @@ describe('maintainer triage row signals', () => {
     expect(container.querySelector('a')?.getAttribute('href')).toBe(
       '/agents/formula-runner__triage-agent',
     );
+  });
+
+  it('cross-links an item with a known workflow_run_id into run-detail (from=triage)', () => {
+    const { container } = render(
+      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+        <RunLink item={{ workflow_run_id: 'gc-255139' }} />
+      </MemoryRouter>,
+    );
+
+    const anchor = container.querySelector('a');
+    expect(anchor?.getAttribute('href')).toBe('/workflows/gc-255139?from=triage');
+    // States-have-words: the link carries a textual correlate, not color alone.
+    expect(container.textContent).toContain('run');
+  });
+
+  it('renders nothing when workflow_run_id is null (slung but no run yet)', () => {
+    const { container } = render(
+      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+        <RunLink item={{ workflow_run_id: null }} />
+      </MemoryRouter>,
+    );
+    expect(container.querySelector('a')).toBeNull();
+  });
+
+  it('renders nothing when workflow_run_id is absent (never slung)', () => {
+    const { container } = render(
+      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+        <RunLink item={{}} />
+      </MemoryRouter>,
+    );
+    expect(container.querySelector('a')).toBeNull();
   });
 });

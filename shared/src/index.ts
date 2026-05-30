@@ -974,6 +974,27 @@ export interface TriageItem {
    *  item from the One Mark candidate set and surfaces an inline link
    *  to the target agent's detail view. See `SlungState` JSDoc. */
   slung: SlungState | null;
+  /**
+   * Cross-link to this item's workflow run-detail route, when one is
+   * known (gascity-dashboard-djpk). Tri-state:
+   *   - `undefined` — the item was never associated with a workflow run
+   *     (the common case: it has never been slung). Absent on the wire.
+   *   - `null` — the item IS actively slung but the sling carried no
+   *     bead id, so there is no `rootBeadId`-keyed run to link to yet.
+   *   - `string` — the slung bead id, usable directly as the
+   *     `/workflows/<id>` route key (run-detail is keyed by the run's
+   *     `rootBeadId`, which is exactly `SlungState.bead_id`).
+   *
+   * Populated at serve time in applySlungOverlay from the persisted
+   * `SlungState.bead_id` on active-slung items only — mapIssue/mapPr
+   * carry no run id, so non-slung items always leave this `undefined`.
+   *
+   * Best-known-at-sling-time, NOT live: like `SlungState.bead_id` itself,
+   * this is captured when the sling fired and never re-resolved on read.
+   * Treat it as "the run this item was slung against", which is what the
+   * operator means to navigate to.
+   */
+  workflow_run_id?: string | null;
   /** Primary file-overlap cluster id; items sharing this id sit together. Null when uncomputed. */
   cluster_id: string | null;
   /** Files this item touches / is predicted to touch. Empty array when uncomputed. */
