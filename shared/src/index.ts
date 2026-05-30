@@ -771,6 +771,30 @@ export type TriageItemStatus =
 export interface TriageAssessment {
   vetted_score: number;
   source: 'agent' | 'manual';
+  /**
+   * Free-form agent-authored note about the assessment. Currently always
+   * empty string; populated by the gh ingest path (see
+   * ParseTriageAssessmentOptions.notes) from PR/issue comment bodies,
+   * which are third-party-author controllable on incoming PRs.
+   *
+   * Sanitisation contract (gascity-dashboard-8h3 + gascity-dashboard-cnu) —
+   * the ingest writer is responsible, every reader assumes it has been
+   * enforced:
+   *
+   *   1. Length-cap (~2000 chars).
+   *   2. Strip C0 control bytes (\x00-\x1f except \t/\n), DEL (\x7f),
+   *      and C1 control bytes (\x80-\x9f).
+   *   3. Strip Unicode Bidi / RTL overrides: U+202A-202E (LRE/RLE/PDF/
+   *      LRO/RLO) and U+2066-2069 (LRI/RLI/FSI/PDI) — the "trojan
+   *      source" vector.
+   *   4. Strip ANSI CSI / OSC escape sequences.
+   *
+   * Every consumer MUST render this as plain text only — never via
+   * `dangerouslySetInnerHTML`, never as unescaped markdown or HTML.
+   * React's default JSX text rendering satisfies this; any non-React
+   * surface (logs, downloads, copy-to-clipboard) inherits the same
+   * untrusted-input posture.
+   */
   notes: string;
   vetted_at: IsoTimestamp;
 }

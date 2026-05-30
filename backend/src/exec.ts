@@ -34,14 +34,24 @@ export type { ExecResult };
 // safe SGR sequences (or none).
 const CSI_NON_SGR_RE = /\x1b\[[?0-9;]*[a-ln-zA-LN-Z]/g; // CSI but excluding 'm' (SGR)
 const OSC_RE = /\x1b\][^\x07]*\x07/g;
-// Control chars except \t, \n; everything < 0x20 except those two.
-const CTRL_RE = /[\x00-\x08\x0b-\x1f\x7f]/g;
+// C0 (everything < 0x20 except \t \n) + DEL + C1 (\x80-\x9f).
+// gascity-dashboard-3sxy: C1 controls are legacy 8-bit control codes
+// some terminals still interpret as alternative escape introducers;
+// they are the same threat class as C0 and must be stripped together.
+const CTRL_RE = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+// gascity-dashboard-cnu: Unicode Bidi / RTL overrides — the
+// "trojan source" vector. U+202A-202E (LRE/RLE/PDF/LRO/RLO) and
+// U+2066-2069 (LRI/RLI/FSI/PDI) reorder the visual rendering of text
+// without changing its bytes, so they must never reach a UI string
+// sourced from supervisor output or any third-party transcript.
+const BIDI_RE = /[‪-‮⁦-⁩]/g;
 
 function sanitiseTerminalOutput(raw: string): string {
   return raw
     .replace(OSC_RE, '')
     .replace(CSI_NON_SGR_RE, '')
-    .replace(CTRL_RE, '');
+    .replace(CTRL_RE, '')
+    .replace(BIDI_RE, '');
 }
 
 // ── Public exec wrappers — each one is a named, whitelisted call. ──────
