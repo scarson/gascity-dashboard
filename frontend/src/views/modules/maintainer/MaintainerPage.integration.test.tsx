@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import type { MaintainerTriage } from 'gas-city-dashboard-shared';
 import { api } from '../../../api/client';
 import { invalidateKey } from '../../../api/cache';
+import { NowProvider } from '../../../contexts/NowContext';
 import { ViewingAsProvider } from '../../../contexts/ViewingAsContext';
 import { MaintainerPage } from './Maintainer';
 
@@ -148,9 +149,11 @@ afterEach(() => {
 function mount() {
   return render(
     <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
-      <ViewingAsProvider>
-        <MaintainerPage />
-      </ViewingAsProvider>
+      <NowProvider intervalMs={1_000_000}>
+        <ViewingAsProvider>
+          <MaintainerPage />
+        </ViewingAsProvider>
+      </NowProvider>
     </MemoryRouter>,
   );
 }

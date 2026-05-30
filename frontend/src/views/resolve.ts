@@ -15,6 +15,7 @@
 
 import type { FrontendViewDescriptor } from './types';
 import { LOG_COMPONENT, logWarn } from '../lib/logging';
+import { NEEDS_YOU_VIEW_PARAM } from './modules/maintainer/needsYou';
 
 /**
  * Filter `ALL_VIEWS` down to what should mount in this deployment.
@@ -37,8 +38,16 @@ export type DefaultViewSource = 'env' | 'descriptor' | 'fallback';
 
 export interface DefaultViewResolution {
   /** The view that should render at `/`, or `null` to fall through to the
-   *  caller's built-in ambient-home component. */
+   *  caller's built-in ambient-home component. Also null when the
+   *  resolver returns a `redirectTo` instead of a view. */
   view: FrontendViewDescriptor | null;
+  /** When set, the caller renders `<Navigate to={redirectTo} replace />`
+   *  at `/` instead of mounting `view.element` directly. Used by the
+   *  `VIEW_ALIASES` table (dw8) to deep-link `/` into a parametrised
+   *  view (e.g. `/maintainer?view=needs-you`) without leaking the
+   *  frontend-router redirect concept onto the shared `ViewDescriptor`
+   *  type. `view` is always null when this is set. */
+  redirectTo?: string;
   /** Which rule won: operator env, descriptor flag, or the kb3 fallback. */
   source: DefaultViewSource;
   /** Non-fatal diagnostics the resolver surfaced (e.g. unknown env id,
@@ -47,6 +56,33 @@ export interface DefaultViewResolution {
    *  default caller writes them to `console.warn`). */
   warnings: ReadonlyArray<string>;
 }
+
+/**
+ * Frontend-only alias table for `DEFAULT_VIEW`. Each entry maps an alias
+ * id to a routable target view + a parametrised path the router should
+ * redirect `/` to when that alias wins.
+ *
+ * Why an alias and not a synonym `ViewDescriptor`: the architect's plan
+ * review for bead dw8 (PLAN-REVIEW C1) called out that a "synonym" field
+ * on the shared `ViewDescriptor` would leak a frontend-router concept
+ * across the wire (the backend has no business knowing about React
+ * Router redirects) AND conflict with the PRD §6.413 composer-shape
+ * evolution. Keeping the alias map here scopes the concept to the
+ * frontend resolver where it actually applies.
+ *
+ * Discoverability note: when `DEFAULT_VIEW=needs-you` makes `/` redirect
+ * to `/maintainer?view=needs-you`, the `/#needs-you` fragment anchor on
+ * AmbientHome becomes unreachable for that operator — they never land
+ * at `/`. This is intentional: the fragment and the env override are
+ * two affordances for two deployment configurations (default and
+ * operator-opt-in), not duplicate paths to the same surface.
+ */
+const VIEW_ALIASES: Readonly<Record<string, { target: string; redirectTo: string }>> = {
+  [NEEDS_YOU_VIEW_PARAM]: {
+    target: 'maintainer',
+    redirectTo: `/maintainer?view=${NEEDS_YOU_VIEW_PARAM}`,
+  },
+};
 
 /**
  * Resolve which view owns the `/` route.
@@ -75,18 +111,35 @@ export function resolveDefaultView(
   const warnings: string[] = [];
 
   if (defaultView !== null) {
-    const match = enabledViews.find((v) => v.id === defaultView);
-    if (match !== undefined) {
-      return { view: match, source: 'env', warnings };
+    // Alias check runs FIRST so an alias id (e.g. `needs-you`) can never
+    // collide with a view id of the same name. If a future descriptor
+    // genuinely needs the id, the alias should be removed deliberately.
+    const alias = VIEW_ALIASES[defaultView];
+    if (alias !== undefined) {
+      const targetEnabled = enabledViews.some((v) => v.id === alias.target);
+      if (targetEnabled) {
+        return { view: null, redirectTo: alias.redirectTo, source: 'env', warnings };
+      }
+      warnings.push(
+        `DEFAULT_VIEW="${defaultView}" alias targets the "${alias.target}" view, ` +
+          `which is not enabled in this deployment ` +
+          `(known enabled ids: ${enabledViews.map((v) => v.id).join(', ') || '(none)'}); ` +
+          `falling through to descriptor / ambient-home`,
+      );
+    } else {
+      const match = enabledViews.find((v) => v.id === defaultView);
+      if (match !== undefined) {
+        return { view: match, source: 'env', warnings };
+      }
+      // Either unknown or disabled. Distinguish the two for the operator —
+      // an unknown id is almost certainly a typo; a disabled id is an
+      // inconsistent MODULES_ENABLED + DEFAULT_VIEW pairing.
+      warnings.push(
+        `DEFAULT_VIEW="${defaultView}" does not match any enabled view ` +
+          `(known enabled ids: ${enabledViews.map((v) => v.id).join(', ') || '(none)'}); ` +
+          `falling through to descriptor / ambient-home`,
+      );
     }
-    // Either unknown or disabled. Distinguish the two for the operator —
-    // an unknown id is almost certainly a typo; a disabled id is an
-    // inconsistent MODULES_ENABLED + DEFAULT_VIEW pairing.
-    warnings.push(
-      `DEFAULT_VIEW="${defaultView}" does not match any enabled view ` +
-        `(known enabled ids: ${enabledViews.map((v) => v.id).join(', ') || '(none)'}); ` +
-        `falling through to descriptor / ambient-home`,
-    );
   }
 
   const flagged = enabledViews.filter((v) => v.defaultRoute === true);

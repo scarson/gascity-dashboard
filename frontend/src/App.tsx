@@ -41,6 +41,13 @@ export function App() {
     [enabledViews, defaultViewEnv],
   );
   const DefaultViewElement = defaultResolution.view?.element ?? null;
+  // dw8 — when `DEFAULT_VIEW` resolves to a view alias (e.g. `needs-you`),
+  // the resolver returns no `view` but a `redirectTo` path. Render
+  // `<Navigate replace>` at `/` so the URL bar shows the parametrised
+  // path the operator is actually viewing; `replace` keeps the back
+  // button pointing at wherever the operator came from, not at the
+  // resolved alias hop.
+  const defaultRedirectTo = defaultResolution.redirectTo ?? null;
 
   return (
     <ViewingAsProvider>
@@ -56,7 +63,13 @@ export function App() {
               <Route
                 path="/"
                 element={
-                  DefaultViewElement !== null ? <DefaultViewElement /> : <AmbientHomePage />
+                  defaultRedirectTo !== null ? (
+                    <Navigate to={defaultRedirectTo} replace />
+                  ) : DefaultViewElement !== null ? (
+                    <DefaultViewElement />
+                  ) : (
+                    <AmbientHomePage />
+                  )
                 }
               />
               <Route path="/agents" element={<AgentsPage />} />

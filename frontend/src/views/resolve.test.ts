@@ -120,4 +120,54 @@ describe('resolveDefaultView', () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain('multiple views declare defaultRoute');
   });
+
+  // dw8 — `needs-you` is a frontend-only resolver alias (not a wire-level
+  // descriptor synonym, per the architect's plan-review C1). The alias
+  // points `/` at `/maintainer?view=needs-you` when the target maintainer
+  // view is enabled; otherwise it falls through with a warning, the same
+  // shape as unknown/disabled DEFAULT_VIEW.
+  describe('VIEW_ALIASES — needs-you', () => {
+    it('returns redirectTo when DEFAULT_VIEW=needs-you AND target maintainer view is enabled', () => {
+      const result = resolveDefaultView([core, maintainer], 'needs-you');
+      expect(result.view).toBeNull();
+      expect(result.redirectTo).toBe('/maintainer?view=needs-you');
+      expect(result.source).toBe('env');
+      expect(result.warnings).toEqual([]);
+    });
+
+    it('warns + falls through when needs-you target (maintainer) is DISABLED', () => {
+      const result = resolveDefaultView([core], 'needs-you');
+      expect(result.view).toBeNull();
+      expect(result.redirectTo).toBeUndefined();
+      expect(result.source).toBe('fallback');
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toContain('needs-you');
+    });
+
+    it('does NOT set redirectTo for non-alias defaultView values', () => {
+      const result = resolveDefaultView([core, maintainer, ambient], 'maintainer');
+      expect(result.redirectTo).toBeUndefined();
+      expect(result.view?.id).toBe('maintainer');
+    });
+
+    it('does NOT set redirectTo for descriptor-flag resolution', () => {
+      const result = resolveDefaultView([core, ambient], null);
+      expect(result.redirectTo).toBeUndefined();
+      expect(result.view?.id).toBe('ambient');
+    });
+
+    it('alias precedence: a view with id="needs-you" does NOT shadow the alias', () => {
+      // Pin the JSDoc invariant on `resolve.ts` ("an alias id can never
+      // collide with a view id of the same name"). A future operator who
+      // accidentally names a real view 'needs-you' MUST still get the
+      // alias redirect, not the view's element — otherwise the resolver
+      // would silently land them on a view that just happens to share
+      // the name. Catching this in tests is the only enforcement.
+      const collidingView = fakeView({ id: 'needs-you', kind: 'firstParty', navOrder: 90 });
+      const result = resolveDefaultView([core, maintainer, collidingView], 'needs-you');
+      expect(result.view).toBeNull();
+      expect(result.redirectTo).toBe('/maintainer?view=needs-you');
+      expect(result.source).toBe('env');
+    });
+  });
 });

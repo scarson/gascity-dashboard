@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import type {
   MaintainerTriage,
   TriageItem,
   TriageTierSection,
 } from 'gas-city-dashboard-shared';
+import { filterTierByNeedsYou, NEEDS_YOU_VIEW_PARAM } from './needsYou';
+import { useNow } from '../../../contexts/NowContext';
 import { api } from '../../../api/client';
 import { setCached } from '../../../api/cache';
 import { Button } from '../../../components/Button';
@@ -182,6 +184,13 @@ export function MaintainerPage() {
     () => api.maintainerTriage(),
   );
   const { viewingAs } = useViewingAs();
+  // dw8 — `?view=needs-you` activates the Needs-You composite filter
+  // mode. The query param is the activation surface (R13: no new
+  // route); the mode itself short-circuits some chip rendering and
+  // composes with the surviving chips at filter time.
+  const [searchParams] = useSearchParams();
+  const needsYouMode = searchParams.get('view') === NEEDS_YOU_VIEW_PARAM;
+  const nowMs = useNow();
 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -361,12 +370,40 @@ export function MaintainerPage() {
             <Button size="sm" onClick={toggleNeedsPrOnly}>
               {needsPrOnly ? 'Show all items' : 'Needs PR only'}
             </Button>
-            <Button size="sm" onClick={toggleAwaitingOnly}>
-              {awaitingOnly ? 'Show vetted too' : 'Awaiting triage only'}
-            </Button>
+            {/* dw8 — hide the "Awaiting triage only" chip in needs-you
+                mode. Its intersection with the needs-you predicate is
+                ~empty by PR lifecycle: changes-requested / approved /
+                vetted PRs are all post-vetting, so the chip would
+                routinely produce empty tier sections and confuse the
+                operator. */}
+            {!needsYouMode && (
+              <Button size="sm" onClick={toggleAwaitingOnly}>
+                {awaitingOnly ? 'Show vetted too' : 'Awaiting triage only'}
+              </Button>
+            )}
             <Button size="sm" onClick={() => void handleRefresh()} disabled={refreshing}>
               {refreshing ? 'Refreshing' : 'Refresh from gh'}
             </Button>
+            {needsYouMode && (
+              <Link
+                to="/workflows"
+                className="text-body text-fg-muted normal-case tracking-normal hover:text-fg focus-mark"
+              >
+                ↗ workflows
+              </Link>
+            )}
+            {needsYouMode && (
+              <span
+                role="status"
+                aria-label="Needs you mode"
+                className="text-body text-accent normal-case tracking-normal"
+              >
+                Needs you ·{' '}
+                <Link to="/maintainer" className="underline hover:text-fg focus-mark">
+                  Show all
+                </Link>
+              </span>
+            )}
             <span className="text-fg-muted tnum normal-case tracking-normal">
               {formatDate(new Date())}
             </span>
@@ -392,16 +429,22 @@ export function MaintainerPage() {
                 // tier's actual shape, not the current filter view
                 // (gascity-dashboard-x8q).
                 const counts = countTierByVetted(tier);
+                // dw8 — needs-you predicate applies FIRST so the chip
+                // filters intersect against the already-narrowed set.
+                // The `awaitingOnly` chip is hidden in this mode, but
+                // `needsPrOnly` and `focusBreaking` still compose.
+                const awaitingActive = awaitingOnly && !needsYouMode;
                 let view = tier;
+                if (needsYouMode) view = filterTierByNeedsYou(view, nowMs);
                 if (needsPrOnly) view = filterTierByNeedsPr(view);
-                if (awaitingOnly) view = filterTierByAwaitingTriage(view);
+                if (awaitingActive) view = filterTierByAwaitingTriage(view);
                 // When any filter chip is active the rendered tier is a
                 // subset of the original; surface the unfiltered total so
                 // the header reads "N of M items" rather than an ambiguous
                 // "N items" (gascity-dashboard-3lf). Spread the prop only
                 // when the filter is on — exactOptionalPropertyTypes
                 // forbids passing `undefined` directly.
-                const filterActive = needsPrOnly || awaitingOnly;
+                const filterActive = needsYouMode || needsPrOnly || awaitingActive;
                 const filterProps = filterActive
                   ? {
                       unfilteredItemCount:

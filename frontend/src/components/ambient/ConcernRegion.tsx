@@ -73,27 +73,40 @@ export function ConcernRegion({ rows }: ConcernRegionProps) {
   // affordance). Absence is the calm signal (R6). The reserved height
   // comes from the list element itself, not a placeholder row, so the
   // page layout stays stable across cycles without animating.
+  //
+  // dw8 — the `id="needs-you"` wrapping section provides a fragment
+  // anchor (`/#needs-you`) the operator can deep-link to scroll the
+  // ambient home to the concern region. This is one of the two
+  // discoverability paths called out by R13 (specs/plans/workflow-
+  // observability-prd.md:386-388): fragment anchor (here) +
+  // `/maintainer?view=needs-you` (the filter route). The anchor is
+  // unreachable in deployments that set `DEFAULT_VIEW=needs-you`
+  // (operator never lands on `/`); that is intentional — the two
+  // affordances serve two deployment configurations, not duplicate
+  // paths to the same surface.
   return (
-    <ul
-      className="mt-2 transition-opacity duration-150 ease-out-quart motion-reduce:transition-none"
-      style={{ opacity: rows.length === 0 ? 0 : 1 }}
-      aria-live="polite"
-      data-testid="concern-region"
-    >
-      {rows.map(({ lane, reason }) => (
-        <li key={lane.id} className="text-body text-fg flex items-baseline gap-3">
-          <a
-            href={rowHref(lane)}
-            className="font-medium hover:text-fg focus-mark"
-            data-testid={`concern-row-${lane.id}`}
-          >
-            {laneToken(lane)}
-          </a>
-          <span className="text-label uppercase tracking-wider text-fg-muted">
-            {reasonLabel(reason)}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <section id="needs-you">
+      <ul
+        className="mt-2 transition-opacity duration-150 ease-out-quart motion-reduce:transition-none"
+        style={{ opacity: rows.length === 0 ? 0 : 1 }}
+        aria-live="polite"
+        data-testid="concern-region"
+      >
+        {rows.map(({ lane, reason }) => (
+          <li key={lane.id} className="text-body text-fg flex items-baseline gap-3">
+            <a
+              href={rowHref(lane)}
+              className="font-medium hover:text-fg focus-mark"
+              data-testid={`concern-row-${lane.id}`}
+            >
+              {laneToken(lane)}
+            </a>
+            <span className="text-label uppercase tracking-wider text-fg-muted">
+              {reasonLabel(reason)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
