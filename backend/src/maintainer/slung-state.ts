@@ -83,8 +83,12 @@ export async function writeSlungEntry(
 ): Promise<void> {
   const next = writeChain.then(async () => {
     const current = await readSlungState(statePath);
-    current[key] = entry;
-    await persistAtomic(statePath, current);
+    // Immutable next-state: never mutate the map readSlungState handed
+    // us, so the in-process map snapshot stays a pure read of disk and
+    // a future concurrent reader holding the same reference can't see
+    // a half-written update.
+    const nextState: SlungStateMap = { ...current, [key]: entry };
+    await persistAtomic(statePath, nextState);
   });
   writeChain = next.catch(() => undefined);
   await next;
@@ -97,14 +101,13 @@ export async function purgeSlungKeys(
   if (keys.length === 0) return;
   const next = writeChain.then(async () => {
     const current = await readSlungState(statePath);
-    let mutated = false;
-    for (const k of keys) {
-      if (k in current) {
-        delete current[k];
-        mutated = true;
-      }
-    }
-    if (mutated) await persistAtomic(statePath, current);
+    const toPurge = new Set(keys);
+    // Immutable filter: rebuild the map without the purged keys rather
+    // than `delete`-ing in-place. If nothing matched, skip the write.
+    const filteredEntries = Object.entries(current).filter(([k]) => !toPurge.has(k));
+    if (filteredEntries.length === Object.keys(current).length) return;
+    const nextState: SlungStateMap = Object.fromEntries(filteredEntries);
+    await persistAtomic(statePath, nextState);
   });
   writeChain = next.catch(() => undefined);
   await next;
@@ -120,11 +123,18 @@ async function persistAtomic(statePath: string, state: SlungStateMap): Promise<v
 function isValidStateMap(v: unknown): v is PrenormalizedSlungStateMap {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
   for (const entry of Object.values(v)) {
-    if (typeof entry !== 'object' || entry === null) return false;
-    const e = entry as Partial<SlungState>;
-    if (typeof e.slung_at !== 'string') return false;
-    if (typeof e.target !== 'string') return false;
-    if (e.bead_id !== null && typeof e.bead_id !== 'string') return false;
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false;
+    // gascity-dashboard-smto: use `Record<string, unknown>` + property
+    // probes rather than `as Partial<SlungState>`. The Partial cast
+    // accepts ANY object structurally — its only constraint is that
+    // *present* fields match SlungState, and present fields can also
+    // simply not exist. That hides missing-required-field bugs from
+    // the type system: `e.slung_at` reads as `string | undefined` either
+    // way, so the typeof check is doing all the work. Make that explicit.
+    const e = entry as Record<string, unknown>;
+    if (!('slung_at' in e) || typeof e.slung_at !== 'string') return false;
+    if (!('target' in e) || typeof e.target !== 'string') return false;
+    if (!('bead_id' in e) || (e.bead_id !== null && typeof e.bead_id !== 'string')) return false;
     // gascity-dashboard-oc4l: resolved_session_name is OPTIONAL on disk.
     // Pre-55b entries (written before gascity-dashboard-55b added
     // resolved_session_name persistence) don't carry the field;
@@ -132,12 +142,9 @@ function isValidStateMap(v: unknown): v is PrenormalizedSlungStateMap {
     // downstream consumers see the strict wire shape (string | null).
     // Reject only when the field is present AND neither null nor string —
     // that's a real shape violation, not a legacy file.
-    if (
-      e.resolved_session_name !== undefined &&
-      e.resolved_session_name !== null &&
-      typeof e.resolved_session_name !== 'string'
-    ) {
-      return false;
+    if ('resolved_session_name' in e) {
+      const v = e.resolved_session_name;
+      if (v !== null && typeof v !== 'string') return false;
     }
   }
   return true;
@@ -159,17 +166,21 @@ function normalizeLegacyEntries(
   map: PrenormalizedSlungStateMap,
   statePath: string,
 ): SlungStateMap {
-  const normalized: SlungStateMap = {};
   let migrated = 0;
-  for (const [key, entry] of Object.entries(map)) {
-    if (entry.resolved_session_name === undefined) migrated += 1;
-    normalized[key] = {
-      slung_at: entry.slung_at,
-      target: entry.target,
-      bead_id: entry.bead_id,
-      resolved_session_name: entry.resolved_session_name ?? null,
-    };
-  }
+  const normalized: SlungStateMap = Object.fromEntries(
+    Object.entries(map).map(([key, entry]) => {
+      if (entry.resolved_session_name === undefined) migrated += 1;
+      return [
+        key,
+        {
+          slung_at: entry.slung_at,
+          target: entry.target,
+          bead_id: entry.bead_id,
+          resolved_session_name: entry.resolved_session_name ?? null,
+        },
+      ];
+    }),
+  );
   if (migrated > 0) {
     logWarn(
       LOG_COMPONENT.maintainer,

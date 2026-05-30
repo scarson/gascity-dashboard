@@ -822,6 +822,16 @@ export interface SlungState {
    *
    * Null means the sling succeeded but no running session could be resolved
    * for the target role at write time.
+   *
+   * Stale-after-restart: this field is captured at sling time and never
+   * refreshed. If the resolved session is killed and re-spawned (operator
+   * restart, supervisor crash recovery, role re-pool), the persisted id
+   * may point at a now-dead session. The frontend's `/agents/<id>` route
+   * is expected to fall back gracefully on a 404 — the sling record itself
+   * is intentionally NOT re-resolved on read, because the historical
+   * sling-time mapping is what the operator slung against and re-resolving
+   * would silently rewrite history. Treat this value as "best-known
+   * session at sling time", not "currently live session for the role".
    */
   resolved_session_name: string | null;
 }
