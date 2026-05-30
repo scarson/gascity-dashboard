@@ -799,6 +799,13 @@ function compareLanes(a: WorkflowLane, b: WorkflowLane): number {
 // implementation scanned `issues.map(...).find(...)` for any 'mol-' title,
 // which would silently pick a child bead's title when the root's title
 // didn't match — caught by the multi-issue regression test below.
+//
+// gascity-dashboard-xfb7 (sadp follow-up): closed graph.v2 roots are
+// additionally excluded from the title fallback. Operators retitle roots
+// post-run to descriptive summaries; a closed lane card surfacing a
+// retitled string as the canonical formula is a false attribution. Mirrors
+// the resolveWorkflowFormulaName closed-status guard so the lane card and
+// the run-detail page stay consistent.
 function workflowFormula(
   rootId: string,
   issues: WorkflowIssue[],
@@ -811,7 +818,8 @@ function workflowFormula(
   const root = issues.find((i) => i.id === rootId);
   if (
     stringValue(root?.metadata?.['gc.formula_contract']) === 'graph.v2' &&
-    stringValue(root?.metadata?.['gc.run_target']).length > 0
+    stringValue(root?.metadata?.['gc.run_target']).length > 0 &&
+    root?.status !== 'closed'
   ) {
     const rootTitle = root?.title.trim();
     if (rootTitle && rootTitle.startsWith('mol-')) {

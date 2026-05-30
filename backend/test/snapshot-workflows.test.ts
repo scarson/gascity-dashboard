@@ -347,6 +347,52 @@ describe('buildWorkflowSummary', () => {
     });
   });
 
+  test('xfb7: lane formula stays unavailable for CLOSED graph.v2 root with title fallback', () => {
+    // gascity-dashboard-xfb7: closed graph.v2 roots are the realistic
+    // false-positive surface — operators retitle them post-run. Even when
+    // the root retains its 'mol-*' title and gc.run_target the lane card
+    // must NOT surface the title as the canonical formula; defer instead.
+    const summary = buildWorkflowSummary([
+      issue({
+        id: 'ga-root',
+        title: 'mol-stale-after-rename',
+        issue_type: 'molecule',
+        status: 'closed',
+        metadata: graphWorkflowMetadata({
+          'gc.run_target': '/home/ds/gascity/polecat',
+        }),
+      }),
+    ]);
+
+    assert.equal(summary.lanes.length, 0);
+    assert.equal(summary.historicalLanes.length, 1);
+    assert.deepEqual(summary.historicalLanes[0]!.formula, {
+      status: 'unavailable',
+      error: 'workflow formula unavailable',
+    });
+  });
+
+  test('xfb7: explicit gc.formula on CLOSED root still wins (closed-status guard only gates the fallback)', () => {
+    const summary = buildWorkflowSummary([
+      issue({
+        id: 'ga-root',
+        title: 'investigation: foo bug',
+        issue_type: 'molecule',
+        status: 'closed',
+        metadata: graphWorkflowMetadata({
+          'gc.formula': 'mol-adopt-pr-v2',
+          'gc.run_target': '/home/ds/gascity/polecat',
+        }),
+      }),
+    ]);
+
+    assert.equal(summary.historicalLanes.length, 1);
+    assert.deepEqual(summary.historicalLanes[0]!.formula, {
+      status: 'known',
+      name: 'mol-adopt-pr-v2',
+    });
+  });
+
   test('3vaz: root with mol-* title is used directly (root title, not first-found)', () => {
     const summary = buildWorkflowSummary([
       issue({

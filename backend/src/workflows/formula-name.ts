@@ -34,10 +34,17 @@ export interface ResolvedWorkflowFormulaName {
  * The gate on `gc.run_target` is what keeps the fallback honest: only
  * fully-instantiated runnable roots set both `gc.formula_contract` and
  * `gc.run_target`. Operator-edited descriptive titles on closed roots
- * without a target won't be mis-surfaced as formula names. (Closed
- * graph.v2 roots that DO retain `gc.run_target` are not covered by this
- * guard — see gascity-dashboard-sadp follow-up for tighter heuristics if
- * that case is observed in practice.)
+ * without a target won't be mis-surfaced as formula names.
+ *
+ * gascity-dashboard-xfb7 (sadp follow-up): closed graph.v2 roots are
+ * additionally excluded from the title fallback even when they retain
+ * `gc.run_target`. After a run completes operators sometimes retitle the
+ * root to a descriptive summary (e.g. 'investigation: foo bug'); a closed
+ * run cannot be re-fetched against the supervisor's formula registry to
+ * refute a bad name, so the safer behavior is to defer — return null and
+ * let the consumer render 'unavailable' rather than a false attribution.
+ * Operators can override by setting `gc.formula` in metadata; the
+ * metadata path remains canonical regardless of run state.
  *
  * Returns `{name, source}`, or `null` if neither the explicit key nor the
  * gated title fallback yields one. Callers may layer additional fallbacks
@@ -57,7 +64,8 @@ export function resolveWorkflowFormulaName(
   if (explicit !== undefined) return { name: explicit, source: 'metadata' };
   if (
     meta(root, 'gc.formula_contract') === 'graph.v2' &&
-    meta(root, 'gc.run_target') !== undefined
+    meta(root, 'gc.run_target') !== undefined &&
+    root.status !== 'closed'
   ) {
     const title = root.title.trim();
     if (title.length > 0) return { name: title, source: 'title_fallback' };
