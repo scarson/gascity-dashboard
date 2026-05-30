@@ -6,6 +6,12 @@
 // Comments mark fields that gc supervisor MAY omit; treat them as
 // optional and never assume presence in render code.
 
+// 9yj.1.1: explicit `import type` for names this file references in its
+// own interface bodies. `export type * from './gc-client-types.js'` below
+// re-exports them for downstream consumers but does NOT bring them into
+// THIS file's scope. Lives at the top per the `import/first` lint rule.
+import type { GcSession, IsoTimestamp, SessionId } from './gc-client-types.js';
+
 export type * from './snapshot/types.js';
 export {
   resolveSessionForTarget,
@@ -16,70 +22,20 @@ export * from './workflow-detail.js';
 export type * from './workflow-snapshot.js';
 export * from './links.js';
 export type * from './views.js';
+// 9yj.1.1: gc-client types live in their own file so views.ts can import
+// them without going through this barrel and creating a type-only cycle.
+// External consumers continue to see IsoTimestamp / SessionId / GcSession /
+// GcSessionState / GcSessionList / SlingInput / SlingResponse via this
+// re-export — no API change.
+export type * from './gc-client-types.js';
 
-export type IsoTimestamp = string;
+// BeadId stays here — it's not part of the gc-client subset.
 export type BeadId = string;
-export type SessionId = string;
 
 // ── Sessions ──────────────────────────────────────────────────────────────
-
-export interface GcSession {
-  id: SessionId;
-  template: string;
-  /** Supervisor's tmux/screen session name on disk. Required per OpenAPI
-   *  SessionResponse; present in 73/73 live sessions. */
-  session_name: string;
-  /** Required per OpenAPI SessionResponse; present in 73/73 live sessions. */
-  title: string;
-  alias?: string;
-  state: GcSessionState;
-  /** Set when state transition has a structured reason (e.g. "city-stop"). */
-  reason?: string;
-  /** Human-readable display name from the provider (e.g. "Claude Code"). */
-  display_name?: string;
-  created_at: IsoTimestamp;
-  /** Last time the session emitted activity; only set after first activity. */
-  last_active?: IsoTimestamp;
-  /** Whether a human is currently attached to the tmux session. */
-  attached: boolean;
-  rig?: string;
-  pool?: string;
-  agent_kind?: 'pool' | 'role' | string;
-  /** Process-running state independent of session.state (which is gc-level).
-   *  Required per OpenAPI SessionResponse; present in 73/73 live sessions. */
-  running: boolean;
-  model?: string;
-  context_pct?: number;
-  context_window?: number;
-  /** Coarse activity hint: 'idle' | 'thinking' | 'tool_use' | ... */
-  activity?: string;
-  /** Session provider (e.g. 'codex', 'claude', 'gemini'). Required per
-   *  OpenAPI SessionResponse; present in 73/73 live sessions. */
-  provider: string;
-}
-
-export type GcSessionState =
-  | 'creating'
-  | 'active'
-  | 'asleep'
-  | 'detached'
-  | 'failed'
-  | 'closed'
-  | string;
-
-export interface GcSessionList {
-  items: GcSession[];
-  /** Supervisor's own total count for the requested scope. Required per
-   *  OpenAPI ListBodySessionResponse. */
-  total: number;
-  /** True when the supervisor reports the list is incomplete (one or more
-   *  backends failed during aggregation). Wire shape is `items: null` +
-   *  `partial: true`; the decoder normalizes items to `[]` so consumers
-   *  always have an array, but the degradation signal survives here. */
-  partial?: boolean;
-  /** Human-readable errors from backends that failed during aggregation. */
-  partial_errors?: readonly string[];
-}
+// GcSession, GcSessionState, GcSessionList moved to ./gc-client-types.ts
+// (9yj.1.1) to break a type-only cycle with views.ts. Still exported via
+// the barrel above (`export type * from './gc-client-types.js'`).
 
 // ── Context-window derivation (wj8) ──────────────────────────────────────
 //
@@ -369,32 +325,8 @@ export interface BeadActionRequest {
 // the supervisor's OpenAPI), distinct from the browser↔backend shapes; the
 // GcClient is the only consumer.
 
-/**
- * Body for `POST /v0/city/{city}/sling`. Only `target` is required
- * upstream; `bead` carries the free-text bead body (what the `gc sling
- * <target> <text>` CLI passed positionally). The formula/scope fields are
- * part of the upstream schema but unused by v1 text-only slings — kept off
- * this type until the formula-driven follow-up (bead 6fp) needs them.
- */
-export interface SlingInput {
-  target: string;
-  /** Free-text bead body. */
-  bead?: string;
-}
-
-/**
- * Response from `POST /v0/city/{city}/sling`. `root_bead_id` is the routed
- * bead the dashboard records in slung-state (replaces the `^Slung <id>`
- * stdout parse). Other fields are surfaced by the supervisor but unused
- * here; typed optional so a schema addition upstream doesn't break parsing.
- */
-export interface SlingResponse {
-  root_bead_id?: string;
-  bead?: string;
-  workflow_id?: string;
-  target?: string;
-  status?: string;
-}
+// SlingInput, SlingResponse moved to ./gc-client-types.ts (9yj.1.1).
+// Still exported via the barrel above.
 
 /**
  * Body for `PATCH /v0/city/{city}/bead/{id}` (gascity-dashboard-mq2;

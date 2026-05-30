@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sanitiseTerminalOutput } from './exec.js';
 import type {
   GcAgent,
   GcAgentList,
@@ -538,6 +539,13 @@ export const gcSupervisorDecoders = {
   // gascity-dashboard-hvx: one historical order-run detail. All five fields
   // declared required in OpenAPI; `labels` is `T[] | null` (preserve null so
   // consumers can distinguish "no labels" from "missing field").
+  //
+  // hvx.1: `output` is captured terminal stdout/stderr — the same surface
+  // `fetchTranscript` runs through `sanitiseTerminalOutput`. We apply
+  // sanitisation at the DECODER edge (not the route handler) so any future
+  // route that surfaces this field cannot bypass the contract by forgetting
+  // to call the sanitiser. Defense-in-depth per the Phase-4 security review
+  // on the cleanup wave.
   getOrderHistoryDetail(value: RawSupervisorSchema['OrderHistoryDetailResponse']): GcOrderHistoryDetail {
     return decodeSupervisorPayload(
       z.object({
@@ -545,7 +553,7 @@ export const gcSupervisorDecoders = {
         store_ref: z.string(),
         created_at: z.string(),
         labels: z.array(z.string()).nullable(),
-        output: z.string(),
+        output: z.string().transform(sanitiseTerminalOutput),
       }).passthrough(),
       value,
       'getOrderHistoryDetail',

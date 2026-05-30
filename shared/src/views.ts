@@ -11,7 +11,10 @@
 // `ViewDescriptor` with `LazyExoticComponent<ComponentType>`; backend
 // re-types `BackendModule` with `express.Router`.
 
-import type { SlingInput, SlingResponse, GcSessionList } from './index.js';
+// 9yj.1.1: import directly from the leaf file, NOT from './index.js'. Going
+// through the barrel would re-introduce the type-only cycle this extraction
+// was designed to break (views.ts → index.ts → views.ts).
+import type { SlingInput, SlingResponse, GcSessionList } from './gc-client-types.js';
 
 // ── GcClient seam ────────────────────────────────────────────────────────
 //

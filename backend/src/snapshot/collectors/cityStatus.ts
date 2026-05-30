@@ -138,6 +138,23 @@ export async function collectCityStatus(
     );
   }
 
+  // sd4.1: same degradation signal for the agent roster. Since sd4 made
+  // /agents the authoritative source for sessionsByProvider, a partial
+  // agent list silently produces an under-counted breakdown. Surface the
+  // signal in lockstep with rigsPartial so the operator sees BOTH dimensions
+  // of degradation. Per CLAUDE.md "Don't Swallow Errors".
+  const agentsPartial =
+    agentList.partial === true || (agentList.partial_errors?.length ?? 0) > 0;
+  if (agentsPartial) {
+    const detail = agentList.partial_errors && agentList.partial_errors.length > 0
+      ? agentList.partial_errors.map(sanitizeForLog).join(', ')
+      : 'no detail';
+    logWarn(
+      LOG_COMPONENT.snapshot,
+      `supervisor reported partial agent list (${detail}); sessionsByProvider degraded`,
+    );
+  }
+
   const summary: CityStatusSummary = {
     activeAgents: countActiveAgents(sessions),
     totalAgents: sessions.length,
@@ -154,6 +171,9 @@ export async function collectCityStatus(
   };
   if (rigsPartial) {
     summary.rigsPartial = true;
+  }
+  if (agentsPartial) {
+    summary.agentsPartial = true;
   }
   return summary;
 }
