@@ -26,34 +26,43 @@
 //     undefined`).
 
 /**
- * The superset of optional fields the redaction-layer tests read off
- * `res.body.details`. `name` is the Error-class discriminator
- * `toWireInternal500` always sets; `message` and `stderr` are the
- * fields the tests assert MUST be absent (forbidden raw err.message /
- * raw subprocess stderr). Keeping the shape a superset lets a single
- * helper serve every site without per-call generics.
+ * The fields the redaction-layer tests read off `res.body.details`.
+ * `name` is the Error-class discriminator `toWireInternal500` always
+ * sets and every redaction site asserts on — it is REQUIRED, so a
+ * wire change that drops it is a compile-time error at the consumer
+ * rather than a runtime `assert.equal(undefined, 'NonZeroExit')`.
+ * `message` and `stderr` are the fields the tests assert MUST be
+ * absent (forbidden raw err.message / raw subprocess stderr).
+ * Keeping the shape a superset lets a single helper serve every site
+ * without per-call generics.
  */
 export interface WireDetails {
-  name?: string;
+  name: string;
   message?: string;
   stderr?: string;
 }
 
 /**
- * Pure object-shape check. Rejects null, arrays, and primitives.
- * `typeof [] === 'object'` so the Array.isArray guard is load-bearing.
+ * Object-shape + discriminator check. Rejects null, arrays, and
+ * primitives (`typeof [] === 'object'` so the Array.isArray guard is
+ * load-bearing); also rejects objects missing a string `name` so the
+ * `value is WireDetails` predicate is sound at runtime — a type
+ * predicate that doesn't enforce its claims is a lie.
  */
 export function isWireDetails(value: unknown): value is WireDetails {
-  return (
-    typeof value === 'object' && value !== null && !Array.isArray(value)
-  );
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const name = (value as { name?: unknown }).name;
+  return typeof name === 'string';
 }
 
 /**
  * Assertion variant: throws AssertionError with a descriptive message
  * naming what was actually received, so a regression that flips
- * `details` to a string or drops it entirely fails at the contract
- * boundary instead of at the next property read.
+ * `details` to a string, drops it entirely, or drops the `name`
+ * discriminator fails at the contract boundary instead of at the
+ * next property read.
  */
 export function assertWireDetails(
   value: unknown,
@@ -64,9 +73,11 @@ export function assertWireDetails(
         ? 'null'
         : Array.isArray(value)
           ? 'array'
-          : typeof value;
+          : typeof value === 'object'
+            ? `object missing string \`name\` (got ${typeof (value as { name?: unknown }).name})`
+            : typeof value;
     throw new Error(
-      `expected wire details to be a plain object, got ${kind}`,
+      `expected wire details to be a plain object with a string \`name\`, got ${kind}`,
     );
   }
 }

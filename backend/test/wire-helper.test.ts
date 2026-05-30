@@ -22,7 +22,7 @@ import {
 } from './helpers/wire.js';
 
 describe('assertWireDetails', () => {
-  test('narrows a plain object so optional fields are readable', () => {
+  test('narrows a plain object with a string `name` so all fields are readable', () => {
     const v: unknown = { name: 'NonZeroExit' };
     assertWireDetails(v);
     // After the assertion, TS knows v is WireDetails. Read fields directly.
@@ -31,10 +31,21 @@ describe('assertWireDetails', () => {
     assert.equal(v.stderr, undefined);
   });
 
-  test('accepts an empty object — optional fields are all absent', () => {
-    const v: unknown = {};
-    assertWireDetails(v);
-    assert.equal(v.name, undefined);
+  test('throws on an object missing the required `name` discriminator (gascity-dashboard-brx.1)', () => {
+    // The whole point of the brx.1 tightening: a wire change that drops
+    // `details.name` (the Error-class discriminator every redaction site
+    // asserts on) must fail loudly at the contract boundary, not deep
+    // inside `assert.equal(undefined, 'NonZeroExit')`.
+    assert.throws(() => assertWireDetails({}), /wire details/i);
+    assert.throws(() => assertWireDetails({ stderr: 'leak' }), /wire details/i);
+  });
+
+  test('throws on an object whose `name` is not a string', () => {
+    // Soundness: the type predicate says `name: string`, so the runtime
+    // guard must reject non-string `name` values too — otherwise the
+    // type is a lie.
+    assert.throws(() => assertWireDetails({ name: 42 }), /wire details/i);
+    assert.throws(() => assertWireDetails({ name: null }), /wire details/i);
   });
 
   test('throws on undefined', () => {
@@ -61,7 +72,7 @@ describe('assertWireDetails', () => {
 });
 
 describe('isWireDetails', () => {
-  test('returns true for a plain object', () => {
+  test('returns true for a plain object carrying a string `name`', () => {
     const v: unknown = { name: 'NonZeroExit', stderr: 'foo' };
     assert.equal(isWireDetails(v), true);
     if (isWireDetails(v)) {
@@ -70,8 +81,14 @@ describe('isWireDetails', () => {
     }
   });
 
-  test('returns true for an empty object', () => {
-    assert.equal(isWireDetails({}), true);
+  test('returns false for an object missing the required `name` (gascity-dashboard-brx.1)', () => {
+    assert.equal(isWireDetails({}), false);
+    assert.equal(isWireDetails({ stderr: 'leak' }), false);
+  });
+
+  test('returns false for non-string `name`', () => {
+    assert.equal(isWireDetails({ name: 42 }), false);
+    assert.equal(isWireDetails({ name: null }), false);
   });
 
   test('returns false for undefined / null / primitive / array', () => {
