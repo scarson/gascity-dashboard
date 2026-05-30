@@ -7,7 +7,7 @@ import type { ExecResult } from '../exec.js';
 import { recordAudit } from '../audit.js';
 import { GcClient } from '../gc-client.js';
 import { toWireExecError } from '../lib/sanitise-error.js';
-import { LOG_COMPONENT, logWarn } from '../logging.js';
+import { LOG_COMPONENT, logWarn, sanitizeForLog } from '../logging.js';
 import {
   routeInternalError,
   routeUpstreamError,
@@ -85,13 +85,23 @@ export function agentsRouter(opts: AgentsRouterOptions | string = {}): Router {
     }
     try {
       const { items, partial, partial_errors } = await gc.listAgents();
+      // Apply `sanitizeForLog` to supervisor-supplied error strings before
+      // they cross the browser boundary. The cityStatus collector
+      // (snapshot/collectors/cityStatus.ts) already sanitizes the same
+      // signal before writing it to the operator log; doing it here keeps
+      // the convention consistent and forecloses on a future supervisor
+      // version embedding filesystem paths or internal hostnames in
+      // `partial_errors`. Backend binds 127.0.0.1 only today, so this is
+      // defense-in-depth — but the rule "don't ship raw supervisor
+      // strings through the wire" survives a later topology change.
+      const sanitizedErrors = partial_errors?.map(sanitizeForLog);
       const body: {
         items: typeof items;
         partial?: boolean;
         partial_errors?: readonly string[];
       } = { items };
       if (partial !== undefined) body.partial = partial;
-      if (partial_errors !== undefined) body.partial_errors = partial_errors;
+      if (sanitizedErrors !== undefined) body.partial_errors = sanitizedErrors;
       res.json(body);
     } catch (err) {
       writeRouteError(res, routeUpstreamError(err, {

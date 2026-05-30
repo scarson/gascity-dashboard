@@ -1,5 +1,5 @@
 import type {
-  GcAgent,
+  GcAgentList,
   GcSession,
   GcBead,
   GcMailItem,
@@ -106,14 +106,10 @@ export const api = {
   },
   // gascity-dashboard-ay6: canonical agent roster. Supersedes the
   // session-derived Agents-view path which under-counted configured
-  // agents that were not currently running. `partial` + `partial_errors`
-  // mirror the supervisor's degraded-list signal so the UI can surface
-  // upstream failures distinctly from "no agents".
-  listAgents(): Promise<{
-    items: GcAgent[];
-    partial?: boolean;
-    partial_errors?: readonly string[];
-  }> {
+  // agents that were not currently running. Return type IS the shared
+  // GcAgentList SSOT — `partial` + `partial_errors` are part of that
+  // type and will widen automatically if upstream grows the envelope.
+  listAgents(): Promise<GcAgentList> {
     return request('GET', '/api/agents');
   },
   peekSession(id: string): Promise<TranscriptResult> {

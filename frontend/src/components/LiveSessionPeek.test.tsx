@@ -1,8 +1,9 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GcSession, TranscriptResult } from 'gas-city-dashboard-shared';
+import type { GcAgent, GcSession, TranscriptResult } from 'gas-city-dashboard-shared';
 import {
   LiveSessionPeek,
+  isAgentStreamable,
   isSessionStreamable,
   streamBadge,
 } from './LiveSessionPeek';
@@ -70,6 +71,29 @@ function session(overrides: Partial<GcSession>): GcSession {
   return { id: 's1', state: 'active', ...overrides } as GcSession;
 }
 
+// gascity-dashboard-ay6 / Phase-4 follow-up: minimal GcAgent factory for
+// the isAgentStreamable boundary tests. Matches the shape AgentSchema
+// emits (name + state + optional session/running). Cast through unknown
+// because GcAgent carries a wider set of fields than the boundary cares
+// about and we don't want a per-test ceremony to fill them.
+function agent(overrides: Partial<GcAgent> & { sessionPresent?: boolean }): GcAgent {
+  const { sessionPresent, ...rest } = overrides;
+  // Build the session field conditionally so exactOptionalPropertyTypes
+  // doesn't complain about a `session: undefined` assignment when no
+  // session is requested. Spreading is the idiom that satisfies the
+  // strict optionality contract.
+  const sessionField = sessionPresent && !('session' in rest)
+    ? { session: { name: 's1', last_activity: '2026-05-29T00:00:00Z' } as NonNullable<GcAgent['session']> }
+    : {};
+  return {
+    name: 'a1',
+    state: 'asleep',
+    running: false,
+    ...rest,
+    ...sessionField,
+  } as GcAgent;
+}
+
 describe('streamBadge', () => {
   it('maps each connection state to a tone + label', () => {
     expect(streamBadge('open')).toEqual({ tone: 'ok', label: 'live' });
@@ -89,11 +113,45 @@ describe('isSessionStreamable', () => {
   it('is true when the gc state is active', () => {
     expect(isSessionStreamable(session({ state: 'active', running: false }))).toBe(true);
   });
-  it("is true when the gc state is 'running' (aligns with SESSION_CHIPS)", () => {
+  it("is true when the gc state is 'running' (aligns with AGENT_CHIPS)", () => {
     expect(isSessionStreamable(session({ state: 'running', running: false }))).toBe(true);
   });
   it('is false for a non-running, non-active session', () => {
     expect(isSessionStreamable(session({ state: 'asleep', running: false }))).toBe(false);
+  });
+});
+
+describe('isAgentStreamable', () => {
+  it('is false for null', () => {
+    expect(isAgentStreamable(null)).toBe(false);
+  });
+  it('is false for an orphan agent (no session) even when state/running say active', () => {
+    // The session guard is load-bearing: even a fully-active agent with
+    // no session has nothing to stream from. This is the H2/M2 invariant
+    // the Phase-4 review flagged as untested.
+    expect(
+      isAgentStreamable(agent({ state: 'active', running: true })),
+    ).toBe(false);
+  });
+  it('is true when the agent has a session AND running=true', () => {
+    expect(
+      isAgentStreamable(agent({ state: 'asleep', running: true, sessionPresent: true })),
+    ).toBe(true);
+  });
+  it('is true when the agent has a session AND gc state is active', () => {
+    expect(
+      isAgentStreamable(agent({ state: 'active', running: false, sessionPresent: true })),
+    ).toBe(true);
+  });
+  it("is true when the agent has a session AND gc state is 'running'", () => {
+    expect(
+      isAgentStreamable(agent({ state: 'running', running: false, sessionPresent: true })),
+    ).toBe(true);
+  });
+  it('is false for a resting agent with a session (asleep + not running)', () => {
+    expect(
+      isAgentStreamable(agent({ state: 'asleep', running: false, sessionPresent: true })),
+    ).toBe(false);
   });
 });
 

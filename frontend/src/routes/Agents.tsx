@@ -59,27 +59,44 @@ const SORT_OPTIONS: ReadonlyArray<{ id: SortMode; label: string }> = [
 // match at least one chip — otherwise agents in that state vanish silently
 // when any chip is active (parallels gascity-dashboard-9yb's invariant for
 // sessions). Exported so tests can assert full state coverage.
+// Non-suspended chips all gate on `!a.suspended` so the chip filter
+// matches `stateBucket`'s priority order — `stateBucket` returns
+// 'suspended' before checking state, so a suspended-asleep agent is
+// counted in the suspended bucket only. Without the guard, the idle
+// chip would also surface suspended-asleep agents and the operator's
+// "what's idle?" filter would be over-broad. Same reasoning applies
+// to running/detached/stopped (a suspended agent that also reads as
+// running/detached/stopped via raw state should still only count as
+// suspended).
 export const AGENT_CHIPS: ReadonlyArray<FilterChip<GcAgent>> = [
   {
     id: 'running',
     label: 'running',
-    match: (a) => a.state === 'active' || a.state === 'running' || a.running === true,
+    match: (a) =>
+      !a.suspended &&
+      (a.state === 'active' || a.state === 'running' || a.running === true),
   },
   {
     id: 'idle',
     label: 'idle',
-    match: (a) => a.state === 'asleep' || a.state === 'idle' || a.state === 'creating',
+    match: (a) =>
+      !a.suspended &&
+      (a.state === 'asleep' || a.state === 'idle' || a.state === 'creating'),
   },
   {
     id: 'detached',
     label: 'detached',
-    match: (a) => a.state === 'detached',
+    match: (a) => !a.suspended && a.state === 'detached',
   },
   {
     id: 'stopped',
     label: 'stopped',
     match: (a) =>
-      a.state === 'failed' || a.state === 'closed' || a.state === 'errored' || a.state === 'stuck',
+      !a.suspended &&
+      (a.state === 'failed' ||
+        a.state === 'closed' ||
+        a.state === 'errored' ||
+        a.state === 'stuck'),
   },
   {
     id: 'suspended',
@@ -279,6 +296,20 @@ export function AgentsPage() {
             {error && (
               <span className="normal-case text-body text-accent" role="alert">
                 {error}
+              </span>
+            )}
+            {/* Mirror cityStatus's `rigsPartial` surfacing (gascity-dashboard-19w.1).
+                When the supervisor's agent aggregation partially failed
+                (one or more agent backends unreachable), the items list
+                is incomplete — call that out so the operator doesn't
+                read an empty/short roster as "everything's gone." */}
+            {data?.partial === true && (
+              <span
+                className="normal-case text-body text-warn"
+                role="status"
+                title={data.partial_errors?.join('\n') ?? 'one or more agent backends unavailable'}
+              >
+                roster partial
               </span>
             )}
             <Button size="sm" onClick={() => void refresh()} disabled={loading}>
