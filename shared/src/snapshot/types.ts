@@ -97,6 +97,16 @@ export interface CityStatusSummary {
   maxSessions: DashboardMetric;
   sessionsByProvider: CitySessionProvider[];
   rigs: CityRig[];
+  /**
+   * True when the supervisor's listRigs response was degraded
+   * (one or more rig backends failed during aggregation; signalled by
+   * GcRigList.partial === true or non-empty partial_errors). Optional —
+   * absent on a clean response. gascity-dashboard-19w.1: mirrors the
+   * partial-handling convention in backend/src/routes/links.ts and
+   * routes/mail.ts so operators see a degraded indicator instead of
+   * an apparent "no rigs configured" report.
+   */
+  rigsPartial?: boolean;
 }
 
 export interface CitySessionProvider {
