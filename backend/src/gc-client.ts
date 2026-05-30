@@ -5,9 +5,13 @@ import type {
   GcBead,
   GcBeadList,
   GcFormulaRunList,
+  GcFormulaRunsResponse,
   GcMailList,
   GcEventList,
   GcFormulaDetail,
+  GcOrderHistoryDetail,
+  GcOrderHistoryList,
+  GcOrdersFeedResponse,
   GcRigList,
   GcWorkflowSnapshot,
   SlingInput,
@@ -60,9 +64,13 @@ const SUPERVISOR_PATHS = {
   events: '/v0/city/{cityName}/events',
   eventsStream: '/v0/city/{cityName}/events/stream',
   formulaDetail: '/v0/city/{cityName}/formulas/{name}',
+  formulaRuns: '/v0/city/{cityName}/formulas/{name}/runs',
   formulasFeed: '/v0/city/{cityName}/formulas/feed',
   health: '/v0/city/{cityName}/health',
   mail: '/v0/city/{cityName}/mail',
+  orderHistoryDetail: '/v0/city/{cityName}/order/history/{bead_id}',
+  ordersFeed: '/v0/city/{cityName}/orders/feed',
+  ordersHistory: '/v0/city/{cityName}/orders/history',
   rigs: '/v0/city/{cityName}/rigs',
   sessionStream: '/v0/city/{cityName}/session/{id}/stream',
   sessions: '/v0/city/{cityName}/sessions',
@@ -572,6 +580,155 @@ export class GcClient {
         signal: upstreamSignal,
       }),
       signal,
+    );
+  }
+
+  // ── hvx: formula/order run history feeds ────────────────────────────
+  //
+  // These four methods mirror the supervisor's per-formula and order
+  // history endpoints. They have no consumer in the dashboard today; they
+  // pin the GcClient boundary so future formula-detail / orders pages
+  // don't reinvent the decoder edge or duplicate scope+pagination
+  // handling. Aligned with the existing listFormulaRuns (ej9y) pattern
+  // for the cross-formula feed.
+  //
+  // SD4 coexistence: kept under a single named region so a parallel
+  // worktree adding sibling methods to this class can merge into a
+  // distinct block (or below) without textual conflict.
+
+  /**
+   * `GET /v0/city/{name}/formulas/{name}/runs` — recent runs for one named
+   * formula (e.g. 'mol-adopt-pr-v2'). Distinct from `listFormulaRuns`
+   * (the cross-formula `/formulas/feed`). Used by future formula-detail
+   * pages and any reporting surface that needs per-formula history.
+   * `scope` is optional in the supervisor's OpenAPI but always passed
+   * here — runs are scope-keyed and unscoped requests return the city's
+   * default scope, which is not what consumers reading a formula's
+   * history want. `limit` accepts 0 to mean "supervisor default".
+   */
+  async listFormulaRunsByName(
+    formulaName: string,
+    scope: { scopeKind: WorkflowScopeKind; scopeRef: string },
+    options: { limit?: number; signal?: AbortSignal } = {},
+  ): Promise<GcFormulaRunsResponse> {
+    const query: { scope_kind: string; scope_ref: string; limit?: number } = {
+      scope_kind: scope.scopeKind,
+      scope_ref: scope.scopeRef,
+    };
+    if (options.limit !== undefined) query.limit = options.limit;
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.formulaRuns, [
+        formulaName,
+        scope.scopeKind,
+        scope.scopeRef,
+        options.limit,
+      ]),
+      gcSupervisorDecoders.listFormulaRunsByName,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.formulaRuns, {
+        params: {
+          path: { ...this.cityPathParams(), name: formulaName },
+          query,
+        },
+        signal: upstreamSignal,
+      }),
+      options.signal,
+    );
+  }
+
+  /**
+   * `GET /v0/city/{name}/orders/feed` — currently-active order runs (the
+   * supervisor's recurring-job feed). Per-item shape is the same
+   * `MonitorFeedItemResponse` as `/formulas/feed`; `type` discriminates
+   * (`'order'` vs `'formula'`). Scope is optional — omitting it asks the
+   * supervisor for the city-wide feed.
+   */
+  async listOrdersFeed(
+    options: {
+      scope?: { scopeKind: WorkflowScopeKind; scopeRef: string };
+      limit?: number;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<GcOrdersFeedResponse> {
+    const query: { scope_kind?: string; scope_ref?: string; limit?: number } = {};
+    if (options.scope !== undefined) {
+      query.scope_kind = options.scope.scopeKind;
+      query.scope_ref = options.scope.scopeRef;
+    }
+    if (options.limit !== undefined) query.limit = options.limit;
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.ordersFeed, [
+        options.scope?.scopeKind,
+        options.scope?.scopeRef,
+        options.limit,
+      ]),
+      gcSupervisorDecoders.listOrdersFeed,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.ordersFeed, {
+        params: { path: this.cityPathParams(), query },
+        signal: upstreamSignal,
+      }),
+      options.signal,
+    );
+  }
+
+  /**
+   * `GET /v0/city/{name}/orders/history?scoped_name=<...>` — full history
+   * for one named order. `scopedName` is the supervisor's scoped form
+   * (e.g. `'city:check-mail'` or `'rig:gascity:check-mail'`); the
+   * unscoped `name` alone is not enough because two rigs may register the
+   * same order. `before` is an RFC3339 timestamp pagination cursor;
+   * `limit=0` asks the supervisor for its default.
+   */
+  async listOrderHistory(
+    scopedName: string,
+    options: { limit?: number; before?: string; signal?: AbortSignal } = {},
+  ): Promise<GcOrderHistoryList> {
+    const query: { scoped_name: string; limit?: number; before?: string } = {
+      scoped_name: scopedName,
+    };
+    if (options.limit !== undefined) query.limit = options.limit;
+    if (options.before !== undefined) query.before = options.before;
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.ordersHistory, [
+        scopedName,
+        options.limit,
+        options.before,
+      ]),
+      gcSupervisorDecoders.listOrderHistory,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.ordersHistory, {
+        params: { path: this.cityPathParams(), query },
+        signal: upstreamSignal,
+      }),
+      options.signal,
+    );
+  }
+
+  /**
+   * `GET /v0/city/{name}/order/history/{bead_id}` — single historical
+   * order-run detail (captured output + labels). `storeRef` is optional
+   * but recommended: bead IDs are store-local, so without `store_ref` the
+   * supervisor disambiguates against the city store by default and can
+   * 404 on rig-stored runs.
+   */
+  async getOrderHistoryDetail(
+    beadId: string,
+    options: { storeRef?: string; signal?: AbortSignal } = {},
+  ): Promise<GcOrderHistoryDetail> {
+    const query: { store_ref?: string } = {};
+    if (options.storeRef !== undefined) query.store_ref = options.storeRef;
+    return this.getOperation(
+      this.operationKey(SUPERVISOR_PATHS.orderHistoryDetail, [
+        beadId,
+        options.storeRef,
+      ]),
+      gcSupervisorDecoders.getOrderHistoryDetail,
+      (upstreamSignal) => this.supervisor.GET(SUPERVISOR_PATHS.orderHistoryDetail, {
+        params: {
+          path: { ...this.cityPathParams(), bead_id: beadId },
+          query,
+        },
+        signal: upstreamSignal,
+      }),
+      options.signal,
     );
   }
 

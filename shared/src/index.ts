@@ -701,6 +701,132 @@ export interface GcFormulaRunList {
   partial_errors?: readonly string[];
 }
 
+// ── Supervisor formula/order run-history feeds (gascity-dashboard-hvx) ───
+//
+// The supervisor exposes per-formula run history, order feeds, and per-order
+// run history alongside the cross-rig /formulas/feed already used by the
+// workflows collector. These wire shapes mirror the supervisor's
+// FormulaRunsResponse / OrdersFeedBody / OrderHistoryListBody /
+// OrderHistoryDetailResponse so consumers can read run history from the
+// supervisor's authoritative source instead of deriving it from the flat
+// bead list. Aligned with the editorial-typographic ambient dashboard's
+// SSOT contract: shapes here ⊆ supervisor OpenAPI, and the decoder edge
+// validates each field.
+
+/** One entry from FormulaRunsResponse.recent_runs — minimal per-run summary. */
+export interface GcFormulaRecentRun {
+  /** Workflow root bead id of the run. */
+  workflow_id: string;
+  /** Absolute workspace path the formula was operating on. */
+  target: string;
+  /** Lifecycle status (e.g. `'pending'`, `'in_progress'`, `'done'`). */
+  status: string;
+  started_at: IsoTimestamp;
+  updated_at: IsoTimestamp;
+}
+
+/**
+ * Mirrors `GET /v0/city/<city>/formulas/{name}/runs` — recent runs for one
+ * named formula. Distinct from `GcFormulaRunList` (the cross-formula
+ * `/formulas/feed`) — this endpoint is keyed by formula name and is the
+ * source-of-truth for a formula's own run history page.
+ */
+export interface GcFormulaRunsResponse {
+  /** Formula name the run list was queried for. */
+  formula: string;
+  /** Total runs the supervisor knows about for this formula (may exceed
+   *  `recent_runs.length` when `limit` is in effect). */
+  run_count: number;
+  /** Most-recent first; bounded by the `limit` query param. */
+  recent_runs: GcFormulaRecentRun[];
+  /** True when one or more backends failed during aggregation. Wire shape
+   *  may carry `recent_runs: null` + `partial: true`; the decoder
+   *  normalizes `recent_runs` to `[]` so consumers always have an array.
+   *  Required (not optional) because the supervisor's OpenAPI declares
+   *  `FormulaRunsResponse.partial` as required `boolean`. */
+  partial: boolean;
+  /** Human-readable errors from backends that failed during aggregation. */
+  partial_errors?: readonly string[];
+}
+
+/**
+ * Mirrors `GET /v0/city/<city>/orders/feed` — currently-active order runs
+ * across the city. The supervisor reuses `MonitorFeedItemResponse` (the
+ * same per-item shape as `formulas/feed`), so the dashboard reuses
+ * `GcFormulaRun` for items — each item's `type` discriminates
+ * (`'formula'` vs `'order'`) so consumers can filter when both feeds
+ * surface mixed traffic.
+ */
+export interface GcOrdersFeedResponse {
+  items: GcFormulaRun[];
+  /** True when one or more backends failed during aggregation. Wire shape
+   *  may carry `items: null` + `partial: true`; the decoder normalizes
+   *  `items` to `[]` so consumers always have an array. Required because
+   *  the supervisor's OpenAPI declares `OrdersFeedBody.partial` as
+   *  required `boolean` (mirrors `FormulaFeedBody`). */
+  partial: boolean;
+  partial_errors?: readonly string[];
+}
+
+/**
+ * One entry from `OrderHistoryListBody.entries` — one historical run of a
+ * scheduled/triggered order. Mirrors the supervisor's `OrderHistoryEntry`
+ * schema. `duration_ms` / `exit_code` / `signal` are strings on the wire
+ * (the supervisor formats numerics for downstream consumers); leave them
+ * as-is rather than parse at the edge so the SSOT shape ⊆ supervisor
+ * exactly.
+ */
+export interface GcOrderHistoryEntry {
+  /** Root bead id for the order run; deep-link key for `/order/history/{bead_id}`. */
+  bead_id: string;
+  /** Order name (unscoped). */
+  name: string;
+  /** Scoped order name (e.g. `'city:check-mail'` or `'rig:gascity:check-mail'`). */
+  scoped_name: string;
+  created_at: IsoTimestamp;
+  capture_output: boolean;
+  has_output: boolean;
+  /** `null` when the supervisor returns no labels (wire emits `null` rather
+   *  than `[]`); the decoder preserves this — see partial-vs-empty
+   *  semantics. */
+  labels: readonly string[] | null;
+  store_ref: string;
+  duration_ms?: string;
+  exit_code?: string;
+  signal?: string;
+  error?: string;
+  rig?: string;
+  wisp_root_id?: string;
+}
+
+/**
+ * Mirrors `GET /v0/city/<city>/orders/history?scoped_name=<...>` — the full
+ * history of one named order. The supervisor wraps the entries in a single
+ * envelope. Unlike the other List* bodies in this surface, the supervisor's
+ * `OrderHistoryListBody` does NOT carry `partial` / `partial_errors` /
+ * `total` — surfacing only the entries array.
+ */
+export interface GcOrderHistoryList {
+  entries: GcOrderHistoryEntry[];
+}
+
+/**
+ * Mirrors `GET /v0/city/<city>/order/history/{bead_id}` — full detail for
+ * one historical order run, including its captured output. The wire shape
+ * is `OrderHistoryDetailResponse`. `output` is the captured stdout/stderr
+ * concatenation as emitted by the supervisor.
+ */
+export interface GcOrderHistoryDetail {
+  bead_id: string;
+  store_ref: string;
+  created_at: IsoTimestamp;
+  /** `null` when the supervisor returns no labels (wire emits `null`); the
+   *  decoder preserves this so consumers can distinguish "no labels" from
+   *  "unknown". */
+  labels: readonly string[] | null;
+  output: string;
+}
+
 // ── Admin-dashboard internal API responses ───────────────────────────────
 
 /** Wrapped error returned by the backend on any 4xx/5xx. */
