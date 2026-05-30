@@ -13,19 +13,31 @@ import {
   workflowBeadFilter,
 } from '../src/snapshot/collectors/workflows.js';
 import type { WorkflowIssue } from '../src/snapshot/collectors/phaseMapping.js';
+import type { GcClient } from '../src/gc-client.js';
+
+// mfb9.1: the cache's `gc` input is GcClient, but tests only need to
+// stub a subset of the surface the collector actually calls
+// (listBeads, listFormulaRuns, cityName). A bare `as never` cast
+// suppressed ALL signature checking on the mock object and hid the
+// mfb9 H1 finding. Picking the used methods (and Partial-ing so each
+// test can omit ones its code path doesn't exercise) restores
+// compile-time signature checking on every property a mock DOES set,
+// while keeping the final widen-to-GcClient explicit at the call site.
+type GcClientMock = Partial<Pick<GcClient, 'listBeads' | 'listFormulaRuns' | 'cityName'>>;
 
 // Lane builder + filter + cache tests for the workflows collector
 // (gascity-dashboard-0t6). Ported from demo-dash's workflows.test.ts
 // where applicable; gascity-specific additions cover the filter rules
 // (C1 in plan review) and the error pass-through contract (H5).
 
+// 6bv7 F16: OpenAPI Bead exposes no updated_at — fixtures use created_at
+// for time-based ordering instead.
 const baseGcBead = {
   description: '',
   status: 'open',
   issue_type: 'task',
   priority: 2,
   created_at: '2026-05-10T19:00:00Z',
-  updated_at: '2026-05-10T20:00:00Z',
   metadata: {},
 } satisfies Partial<GcBead>;
 
@@ -133,14 +145,15 @@ describe('workflowBeadFilter', () => {
 // ── fromGcBead adapter ────────────────────────────────────────────────────
 
 describe('fromGcBead', () => {
-  test('maps standard fields verbatim, falls back to created_at when updated_at is absent', () => {
+  test('maps standard fields verbatim, sourcing updated_at from created_at', () => {
+    // 6bv7 F16: OpenAPI Bead has no updated_at field; the adapter sources
+    // its WorkflowIssue.updated_at slot from created_at directly now.
     const source = gcBead({
       id: 'a',
       title: 'Implement',
       assignee: 'alice',
       metadata: { foo: 'bar' },
     });
-    delete source.updated_at;
 
     const adapted = fromGcBead(source);
     assert.equal(adapted.id, 'a');
@@ -344,6 +357,52 @@ describe('buildWorkflowSummary', () => {
     assert.deepEqual(summary.lanes[0]!.formula, {
       status: 'unavailable',
       error: 'workflow formula unavailable',
+    });
+  });
+
+  test('xfb7: lane formula stays unavailable for CLOSED graph.v2 root with title fallback', () => {
+    // gascity-dashboard-xfb7: closed graph.v2 roots are the realistic
+    // false-positive surface — operators retitle them post-run. Even when
+    // the root retains its 'mol-*' title and gc.run_target the lane card
+    // must NOT surface the title as the canonical formula; defer instead.
+    const summary = buildWorkflowSummary([
+      issue({
+        id: 'ga-root',
+        title: 'mol-stale-after-rename',
+        issue_type: 'molecule',
+        status: 'closed',
+        metadata: graphWorkflowMetadata({
+          'gc.run_target': '/home/ds/gascity/polecat',
+        }),
+      }),
+    ]);
+
+    assert.equal(summary.lanes.length, 0);
+    assert.equal(summary.historicalLanes.length, 1);
+    assert.deepEqual(summary.historicalLanes[0]!.formula, {
+      status: 'unavailable',
+      error: 'workflow formula unavailable',
+    });
+  });
+
+  test('xfb7: explicit gc.formula on CLOSED root still wins (closed-status guard only gates the fallback)', () => {
+    const summary = buildWorkflowSummary([
+      issue({
+        id: 'ga-root',
+        title: 'investigation: foo bug',
+        issue_type: 'molecule',
+        status: 'closed',
+        metadata: graphWorkflowMetadata({
+          'gc.formula': 'mol-adopt-pr-v2',
+          'gc.run_target': '/home/ds/gascity/polecat',
+        }),
+      }),
+    ]);
+
+    assert.equal(summary.historicalLanes.length, 1);
+    assert.deepEqual(summary.historicalLanes[0]!.formula, {
+      status: 'known',
+      name: 'mol-adopt-pr-v2',
     });
   });
 
@@ -1046,7 +1105,7 @@ describe('createWorkflowsSourceCache', () => {
           }
           assert.fail(`unexpected listBeads params: ${JSON.stringify(params)}`);
         },
-      } as never,
+      } satisfies GcClientMock as unknown as GcClient,
       limit: 77,
     });
 
@@ -1102,7 +1161,7 @@ describe('createWorkflowsSourceCache', () => {
           }
           return { items: [], total: 0 };
         },
-      } as never,
+      } satisfies GcClientMock as unknown as GcClient,
       limit: 77,
     });
 
@@ -1233,7 +1292,7 @@ describe('createWorkflowsSourceCache', () => {
           };
         },
         cityName: 'ds-research',
-      } as never,
+      } satisfies GcClientMock as unknown as GcClient,
       limit: 1000,
     });
 
@@ -1292,7 +1351,7 @@ describe('createWorkflowsSourceCache', () => {
           throw new Error('simulated feed outage');
         },
         cityName: 'test',
-      } as never,
+      } satisfies GcClientMock as unknown as GcClient,
       limit: 1000,
     });
 
@@ -1363,7 +1422,7 @@ describe('createWorkflowsSourceCache', () => {
           partial: false,
         }),
         cityName: 'test',
-      } as never,
+      } satisfies GcClientMock as unknown as GcClient,
       limit: 1000,
     });
 
@@ -1439,7 +1498,7 @@ describe('createWorkflowsSourceCache', () => {
           partial: false,
         }),
         cityName: 'ds-research',
-      } as never,
+      } satisfies GcClientMock as unknown as GcClient,
       limit: 1000,
     });
 
@@ -1515,7 +1574,7 @@ describe('createWorkflowsSourceCache', () => {
           partial: false,
         }),
         cityName: 'ds-research',
-      } as never,
+      } satisfies GcClientMock as unknown as GcClient,
       limit: 1000,
     });
 

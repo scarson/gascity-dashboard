@@ -168,12 +168,16 @@ describe('reviewRoundForIssue', () => {
   });
 
   test('reads numeric value for plain iteration key', () => {
+    // After 6bv7 F11 + Phase-4 H2 propagation, GcBead.metadata is
+    // Record<string, string> per OpenAPI. parsePositiveInteger uses
+    // Number(value) which handles the stringified form correctly,
+    // and this mirrors what the wire actually carries.
     assert.equal(
       reviewRoundForIssue(
         issue({
           id: 'r',
           title: 'review',
-          metadata: { 'review-loop.iteration': 5 },
+          metadata: { 'review-loop.iteration': '5' },
         }),
       ),
       5,

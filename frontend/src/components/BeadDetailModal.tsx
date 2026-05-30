@@ -164,21 +164,23 @@ interface WorkflowMeta {
 }
 
 function readWorkflowMeta(bead: GcBead): WorkflowMeta {
+  // 6bv7 F11 narrowed GcBead.metadata to Record<string, string> per
+  // OpenAPI, so values are guaranteed strings. Truthy check on the key
+  // suffices — no widening cast or typeof guards needed.
   const md = bead.metadata;
-  if (!md || typeof md !== 'object') return {};
-  const r = md as Record<string, unknown>;
+  if (!md) return {};
   const workflowMeta: WorkflowMeta = {};
-  if (typeof r['gc.kind'] === 'string') workflowMeta.kind = r['gc.kind'];
-  if (typeof r['gc.source_bead_id'] === 'string') {
-    workflowMeta.originBeadId = r['gc.source_bead_id'];
+  if (md['gc.kind']) workflowMeta.kind = md['gc.kind'];
+  if (md['gc.source_bead_id']) {
+    workflowMeta.originBeadId = md['gc.source_bead_id'];
   }
-  if (typeof r['gc.formula_contract'] === 'string') {
-    workflowMeta.formulaContract = r['gc.formula_contract'];
+  if (md['gc.formula_contract']) {
+    workflowMeta.formulaContract = md['gc.formula_contract'];
   }
-  if (typeof r['gc.run_target'] === 'string') {
-    workflowMeta.runTarget = r['gc.run_target'];
-  } else if (typeof r['gc.routed_to'] === 'string') {
-    workflowMeta.runTarget = r['gc.routed_to'];
+  if (md['gc.run_target']) {
+    workflowMeta.runTarget = md['gc.run_target'];
+  } else if (md['gc.routed_to']) {
+    workflowMeta.runTarget = md['gc.routed_to'];
   }
   return workflowMeta;
 }
@@ -232,30 +234,9 @@ function BeadBody({ bead }: { bead: GcBead }) {
         </Field>
         <Field label="Type">{bead.issue_type}</Field>
         <Field label="Assignee">{bead.assignee || '·'}</Field>
-        <Field label="Owner">{bead.owner || '·'}</Field>
         <Field label="Created">
           <span className="tnum">{formatDate(bead.created_at)}</span>
         </Field>
-        {bead.updated_at && (
-          <Field label="Updated">
-            <span className="tnum">{formatDate(bead.updated_at)}</span>
-          </Field>
-        )}
-        {bead.closed_at && (
-          <Field label="Closed">
-            <span className="tnum">{formatDate(bead.closed_at)}</span>
-          </Field>
-        )}
-        {typeof bead.dependency_count === 'number' && bead.dependency_count > 0 && (
-          <Field label="Blocked by">
-            <span className="tnum">{bead.dependency_count}</span>
-          </Field>
-        )}
-        {typeof bead.dependent_count === 'number' && bead.dependent_count > 0 && (
-          <Field label="Blocks">
-            <span className="tnum">{bead.dependent_count}</span>
-          </Field>
-        )}
       </dl>
 
       {kind === 'template' && (wf.formulaContract || wf.originBeadId || wf.runTarget) && (

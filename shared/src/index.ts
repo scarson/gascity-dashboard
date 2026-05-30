@@ -25,15 +25,17 @@ export type SessionId = string;
 export interface GcSession {
   id: SessionId;
   template: string;
+  /** Supervisor's tmux/screen session name on disk. Required per OpenAPI
+   *  SessionResponse; present in 73/73 live sessions. */
+  session_name: string;
+  /** Required per OpenAPI SessionResponse; present in 73/73 live sessions. */
+  title: string;
   alias?: string;
-  title?: string;
   state: GcSessionState;
   /** Set when state transition has a structured reason (e.g. "city-stop"). */
   reason?: string;
   /** Human-readable display name from the provider (e.g. "Claude Code"). */
   display_name?: string;
-  /** tmux/screen session name on disk. */
-  session_name?: string;
   created_at: IsoTimestamp;
   /** Last time the session emitted activity; only set after first activity. */
   last_active?: IsoTimestamp;
@@ -42,24 +44,17 @@ export interface GcSession {
   rig?: string;
   pool?: string;
   agent_kind?: 'pool' | 'role' | string;
-  /** Process-running state independent of session.state (which is gc-level). */
-  running?: boolean;
+  /** Process-running state independent of session.state (which is gc-level).
+   *  Required per OpenAPI SessionResponse; present in 73/73 live sessions. */
+  running: boolean;
   model?: string;
   context_pct?: number;
   context_window?: number;
   /** Coarse activity hint: 'idle' | 'thinking' | 'tool_use' | ... */
   activity?: string;
-  /**
-   * Session provider (e.g. 'codex', 'claude', 'gemini'). Supervisor
-   * already has `provider_kind` in session metadata and should populate
-   * this field for all sessions; absence is a transitional gap pending
-   * gastownhall/gascity#2508. Consumers MUST tolerate undefined
-   * (treat the session as "unknown provider") rather than inferring
-   * from title text — title-parsing is a brittle heuristic and a
-   * violation of ZFC; sessionsByProvider aggregation just undercounts
-   * until upstream lands the fix (dkb Q4).
-   */
-  provider?: string;
+  /** Session provider (e.g. 'codex', 'claude', 'gemini'). Required per
+   *  OpenAPI SessionResponse; present in 73/73 live sessions. */
+  provider: string;
 }
 
 export type GcSessionState =
@@ -73,6 +68,9 @@ export type GcSessionState =
 
 export interface GcSessionList {
   items: GcSession[];
+  /** Supervisor's own total count for the requested scope. Required per
+   *  OpenAPI ListBodySessionResponse. */
+  total: number;
   /** True when the supervisor reports the list is incomplete (one or more
    *  backends failed during aggregation). Wire shape is `items: null` +
    *  `partial: true`; the decoder normalizes items to `[]` so consumers
@@ -293,6 +291,17 @@ export type BeadIssueType =
   | 'convoy'
   | string;
 
+/**
+ * Dependency edge inside the OpenAPI `Bead.dependencies` list. Mirrors the
+ * supervisor's `Dep` schema. Surfaced so workflow-graph collectors can read
+ * dependencies without an `as any` cast.
+ */
+export interface GcBeadDep {
+  depends_on_id: string;
+  issue_id: string;
+  type: string;
+}
+
 export interface GcBead {
   id: BeadId;
   title: string;
@@ -304,25 +313,33 @@ export interface GcBead {
    *  coalesce. */
   priority: number | null;
   description?: string;
-  owner?: string;
   assignee?: string;
   created_at: IsoTimestamp;
-  updated_at?: IsoTimestamp;
-  closed_at?: IsoTimestamp;
   labels?: string[];
-  dependency_count?: number;
-  dependent_count?: number;
-  comment_count?: number;
-  metadata?: Record<string, unknown>;
+  /** OpenAPI Bead.metadata is declared as `{[key: string]: string}` — values
+   *  are strings only. Callers needing typed numbers/booleans must parse
+   *  explicitly. */
+  metadata?: Record<string, string>;
   /** Supervisor-supplied reference handle. On formula templates this is
    *  the formula name (e.g. "mol-focus-review"). Absent on most beads. */
   ref?: string;
+  /** Parent bead id (OpenAPI Bead.parent). */
+  parent?: string;
+  /** Originating actor / source id (OpenAPI Bead.from). */
+  from?: string;
+  /** True when the supervisor marks the bead as ephemeral. */
+  ephemeral?: boolean;
+  /** Bead ids this bead needs before it can run (OpenAPI Bead.needs). */
+  needs?: string[] | null;
+  /** Structured dependency rows (OpenAPI Bead.dependencies). */
+  dependencies?: GcBeadDep[] | null;
 }
 
 export interface GcBeadList {
   items: GcBead[];
-  /** gc supervisor's own total count for the requested scope (independent of the fetch limit). */
-  total?: number;
+  /** gc supervisor's own total count for the requested scope (independent of
+   *  the fetch limit). Required per OpenAPI ListBodyBead. */
+  total: number;
   /** True when the supervisor reports the list is incomplete (one or more
    *  backends failed during aggregation). Wire shape is `items: null` +
    *  `partial: true`; the decoder normalizes items to `[]` so consumers
@@ -424,6 +441,12 @@ export interface MailSendResponse {
   read?: boolean;
   thread_id?: string;
   rig?: string;
+  /** Optional supervisor-assigned priority (OpenAPI Message.priority). */
+  priority?: number;
+  /** Optional CC list (OpenAPI Message.cc). */
+  cc?: string[] | null;
+  /** Optional reply-to header (OpenAPI Message.reply_to). */
+  reply_to?: string;
 }
 
 // ── Mail (Phase B but type-locked now so Phase A frontend compiles) ──────
@@ -438,11 +461,19 @@ export interface GcMailItem {
   read: boolean;
   thread_id?: string;
   rig?: string;
+  /** Optional supervisor-assigned priority (OpenAPI Message.priority). */
+  priority?: number;
+  /** Optional CC list (OpenAPI Message.cc). */
+  cc?: string[] | null;
+  /** Optional reply-to header (OpenAPI Message.reply_to). */
+  reply_to?: string;
 }
 
 export interface GcMailList {
   items: GcMailItem[];
-  total?: number;
+  /** Supervisor's own total count for the requested scope. Required per
+   *  OpenAPI MailListBody. */
+  total: number;
   /** True when one or more rig providers failed and the list is not
    *  authoritative. Wire shape is `items: null` + `partial: true`; decoder
    *  normalizes items to `[]` so consumers always have an array. */
@@ -593,16 +624,22 @@ export interface GcEvent {
   seq: number;
   type: string;
   ts: IsoTimestamp;
-  actor?: string;
+  /** Required across every TypedEventStreamEnvelope variant in OpenAPI;
+   *  present in 200/200 sampled live events. */
+  actor: string;
+  /** Required across every TypedEventStreamEnvelope variant in OpenAPI;
+   *  per-variant payload shape varies (BeadEventPayload, NoPayload, …)
+   *  so the surface type stays a generic record. */
+  payload: Record<string, unknown>;
   subject?: string;
   message?: string;
-  payload?: Record<string, unknown>;
 }
 
 export interface GcEventList {
   items: GcEvent[];
-  /** Cursor to pass back as ?after=<cursor> to resume. */
-  next?: number;
+  /** Supervisor's own total count for the requested scope. Required per
+   *  OpenAPI ListBodyWireEvent. */
+  total: number;
   /** True when the supervisor reports the list is incomplete (one or more
    *  backends failed during aggregation). Wire shape is `items: null` +
    *  `partial: true`; decoder normalizes items to `[]` so consumers always

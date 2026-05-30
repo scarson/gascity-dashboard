@@ -6,7 +6,7 @@ import { buildLinkView } from '../src/links/build-link-view.js';
 import { parseRef } from '../src/links/node-ref.js';
 import { ResolutionRollup } from '../src/links/instrumentation.js';
 
-function bead(id: string, metadata: Record<string, unknown> = {}): GcBead {
+function bead(id: string, metadata: Record<string, string> = {}): GcBead {
   return {
     id,
     title: `bead ${id}`,
@@ -14,7 +14,6 @@ function bead(id: string, metadata: Record<string, unknown> = {}): GcBead {
     issue_type: 'task',
     priority: 2,
     created_at: '2026-05-20T00:00:00Z',
-    updated_at: '2026-05-20T00:00:00Z',
     metadata,
   };
 }
@@ -23,9 +22,13 @@ function session(id: string, over: Partial<GcSession> = {}): GcSession {
   return {
     id,
     template: 'tpl',
+    session_name: id,
+    title: id,
     state: 'active',
     created_at: '2026-05-20T00:00:00Z',
     attached: false,
+    running: true,
+    provider: 'claude',
     ...over,
   };
 }

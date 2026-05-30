@@ -105,8 +105,14 @@ export interface CityStatusSummary {
    * partial-handling convention in backend/src/routes/links.ts and
    * routes/mail.ts so operators see a degraded indicator instead of
    * an apparent "no rigs configured" report.
+   *
+   * Typed as optional literal `true` (gascity-dashboard-19w.1.1): the
+   * collector only ever assigns `true` (else leaves the field absent),
+   * so `false` was never a real wire value. Tightening closes the
+   * type-lie window — consumers must check truthiness/presence, never
+   * `=== false`.
    */
-  rigsPartial?: boolean;
+  rigsPartial?: true;
 }
 
 export interface CitySessionProvider {

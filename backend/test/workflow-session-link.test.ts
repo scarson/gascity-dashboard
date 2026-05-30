@@ -147,6 +147,8 @@ function session({ id, ...overrides }: Partial<GcSession> & { id: string }): GcS
   return {
     id,
     title: overrides.title ?? id,
+    session_name: overrides.session_name ?? id,
+    provider: overrides.provider ?? 'codex',
     alias: overrides.alias ?? overrides.title ?? id,
     template: overrides.template ?? 'codex',
     state: overrides.state ?? 'active',

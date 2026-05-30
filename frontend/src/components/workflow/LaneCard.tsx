@@ -28,6 +28,28 @@ interface LaneCardProps {
   now: number;
 }
 
+/**
+ * gascity-dashboard-f4ps: historical (closed) lanes ship from the backend
+ * with `health: { status: 'unavailable' }` because the workflow-health engine
+ * runs only over the active subset (backend/src/snapshot/service.ts derives
+ * over wf.data.lanes, never wf.data.historicalLanes). The health concepts
+ * (thrashing, stalled-session) are meaningless for completed runs.
+ *
+ * Single source for the historical predicate so any future UI that wants to
+ * surface health-derived signal can gate on it without re-stating the rule.
+ */
+export function isHistoricalLane(lane: WorkflowLane): boolean {
+  return lane.phase === 'complete';
+}
+
+function phaseLabelTone(
+  phase: WorkflowLane['phase'],
+): 'text-accent' | 'text-fg-muted' | 'text-fg' {
+  if (phase === 'blocked') return 'text-accent';
+  if (phase === 'complete') return 'text-fg-muted';
+  return 'text-fg';
+}
+
 export function LaneCard({ lane, now }: LaneCardProps) {
   const statusEntries = Object.entries(lane.statusCounts).sort((a, b) =>
     statusSortKey(a[0]).localeCompare(statusSortKey(b[0])),
@@ -37,9 +59,7 @@ export function LaneCard({ lane, now }: LaneCardProps) {
     <li className="py-4">
       <div className="flex items-baseline justify-between gap-4">
         <span
-          className={`text-label uppercase tracking-wider ${
-            lane.phase === 'blocked' ? 'text-accent' : 'text-fg'
-          }`}
+          className={`text-label uppercase tracking-wider ${phaseLabelTone(lane.phase)}`}
         >
           {lane.phaseLabel}
         </span>

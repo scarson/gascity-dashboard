@@ -137,7 +137,7 @@ export const api = {
   nudgeBead(id: string): Promise<{ ok: true; stdout: string }> {
     return request('POST', `/api/beads/${encodeURIComponent(id)}/nudge`, {});
   },
-  listMail(box: 'inbox' | 'sent' | 'all', alias: string): Promise<{ items: GcMailItem[]; total?: number }> {
+  listMail(box: 'inbox' | 'sent' | 'all', alias: string): Promise<{ items: GcMailItem[]; total: number }> {
     const qs = new URLSearchParams({ box, alias }).toString();
     return request('GET', `/api/mail?${qs}`);
   },

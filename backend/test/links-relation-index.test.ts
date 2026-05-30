@@ -6,7 +6,7 @@ import { buildRelationIndex } from '../src/links/relation-index.js';
 
 // R1 + RK1 unit tests for the backend relation index.
 
-function bead(id: string, metadata: Record<string, unknown> = {}, over: Partial<GcBead> = {}): GcBead {
+function bead(id: string, metadata: Record<string, string> = {}, over: Partial<GcBead> = {}): GcBead {
   return {
     id,
     title: `bead ${id}`,
@@ -14,7 +14,6 @@ function bead(id: string, metadata: Record<string, unknown> = {}, over: Partial<
     issue_type: 'task',
     priority: 2,
     created_at: '2026-05-20T00:00:00Z',
-    updated_at: '2026-05-20T00:00:00Z',
     metadata,
     ...over,
   };
@@ -24,9 +23,13 @@ function session(id: string, over: Partial<GcSession> = {}): GcSession {
   return {
     id,
     template: 'tpl',
+    session_name: id,
+    title: id,
     state: 'active',
     created_at: '2026-05-20T00:00:00Z',
     attached: false,
+    running: true,
+    provider: 'claude',
     ...over,
   };
 }

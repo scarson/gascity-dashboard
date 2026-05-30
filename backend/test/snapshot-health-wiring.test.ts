@@ -144,6 +144,9 @@ describe('health engine wiring on /api/snapshot', () => {
         {
           id: 's1',
           template: 'claude',
+          session_name: 's1',
+          title: 's1',
+          provider: 'claude',
           pool: 'mayor',
           state: 'active',
           created_at: '2026-05-25T00:00:00.000Z',
@@ -153,6 +156,7 @@ describe('health engine wiring on /api/snapshot', () => {
           activity: 'tool_use',
         },
       ],
+      total: 1,
     });
 
     const service = createSnapshotService({
@@ -226,7 +230,7 @@ describe('health engine wiring on /api/snapshot', () => {
     });
     const service = createSnapshotService({
       caches: buildCaches(summary([completed])),
-      sessions: fresh<GcSessionList>('city', { items: [] }),
+      sessions: fresh<GcSessionList>('city', { items: [], total: 0 }),
       config: CONFIG,
     });
 

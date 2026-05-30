@@ -240,7 +240,7 @@ function buildSessionsCache(options: CreateSnapshotServiceOptions): SourceCache<
       ttlMs: SESSIONS_CACHE_TTL_MS,
       now,
       sanitizeErrorMessage: null,
-      load: () => ({ items: [] }),
+      load: () => ({ items: [], total: 0 }),
     });
   }
 

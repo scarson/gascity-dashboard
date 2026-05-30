@@ -30,3 +30,17 @@ export function assertAtMostOneMark(container: Element): void {
     `One Mark Rule violated: expected at most 1 .text-accent in container, found ${marks.length}.`,
   ).toBeLessThanOrEqual(1);
 }
+
+// Strict-equality sibling of assertAtMostOneMark for call sites whose
+// contract is "exactly one maroon mark" — e.g. an aggregate badge whose
+// presence is the test's load-bearing claim. Use this when 0 marks would
+// be a real regression (a broken aggregator painting nothing), not a
+// calm-state expectation. Same detection mechanism and jsdom caveat as
+// assertAtMostOneMark above.
+export function assertExactlyOneMark(container: Element): void {
+  const marks = container.querySelectorAll('.text-accent');
+  expect(
+    marks.length,
+    `One Mark Rule violated: expected exactly 1 .text-accent in container, found ${marks.length}.`,
+  ).toBe(1);
+}

@@ -11,7 +11,7 @@ import { linksRouter } from '../src/routes/links.js';
 // A GcClient subclass stubs the two upstream reads (listBeads,
 // listSessions) so the route runs end-to-end without a live supervisor.
 
-function bead(id: string, metadata: Record<string, unknown> = {}): GcBead {
+function bead(id: string, metadata: Record<string, string> = {}): GcBead {
   return {
     id,
     title: `bead ${id}`,
@@ -19,7 +19,6 @@ function bead(id: string, metadata: Record<string, unknown> = {}): GcBead {
     issue_type: 'task',
     priority: 2,
     created_at: '2026-05-20T00:00:00Z',
-    updated_at: '2026-05-20T00:00:00Z',
     metadata,
   };
 }
@@ -41,7 +40,7 @@ class StubGcClient extends GcClient {
   }
   override async listSessions(): Promise<GcSessionList> {
     if (this.sessionsThrow) throw new Error('sessions down');
-    return { items: [] };
+    return { items: [], total: 0 };
   }
 }
 

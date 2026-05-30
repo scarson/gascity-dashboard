@@ -102,6 +102,50 @@ describe('resolveWorkflowFormulaName', () => {
     assert.equal(resolveWorkflowFormulaName(root), null);
   });
 
+  test('does NOT fall back to title for CLOSED graph.v2 roots even with gc.run_target (xfb7)', () => {
+    // gascity-dashboard-xfb7: operators sometimes retitle a CLOSED graph.v2
+    // workflow root after a run completes (e.g. to 'investigation: foo bug').
+    // Such a root still carries gc.run_target, which would otherwise pass
+    // the title-fallback gate and surface the edited title as the formula
+    // name. A closed run cannot be re-fetched against a formula registry to
+    // refute the bad name, so the safer behavior is to defer — return null
+    // and let the consumer render 'unavailable' rather than a false
+    // attribution. Set gc.formula in metadata to recover.
+    const root: GcWorkflowBead = {
+      id: 'fixture-root',
+      title: 'investigation: foo bug',
+      status: 'closed',
+      kind: 'workflow',
+      metadata: {
+        'gc.kind': 'workflow',
+        'gc.formula_contract': 'graph.v2',
+        'gc.run_target': '/fixture/run/target',
+      },
+    };
+    assert.equal(resolveWorkflowFormulaName(root), null);
+  });
+
+  test('closed root still resolves explicit gc.formula (metadata wins over closed-status guard)', () => {
+    // The closed-status guard only suppresses the title fallback; an
+    // explicit gc.formula remains canonical regardless of run state.
+    const root: GcWorkflowBead = {
+      id: 'fixture-root',
+      title: 'investigation: foo bug',
+      status: 'closed',
+      kind: 'workflow',
+      metadata: {
+        'gc.kind': 'workflow',
+        'gc.formula': 'mol-adopt-pr-v2',
+        'gc.formula_contract': 'graph.v2',
+        'gc.run_target': '/fixture/run/target',
+      },
+    };
+    assert.deepEqual(resolveWorkflowFormulaName(root), {
+      name: 'mol-adopt-pr-v2',
+      source: 'metadata',
+    });
+  });
+
   test('does NOT read formula names from non-canonical aliases (boundary preserved)', () => {
     // Mirrors the deliberate boundary in workflow-enrich.test.ts: a
     // graph.v2 root with `formula: 'legacy-alias'` (NOT `gc.formula`) and

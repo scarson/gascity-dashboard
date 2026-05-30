@@ -90,22 +90,26 @@ export function workflowBeadFilter(bead: GcBead): boolean {
 }
 
 /**
- * Adapt the supervisor wire shape to the lane builder's input. GcBead has
- * no first-class `parent` field, so it is populated from
- * metadata['gc.parent_bead_id'] when present; falls back to undefined.
+ * Adapt the supervisor wire shape to the lane builder's input. GcBead now
+ * carries a first-class `parent` field (6bv7 F15); the metadata fallback
+ * survives because formula scaffolding still writes the older
+ * `gc.parent_bead_id` key on synthetic beads.
  */
 export function fromGcBead(bead: GcBead): WorkflowIssue {
-  const parent = stringValue(bead.metadata?.['gc.parent_bead_id']) || undefined;
+  const parent = bead.parent ?? stringValue(bead.metadata?.['gc.parent_bead_id']);
   const issue: WorkflowIssue = {
     id: bead.id,
     title: bead.title,
     status: bead.status,
     issue_type: bead.issue_type,
-    updated_at: bead.updated_at ?? bead.closed_at ?? bead.created_at,
+    // 6bv7 F16: OpenAPI Bead exposes no updated_at / closed_at — created_at
+    // is the only timestamp the supervisor emits, so the fallback chain
+    // collapses to it.
+    updated_at: bead.created_at,
   };
   if (bead.description !== undefined) issue.description = bead.description;
   if (bead.assignee !== undefined) issue.assignee = bead.assignee;
-  if (parent !== undefined) issue.parent = parent;
+  if (parent) issue.parent = parent;
   if (bead.metadata !== undefined) issue.metadata = bead.metadata;
   return issue;
 }
@@ -799,6 +803,13 @@ function compareLanes(a: WorkflowLane, b: WorkflowLane): number {
 // implementation scanned `issues.map(...).find(...)` for any 'mol-' title,
 // which would silently pick a child bead's title when the root's title
 // didn't match — caught by the multi-issue regression test below.
+//
+// gascity-dashboard-xfb7 (sadp follow-up): closed graph.v2 roots are
+// additionally excluded from the title fallback. Operators retitle roots
+// post-run to descriptive summaries; a closed lane card surfacing a
+// retitled string as the canonical formula is a false attribution. Mirrors
+// the resolveWorkflowFormulaName closed-status guard so the lane card and
+// the run-detail page stay consistent.
 function workflowFormula(
   rootId: string,
   issues: WorkflowIssue[],
@@ -811,7 +822,8 @@ function workflowFormula(
   const root = issues.find((i) => i.id === rootId);
   if (
     stringValue(root?.metadata?.['gc.formula_contract']) === 'graph.v2' &&
-    stringValue(root?.metadata?.['gc.run_target']).length > 0
+    stringValue(root?.metadata?.['gc.run_target']).length > 0 &&
+    root?.status !== 'closed'
   ) {
     const rootTitle = root?.title.trim();
     if (rootTitle && rootTitle.startsWith('mol-')) {

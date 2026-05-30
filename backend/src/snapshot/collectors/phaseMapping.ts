@@ -31,7 +31,10 @@ export interface WorkflowIssue {
   updated_at: string;
   /** Populated from metadata['gc.parent_bead_id'] by the GcBead adapter. */
   parent?: string;
-  metadata?: Record<string, unknown>;
+  // Mirrors GcBead.metadata after 6bv7 F11 (Record<string, string> per
+  // OpenAPI). Propagating the narrowing through the internal pipeline so
+  // consumers get the SSOT signal without redundant typeof guards.
+  metadata?: Record<string, string>;
 }
 
 export interface PhaseMapping {

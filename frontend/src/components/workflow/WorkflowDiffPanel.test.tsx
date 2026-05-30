@@ -73,15 +73,16 @@ describe('WorkflowDiffPanel', () => {
       />,
     );
 
-    // The +/- glyph carries the add/remove signal; color must not. No diff
-    // line may carry the maroon accent — multiple remove lines would otherwise
-    // breach the One Mark Rule (at most one maroon per viewport). The shared
-    // helper enforces the <=1 invariant (calm state: 0 satisfies <=1); the
-    // remove-specific guard below pins the test's documented intent — remove
-    // rows in particular must never gain the accent — which the helper alone
-    // cannot express.
+    // The +/- glyph carries the add/remove signal; color must not. For the
+    // kind:'ok' fixture no diff line — add, remove, hunk, or context — may
+    // carry the maroon accent. The shared helper layers in the One Mark Rule
+    // invariant (<=1 per viewport) for forward compatibility; the strict
+    // toBe(0) below is the original load-bearing guard — only the error
+    // branch of the panel intentionally renders text-accent, and this
+    // fixture never reaches it. Without the strict check, an add-line or
+    // hunk-line regressing to text-accent would still satisfy the helper.
     assertAtMostOneMark(container);
-    expect(container.querySelectorAll('.diff-line-remove.text-accent').length).toBe(0);
+    expect(container.querySelectorAll('.text-accent').length).toBe(0);
   });
 });
 

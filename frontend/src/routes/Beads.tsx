@@ -26,7 +26,6 @@ const BEAD_SEARCH_FIELDS = (b: GcBead): ReadonlyArray<string | undefined> => [
   b.id,
   b.title,
   b.assignee,
-  b.owner,
   ...(b.labels ?? []),
 ];
 
@@ -175,12 +174,14 @@ export function BeadsPage() {
       className: 'w-32',
     },
     {
-      key: 'updated',
-      label: 'Updated',
+      // 6bv7 F16: OpenAPI Bead has no updated_at; the column reflects the
+      // only timestamp the supervisor actually emits — created_at.
+      key: 'created',
+      label: 'Created',
       sortable: true,
-      sortValue: (r) => r.updated_at ?? r.created_at,
+      sortValue: (r) => r.created_at,
       render: (r) => (
-        <span className="text-fg-muted tnum">{formatDate(r.updated_at ?? r.created_at)}</span>
+        <span className="text-fg-muted tnum">{formatDate(r.created_at)}</span>
       ),
       className: 'w-28',
     },

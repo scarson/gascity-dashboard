@@ -232,10 +232,10 @@ function sessionFacts(session: GcSession): WorkflowLaneHealth['session'] {
       session.last_active === undefined
         ? { status: 'unavailable', error: 'session last_active unavailable' }
         : { status: 'available', at: session.last_active },
-    running:
-      session.running === undefined
-        ? { status: 'unavailable', error: 'session running state unavailable' }
-        : { status: 'available', value: session.running },
+    // 6bv7 F10 made GcSession.running required, so the `=== undefined`
+    // branch is unreachable; collapse to the available arm to match the
+    // F10 cleanup pattern applied elsewhere (e.g. AgentDetail.tsx).
+    running: { status: 'available', value: session.running },
     activity:
       session.activity === undefined
         ? { status: 'unavailable', error: 'session activity unavailable' }
