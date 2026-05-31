@@ -2301,6 +2301,130 @@ describe('GcClient.listCities', () => {
   });
 });
 
+// gascity-dashboard-9lvq: the gc supervisor (Go) emits RFC3339 datetimes
+// with a numeric timezone offset (e.g. `-04:00`) on some records, but the
+// generated SDK response validator uses Zod's offset-intolerant
+// `z.iso.datetime()` (accepts only a `Z` suffix). A single offset-bearing
+// datetime rejected the WHOLE listAgents/listBeads array -> /api/agents and
+// /api/beads 502 -> dashboard panels blank. GcClient normalizes offset
+// datetimes to UTC `Z` at the client edge before validation so valid
+// supervisor data is accepted instead of discarded.
+describe('GcClient RFC3339 offset datetime normalization', () => {
+  let fake: Fake;
+  beforeEach(async () => {
+    fake = await startFake();
+  });
+  afterEach(async () => {
+    await fake.close();
+  });
+
+  test('accepts list items whose datetime carries a numeric tz offset', async () => {
+    const offsetBead = {
+      ...validBead('td-offset'),
+      created_at: '2026-05-09T22:13:38.653-04:00',
+    };
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ items: [offsetBead], total: 1 }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listBeads(undefined, { limit: 10 });
+    assert.equal(out.items.length, 1, 'offset datetime must not blank the list');
+    assert.equal(out.items[0]?.id, 'td-offset');
+    // Normalized to the equivalent UTC instant (-04:00 -> +00:00 = +4h).
+    assert.equal(out.items[0]?.created_at, '2026-05-10T02:13:38.653Z');
+  });
+
+  test('leaves already-UTC (Z) datetimes untouched', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ items: [validBead('td-utc')], total: 1 }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listBeads(undefined, { limit: 10 });
+    assert.equal(out.items[0]?.created_at, '2026-01-01T00:00:00.000Z');
+  });
+
+  test('truncates sub-millisecond (nanosecond) precision to ms', async () => {
+    // The Go supervisor emits nanoseconds; Date parses ms only, so the
+    // normalized value is the ms-truncated UTC instant.
+    const nsBead = {
+      ...validBead('td-ns'),
+      created_at: '2026-05-09T22:13:38.653177770-04:00',
+    };
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ items: [nsBead], total: 1 }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listBeads(undefined, { limit: 10 });
+    assert.equal(out.items[0]?.created_at, '2026-05-10T02:13:38.653Z');
+  });
+
+  test('normalizes a mix of offset and Z datetimes without cross-contamination', async () => {
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(
+        JSON.stringify({
+          items: [
+            { ...validBead('td-z'), created_at: '2026-01-01T00:00:00.000Z' },
+            { ...validBead('td-off'), created_at: '2026-05-09T22:13:38.653-04:00' },
+          ],
+          total: 2,
+        }),
+      );
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    const out = await gc.listBeads(undefined, { limit: 10 });
+    assert.equal(out.items[0]?.created_at, '2026-01-01T00:00:00.000Z');
+    assert.equal(out.items[1]?.created_at, '2026-05-10T02:13:38.653Z');
+  });
+
+  test('leaves an unparseable datetime verbatim for the validator to reject', async () => {
+    // A datetime-shaped-but-invalid value (month 99) must NOT be silently
+    // rewritten; the NaN guard passes it through so the decoder reports it.
+    const badBead = {
+      ...validBead('td-bad'),
+      created_at: '2026-99-09T22:13:38-04:00',
+    };
+    fake.setHandler((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ items: [badBead], total: 1 }));
+    });
+    const gc = new GcClient({
+      baseUrl: fake.baseUrl,
+      cityName: 'test',
+      defaultTimeoutMs: 5_000,
+    });
+    await assert.rejects(
+      gc.listBeads(undefined, { limit: 10 }),
+      /created_at/,
+      'an unparseable datetime must surface as a decoder error, not be normalized away',
+    );
+  });
+});
+
 function validBead(id: string) {
   return {
     id,

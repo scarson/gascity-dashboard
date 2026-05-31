@@ -112,6 +112,21 @@ export class GcClient {
       responseStyle: 'fields',
       throwOnError: false,
     });
+    // gascity-dashboard-9lvq: the supervisor (Go) emits RFC3339 datetimes with
+    // a numeric tz offset (e.g. `-04:00`), but the generated SDK validates
+    // them with Zod's `z.iso.datetime()`, which accepts only a `Z` suffix.
+    // One offset-bearing datetime rejected the whole listAgents/listBeads
+    // array (HTTP 502, blank panels). Normalize offset datetimes to the
+    // equivalent UTC `Z` instant at the transport edge, before validation, so
+    // valid supervisor data is accepted rather than discarded.
+    //
+    // The deprecated standalone @hey-api/client-fetch package ships
+    // `interceptors` typed as `unknown` in this project's resolution, so reach
+    // its documented response-interceptor API through a narrow typed view of
+    // the known runtime shape.
+    (this.supervisor.interceptors as SupervisorResponseInterceptors).response.use(
+      normalizeOffsetDatetimesInterceptor,
+    );
   }
 
   /** Base URL of the gc supervisor (no trailing slash). Used for non-city endpoints (e.g. /v0/health) + frontend CSP connect-src. */
@@ -931,4 +946,64 @@ function isGeneratedEmptyJsonBody(response: Response, data: unknown): boolean {
     return false;
   }
   return Object.keys(data).length === 0;
+}
+
+// Narrow view of the client-fetch response-interceptor registration API. The
+// generated client types `interceptors` as `unknown` in this project's
+// resolution (deprecated standalone package), so this captures only the one
+// method we call. The runtime invokes the interceptor as
+// `(response, request, options)`; the `...rest` keeps this faithful to that
+// arity even though our interceptor only reads `response`. See the constructor.
+type SupervisorResponseInterceptors = {
+  response: {
+    use(
+      fn: (response: Response, ...rest: unknown[]) => Response | Promise<Response>,
+    ): number;
+  };
+};
+
+// Matches an RFC3339 date-time string with a numeric tz offset (`+HH:MM` /
+// `-HH:MM`), as a JSON string literal. The `Z`-suffixed form is intentionally
+// NOT matched — it already passes `z.iso.datetime()` and needs no rewrite.
+const RFC3339_OFFSET_RE =
+  /"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2})"/g;
+
+// Rewrites offset-bearing RFC3339 datetimes in a JSON body to the equivalent
+// UTC `Z` instant. Conversion goes through `Date`, so sub-millisecond digits
+// (the supervisor occasionally emits nanoseconds) are truncated to ms — lossless
+// for the dashboard's display/sort use of these timestamps. A datetime `Date`
+// cannot parse is left verbatim so the downstream validator still reports it.
+function normalizeOffsetDatetimes(jsonText: string): string {
+  return jsonText.replace(RFC3339_OFFSET_RE, (match, value: string) => {
+    const ms = Date.parse(value);
+    if (Number.isNaN(ms)) return match;
+    return `"${new Date(ms).toISOString()}"`;
+  });
+}
+
+// Response interceptor: normalize offset datetimes in JSON bodies before the
+// generated SDK's offset-intolerant Zod validator runs. Non-JSON responses
+// (SSE streams, empty bodies) and bodies with no offset datetime pass through
+// untouched (no re-allocation). See gascity-dashboard-9lvq.
+async function normalizeOffsetDatetimesInterceptor(
+  response: Response,
+): Promise<Response> {
+  // Non-ok responses are turned into thrown errors by GcClient before the SDK
+  // validator runs (see fetchOnce), so they never reach Zod — skip them.
+  if (!response.ok) return response;
+  if (!response.headers.get('content-type')?.includes('application/json')) {
+    return response;
+  }
+  const body = await response.clone().text();
+  const normalized = normalizeOffsetDatetimes(body);
+  if (normalized === body) return response;
+  // Normalization shortens the body (e.g. `-04:00` -> `Z`), so the original
+  // Content-Length is now stale — drop it rather than advertise a wrong length.
+  const headers = new Headers(response.headers);
+  headers.delete('content-length');
+  return new Response(normalized, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
