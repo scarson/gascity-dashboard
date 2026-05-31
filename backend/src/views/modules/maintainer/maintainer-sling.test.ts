@@ -867,6 +867,14 @@ describe('GET /api/maintainer/triage — slung overlay', { concurrency: false },
     assert.equal(item.slung, null, 'vetted-overrides-slung: overlay must zero out slung even if file says otherwise');
     // And the vetted item remains a mark candidate (it's not slung in the overlay's view).
     assert.equal(item.is_marked, true);
+    // gascity-dashboard-djpk: the run-link stamp is gated on `active`, which is false
+    // for a vetted-overridden item — so it must NOT carry a linkable run id even though
+    // the stale slung-state entry above planted a bead_id ('gc-stale').
+    assert.equal(
+      item.workflow_run_id,
+      undefined,
+      'vetted-overrides-slung must not stamp workflow_run_id even when the stale entry has a bead_id',
+    );
   });
 
   test('slung-state entry for an item no longer in the envelope: silently dropped, no error', async () => {

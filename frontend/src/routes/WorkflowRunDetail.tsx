@@ -69,10 +69,15 @@ export function WorkflowRunDetailPage() {
         synopsis={synopsis}
         meta={
           <>
+            {/* `from=triage` is display-only: it gates whether this back-link
+                renders. The destination is always the NEEDS_YOU_VIEW_PARAM
+                constant, never derived from the param — do not refactor to
+                `to={search.get('from')}` (would open an open-redirect). */}
             {search.get('from') === 'triage' && (
               <Link
                 to={`/maintainer?view=${NEEDS_YOU_VIEW_PARAM}`}
                 className="focus-mark text-label uppercase tracking-wider text-fg-muted hover:text-fg"
+                aria-label="Back to Needs-You triage"
               >
                 ← Triage
               </Link>

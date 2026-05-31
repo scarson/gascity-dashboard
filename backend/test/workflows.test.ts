@@ -945,6 +945,11 @@ describe('workflows detail route', () => {
     }
   });
 
+  // gascity-dashboard-a9yi: this is the PRODUCTION contract — app.ts builds
+  // workflowsRouter with NO rigRoot (it must not pass config.cityPath, the
+  // non-git city dir), so a run lacking worktree metadata resolves to
+  // path_unknown ("Execution folder is unknown") rather than the misleading
+  // not_git. buildApp() here mirrors that wiring by defaulting rigRoot to ''.
   test('diff endpoint reports path_unknown when supervisor data has no execution folder or rig root', async () => {
     fake.setHandler((_req, res) => {
       res.setHeader('content-type', 'application/json');

@@ -107,7 +107,12 @@ export function createCityRuntime(opts: CreateCityRuntimeOptions): CityRuntime {
     res.json(dashboardConfig);
   });
   router.use('/sessions', sessionsRouter(gc));
-  router.use('/workflows', workflowsRouter(gc, { rigRoot: cityPath }));
+  // gascity-dashboard-a9yi: do NOT pass cityPath as the execution-path rigRoot
+  // fallback. cityPath is the city config/runtime dir, never a per-run worktree
+  // and not a git repo — injecting it made runs with no worktree metadata render
+  // the misleading "Execution folder is not a git work tree" instead of the
+  // honest "Execution folder is unknown for this run."
+  router.use('/workflows', workflowsRouter(gc));
   router.use('/links', linksRouter(gc));
   router.use('/agents', agentsRouter({ cityPath, gc }));
   router.use('/beads', beadsRouter(gc, cityPath));
@@ -128,7 +133,11 @@ export function createCityRuntime(opts: CreateCityRuntimeOptions): CityRuntime {
     if (w) moduleWorkers.push(w);
   }
 
-  const doltNomsSampler: DoltNomsSampler = createDoltNomsSampler({ cityPath });
+  // gascity-dashboard-x82: dolt-noms trend sources the supervisor's
+  // store_health.size_bytes (per-city GcClient.getStatus), not host-FS access.
+  const doltNomsSampler: DoltNomsSampler = createDoltNomsSampler({
+    fetchStatus: () => gc.getStatus(),
+  });
   router.use('/dolt-noms', doltRouter(doltNomsSampler));
 
   const snapshotService = createSnapshotService({ gc, config: dashboardConfig });
