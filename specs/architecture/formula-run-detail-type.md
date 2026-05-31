@@ -80,6 +80,18 @@ normalize that payload to the dashboard-internal `GcRunSnapshot.run_id` shape
 before any route, enrichment, or React code sees it. Likewise, event identity
 collection must normalize `workflow_id`/`gc.workflow_id` into run identity.
 
+`GcClient` is a thin policy facade over a **generated** supervisor SDK, not a
+hand-written HTTP client. The supervisor client, request/response types, and
+runtime response validators are generated from
+`backend/openapi/gc-supervisor.openapi.json` by `@hey-api/openapi-ts` (the same
+generator the upstream `gc dashboard` uses), with the Zod plugin wired into the
+SDK for per-call response validation. `GcClient` owns only what the generator
+cannot: single-flight URL-keyed coalescing, topology-safe error redaction,
+timeouts/output caps, the `workflow_id → run_id` vocabulary normalization, and
+sane method names. This boundary supersedes the earlier hand-written Zod
+decoders and the AJV component overlay. The migration and its phasing live in
+`specs/plans/code-quality-remediation-plan.md` (WS-10).
+
 ## Design Goals
 
 1. Keep formula-run semantics out of React.
@@ -379,11 +391,19 @@ nodes.
 
 ## UI Consumption
 
-The canonical detail hook should be `useFormulaRunDetail()`. The current
-implementation name is `useFormulaRunDetail()` and loads:
+The run detail page loads **two independent resources**, each its own hook:
 
-- `api.formulaRun(runId, scope)`
-- `api.runDiff(runId, scope)`
+- `useFormulaRunDetail()` → `api.formulaRun(runId, scope)` — the run projection.
+- `useRunDiff()` → `api.runDiff(runId, scope)` — the execution-folder diff.
+
+They are separate because the diff is independently refreshable and
+independently failable (it has its own `not_git`/`path_unknown`/`error`
+states). The page composes both. A diff fetch failure must surface as the diff
+resource's own `failed` state — never as a fabricated `RunDiffResponse` and
+never by collapsing the detail resource. (Earlier revisions of this spec
+described a single `useFormulaRunDetail()` returning a `{detail, diff}` pair;
+that is superseded by the two-resource model — see
+`specs/plans/code-quality-remediation-plan.md` WS-12.)
 
 `RunDiffResponse` is one renderable unified patch plus comparison metadata:
 upstream merge-base when a tracked upstream exists, HEAD fallback when no
@@ -409,14 +429,23 @@ implementation name is `FormulaRunDetailPage` and renders:
 - diff UI as a GitHub-style per-file patch view with a changed-file count, not
   a separate file-status summary list above the hunks
 
-`useFormulaRunDetail()` exposes a tagged load state: idle, loading, ready, or
-failed. A ready state contains a non-null detail and diff response; background
-refresh state is tagged separately so a stale visible detail can report refresh
-failures without collapsing into a nullable detail/diff pair.
+Each resource hook exposes its own tagged load state: idle, loading, ready, or
+failed, with a ready state carrying a non-null value and background refresh
+state tagged separately so a stale visible value can report refresh failures
+without collapsing into a nullable pair. Because detail and diff are separate
+resources, a failed diff leaves a ready detail visible and vice versa.
 
 `useRunNodeSelection()` owns the zero-or-one selected semantic node. A
 click selects a node; clicking the selected node clears selection. The selected
 node is looked up from the latest `detail.nodes`.
+
+Evidence-tab selection (`Diff` vs `Session`) is **explicit user state**. It
+responds only to user clicks and route initialization; selecting a graph node
+does not change the active tab. This follows from the diff being run-level
+evidence (see Invariants): node selection only changes the Session panel's
+content, so the tab must not be derived from node selection. (Earlier revisions
+auto-switched to `Session` on node selection; that is superseded — see
+`specs/plans/code-quality-remediation-plan.md` WS-12.)
 
 `RunNodeSessionPanel` reads the selected node's
 `executionInstances`. It groups attached sessions by iteration and attempt,
@@ -463,6 +492,13 @@ Visible refresh hooks have distinct responsibilities:
   need cancellation.
 
 ## Current Implementation Against The Ideal
+
+This list reflects the implementation **before** the WS-10 supervisor-client
+migration. The supervisor-edge items below — `openapi-fetch`, hand-written Zod
+decoders, and the AJV component overlay — are superseded by the generated
+`@hey-api/openapi-ts` SDK + Zod validators described in *Naming Boundary*,
+*Ideal Target State*, and *Invariants*. See
+`specs/plans/code-quality-remediation-plan.md` WS-10 for the migration.
 
 Implemented:
 
@@ -687,9 +723,17 @@ The ideal design keeps the same public concept but moves more ownership to
 stable backend boundaries:
 
 1. Supervisor client generation owns endpoint paths, params, and response
-   shapes.
+   shapes. The client, types, and runtime validators are generated from the
+   committed OpenAPI by `@hey-api/openapi-ts` (plugins `client-fetch`,
+   `typescript`, `sdk`, plus the `zod` plugin); `GcClient` is a thin facade for
+   dashboard-only policy (coalescing, redaction, timeouts, `workflow_id → run_id`).
 2. Runtime deserialization at `GcClient` rejects malformed supervisor payloads
-   before run projection sees them.
+   before run projection sees them, via the generated Zod response validators
+   wired into the SDK (`validator: { response: 'zod' }`) — not hand-written
+   decoders. Schema-accuracy gaps (e.g. nullable `Bead.priority`, legacy bead
+   fields, phantom event keys) are fixed **upstream in the Gas City OpenAPI
+   source** so generation stays faithful, rather than papered over with a
+   dashboard-side validation overlay.
 3. Gas City or a shared presentation package owns graph.v2 display semantics:
    semantic nodes, logical edges, scope groups, display graph, loop/retry
    collapsing, and session-link hints.
@@ -725,6 +769,16 @@ stable backend boundaries:
   `.gitignore`.
 - City SSE events invalidate cached views; they do not directly mutate
   Formula Run Detail in the browser.
+- Run detail and run diff are independent browser resources. A failed diff fetch
+  surfaces as the diff resource's own `failed` state; it must never fabricate a
+  `RunDiffResponse` nor null out the detail resource.
+- Evidence-tab selection is explicit user state. It is driven only by user
+  clicks and route initialization, never derived from node selection.
+- The supervisor client, types, and runtime response validators are generated
+  from the committed OpenAPI by `@hey-api/openapi-ts`. `GcClient` is a thin
+  policy facade; it does not hand-roll HTTP, response decoding, or per-endpoint
+  schemas. Supervisor schema-accuracy fixes belong upstream in the Gas City
+  OpenAPI source, not in a dashboard-side validation overlay.
 
 ## Architectural Risks
 
@@ -754,13 +808,24 @@ stable backend boundaries:
    through the city bead endpoint. The embedded run snapshot needs to be
    fresh enough or the supervisor needs an API for scoped runtime bead reads.
 
-5. Supervisor schema drift.
+5. Supervisor schema drift and the cross-repo accuracy dependency.
 
-   The current boundary uses generated OpenAPI types, `openapi-fetch`, and
-   generated runtime schema validation for the supervisor payloads read through
-   `GcClient`. The remaining drift risk is schema accuracy, such as the
-   dashboard's explicit nullable `Bead.priority` overlay until the upstream
-   OpenAPI schema matches observed supervisor output.
+   The target boundary generates the supervisor client, types, and Zod response
+   validators from the committed OpenAPI (`@hey-api/openapi-ts`). The dominant
+   risk is schema *accuracy*: where the OpenAPI is stricter than observed
+   supervisor output (nullable `Bead.priority`, legacy bead fields, phantom
+   event keys, `description`-required formula detail), generated strict
+   validation would reject valid degraded payloads — the same gaps that forced
+   the legacy hand-Zod decoders to opt out of the OpenAPI gate in ~15 places.
+
+   The fix lives **upstream in the Gas City OpenAPI source**, which this repo
+   re-pulls via `npm run openapi:gc-supervisor:update`. That makes strict
+   runtime validation a cross-repo dependency: the migration (see
+   `specs/plans/code-quality-remediation-plan.md` WS-10) ships generation with
+   lenient/`passthrough` validation first, lands the upstream accuracy fixes,
+   then flips on strict response validation. Until the upstream spec is
+   accurate, validation stays lenient rather than reintroducing a dashboard-side
+   overlay.
 
 6. Formula detail diagnostics live at the dashboard boundary.
 
