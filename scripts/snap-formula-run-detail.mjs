@@ -501,7 +501,7 @@ function highVolumeLinkView() {
   }
   // A merged-and-vanished PR (unresolved + stale 24h) and two unresolved
   // issues — three unresolved links cross the aggregate-maroon threshold.
-  nodes.push({ key: 'github_pr:github:42', type: 'github_pr', ref: 'pr/42', title: null, status: null, url: 'https://github.com/sjarmak/gascity-dashboard/pull/42', fetchedAt: '2026-05-24T00:00:00Z', unresolved: true });
+  nodes.push({ key: 'github_pr:github:42', type: 'github_pr', ref: 'pr/42', title: null, status: null, url: 'https://github.com/gastownhall/gascity-dashboard/pull/42', fetchedAt: '2026-05-24T00:00:00Z', unresolved: true });
   edges.push({ from: focus.key, to: 'github_pr:github:42', relation: 'pr', provenance: 'supervisor', resolved: false });
   for (const n of ['7', '8']) {
     nodes.push({ key: `github_issue:github:${n}`, type: 'github_issue', ref: `issue/${n}`, title: null, status: null, url: null, fetchedAt: null, unresolved: true });

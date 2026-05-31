@@ -31,10 +31,10 @@
   "author": "Charlie Coutts",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sjarmak/gascity-dashboard.git"
+    "url": "https://github.com/gastownhall/gascity-dashboard.git"
   },
-  "homepage": "https://github.com/sjarmak/gascity-dashboard",
-  "bugs": "https://github.com/sjarmak/gascity-dashboard/issues",
+  "homepage": "https://github.com/gastownhall/gascity-dashboard",
+  "bugs": "https://github.com/gastownhall/gascity-dashboard/issues",
   "devDependencies": {
     "@eslint/js": "^9.37.0",
     "eslint": "^9.37.0",

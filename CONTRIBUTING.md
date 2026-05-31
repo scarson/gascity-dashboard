@@ -11,14 +11,14 @@ writing the PR yourself.
 
 ## Who this is for
 
-External contributors opening PRs against `sjarmak/gascity-dashboard`. The
+External contributors opening PRs against `gastownhall/gascity-dashboard`. The
 dashboard is a single-operator tool (see [Operator context](#operator-context)
 below), but PRs from anyone are welcome.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/sjarmak/gascity-dashboard.git
+git clone https://github.com/gastownhall/gascity-dashboard.git
 cd gascity-dashboard
 npm install
 npm run build:shared        # types must build first; backend + frontend import from shared/dist
@@ -124,7 +124,7 @@ top commit.
 
 ## Filing issues
 
-Use [GitHub Issues](https://github.com/sjarmak/gascity-dashboard/issues).
+Use [GitHub Issues](https://github.com/gastownhall/gascity-dashboard/issues).
 
 The repo also has a `.beads/` directory at the root. That is the maintainer's
 local `bd` work queue, sitting on top of an embedded Dolt store. It is

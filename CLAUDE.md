@@ -17,7 +17,7 @@ An editorial-typographic ambient dashboard surfacing live state from a [Gas City
 
 ## Remote, CI, and the merge gate
 
-Published at **github.com/sjarmak/gascity-dashboard**. Land feature work on branches and open PRs against `main`. (The git remote pointing at that URL is whatever your local clone named it — `git clone` defaults to `origin`, but a renamed remote is still fine; nothing in the workflow depends on the name.)
+Published at **github.com/gastownhall/gascity-dashboard**. Land feature work on branches and open PRs against `main`. (The git remote pointing at that URL is whatever your local clone named it — `git clone` defaults to `origin`, but a renamed remote is still fine; nothing in the workflow depends on the name.)
 
 `main` is branch-protected — land work via a PR that passes CI (`.github/workflows`); you cannot push straight to `main`. **Match CI locally before pushing or the merge blocks:** the root `npm run typecheck` covers only each workspace's _app_ tsconfig, but CI also runs `typecheck:test` (backend + frontend), `frontend run build`, and both test suites. A change to a `shared` wire-shape type breaks `*.test.ts(x)` fixtures the app typecheck never sees — run both `typecheck:test`s too.
 

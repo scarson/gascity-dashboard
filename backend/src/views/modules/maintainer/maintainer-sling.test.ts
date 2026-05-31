@@ -723,7 +723,7 @@ describe('POST /api/maintainer/sling — slung-state persistence', { concurrency
 // makePr now imported from ./fixtures/triage-item.js
 // (gascity-dashboard-i8w). The shared fixture's defaults differ slightly
 // from the local copy that lived here pre-i8w (status='open' vs
-// 'needs_review', author.login='someone' vs 'sjarmak',
+// 'needs_review', author.login differs,
 // lines_changed=50 vs 100), but every test call site in this file
 // either overrides what it asserts on or asserts on fields not affected
 // by these defaults (is_marked, slung.target, slung.bead_id,
