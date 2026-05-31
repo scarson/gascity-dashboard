@@ -1,4 +1,4 @@
-import type { RunSummary, SourceState } from "gas-city-dashboard-shared";
+import type { RunLane, RunSummary, SourceState } from "gas-city-dashboard-shared";
 import { LaneCard } from "./LaneCard";
 
 // Run phase-lane map (gascity-dashboard-0t6). Renders the snapshot's
@@ -66,13 +66,26 @@ function ActiveSection({ summary, now }: { summary: RunSummary; now: number }) {
       </p>
     );
   }
+  // gascity-dashboard-7hek: organize active lanes by rig (the run-root store).
+  // A flat list of same-named molecule runs is indistinguishable; grouping
+  // under the rig — a section head, no card, per the Flat Page Rule — gives
+  // the operator the store context they navigate by. Within a group, lanes
+  // keep their pre-sorted (recency/priority) order.
+  const groups = groupLanesByRig(summary.lanes);
   return (
     <>
-      <ol className="mt-6 divide-y divide-rule">
-        {summary.lanes.map((lane) => (
-          <LaneCard key={lane.id} lane={lane} now={now} />
-        ))}
-      </ol>
+      {groups.map(({ rig, lanes }) => (
+        <div key={rig} className="mt-6">
+          <h3 className="text-label uppercase tracking-wider text-fg-faint">
+            {rigLabel(rig)}
+          </h3>
+          <ol className="mt-3 divide-y divide-rule">
+            {lanes.map((lane) => (
+              <LaneCard key={lane.id} lane={lane} now={now} />
+            ))}
+          </ol>
+        </div>
+      ))}
       {summary.totalActive > summary.lanes.length && (
         <p className="mt-3 text-label uppercase tracking-wider text-fg-faint tnum">
           {summary.totalActive - summary.lanes.length} more not shown
@@ -80,6 +93,32 @@ function ActiveSection({ summary, now }: { summary: RunSummary; now: number }) {
       )}
     </>
   );
+}
+
+/** Group lanes by their run-root rig, preserving first-seen (pre-sorted)
+ *  order so the most-recently-active rig surfaces first. */
+function groupLanesByRig(
+  lanes: readonly RunLane[],
+): Array<{ rig: string; lanes: RunLane[] }> {
+  const order: string[] = [];
+  const byRig = new Map<string, RunLane[]>();
+  for (const lane of lanes) {
+    const rig =
+      lane.scope.status === 'available' ? lane.scope.rootStoreRef : 'unknown';
+    let bucket = byRig.get(rig);
+    if (bucket === undefined) {
+      bucket = [];
+      byRig.set(rig, bucket);
+      order.push(rig);
+    }
+    bucket.push(lane);
+  }
+  return order.map((rig) => ({ rig, lanes: byRig.get(rig) as RunLane[] }));
+}
+
+function rigLabel(rig: string): string {
+  if (rig === 'unknown') return 'unknown rig';
+  return rig.replace(/^rig:/, '');
 }
 
 function HistoricalSection({ summary, now }: { summary: RunSummary; now: number }) {

@@ -288,6 +288,43 @@ describe('RunsPage — SSE wiring (gascity-dashboard-bqn)', () => {
     expect(toggleHistory.getAttribute('aria-controls')).toBeTruthy();
   });
 
+  it('7hek: groups active lanes by rig under section headers and shows each root bead id', async () => {
+    const envelope = buildEnvelope('fresh');
+    const runs = requireRunData(envelope);
+    const laneA: RunLane = {
+      ...completedLane(),
+      id: 'gc-aaa',
+      phase: 'approval',
+      phaseLabel: 'approval',
+      scope: { status: 'available', kind: 'rig', ref: 'gascity', rootStoreRef: 'rig:gascity' },
+    };
+    const laneB: RunLane = {
+      ...completedLane(),
+      id: 'gc-bbb',
+      phase: 'approval',
+      phaseLabel: 'approval',
+      scope: {
+        status: 'available',
+        kind: 'rig',
+        ref: 'gascity-packs',
+        rootStoreRef: 'rig:gascity-packs',
+      },
+    };
+    envelope.headline.activeRuns = { status: 'available', value: 2 };
+    runs.totalActive = 2;
+    runs.lanes = [laneA, laneB];
+    mockSnapshot.mockResolvedValue(envelope);
+
+    mount();
+    await waitForMount();
+    // Rig section headers (the `rig:` prefix is stripped for display).
+    expect(screen.getByText('gascity')).toBeTruthy();
+    expect(screen.getByText('gascity-packs')).toBeTruthy();
+    // Each run's root bead id is rendered so same-formula runs are distinguishable.
+    expect(screen.getByText('gc-aaa')).toBeTruthy();
+    expect(screen.getByText('gc-bbb')).toBeTruthy();
+  });
+
   it('yh5i: toggle button is disabled when totalHistorical is 0', async () => {
     // Default envelope has totalHistorical = 0.
     mount();

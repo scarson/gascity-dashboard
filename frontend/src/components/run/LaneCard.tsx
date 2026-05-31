@@ -1,27 +1,14 @@
-import type { RunLane, RunStage } from 'gas-city-dashboard-shared';
+import type { RunLane } from 'gas-city-dashboard-shared';
 import { Link } from 'react-router-dom';
 import { formatRelative } from '../../hooks/time';
+import { StageLadder } from './StageLadder';
 
 // Per-lane typographic row. No card chrome — vertical rhythm carries the
 // hierarchy, hairline dividers separate lanes at the RunMap level.
 // The phase label up top, the title underneath, then a glyph row for
-// stage progress, then secondary metadata. Reads in greyscale: phase
-// identity comes from order + label + stage glyphs, not color.
-
-const STAGE_GLYPH: Record<RunStage['status'], string> = {
-  pending: '·',
-  active: '⬣',
-  complete: '◆',
-  blocked: '✕',
-};
-
-const STAGE_TONE: Record<RunStage['status'], string> = {
-  pending: 'text-fg-faint',
-  active: 'text-fg',
-  complete: 'text-fg-muted',
-  // Warm-amber tint reserved for blocked status only (DESIGN.md).
-  blocked: 'text-accent',
-};
+// stage progress (StageLadder, shared with the run-detail view), then
+// secondary metadata. Reads in greyscale: phase identity comes from
+// order + label + stage glyphs, not color.
 
 interface LaneCardProps {
   lane: RunLane;
@@ -108,35 +95,12 @@ export function LaneCard({ lane, now }: LaneCardProps) {
         </div>
       )}
 
-      {lane.stages.length > 0 && (
-        <ol
-          className="mt-2 flex items-baseline gap-x-2 flex-wrap"
-          aria-label={`${lane.title} stages`}
-        >
-          {lane.stages.map((stage) => (
-            <li
-              key={stage.key}
-              className={`text-label uppercase tracking-wider ${STAGE_TONE[stage.status]}`}
-              title={`${stage.label}: ${stage.status}`}
-            >
-              <span aria-hidden="true">{STAGE_GLYPH[stage.status]}</span>{' '}
-              <span
-                className={
-                  stage.status === 'active'
-                    ? 'text-fg'
-                    : stage.status === 'blocked'
-                      ? 'text-accent'
-                      : 'text-fg-muted'
-                }
-              >
-                {stage.label}
-              </span>
-            </li>
-          ))}
-        </ol>
-      )}
+      <StageLadder stages={lane.stages} label={lane.title} />
 
       <div className="mt-2 flex items-baseline gap-x-4 gap-y-1 flex-wrap text-label">
+        <span className="text-fg-faint tnum" title="run root bead">
+          {lane.id}
+        </span>
         {lane.activeAssignees.length > 0 && (
           <span className="text-fg-muted lowercase tracking-normal">
             <span className="uppercase tracking-wider text-fg-faint">on </span>

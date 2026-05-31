@@ -374,6 +374,47 @@ describe('run presentation enrichment fixtures', () => {
     });
   });
 
+  // gascity-dashboard-ud6j: the run-detail builder computes its OWN phase
+  // ladder from its OWN beads through the SAME fromGcBead → mapRunPhase →
+  // stageProgress pipeline the snapshot lane uses (no recompute drift).
+  test('derives the blocked phase ladder when any bead is blocked', () => {
+    const snapshot = waitingGraphSnapshot();
+    const blocked = snapshot.beads?.find((bead) => bead.id === 'gc-blocked-step');
+    assert.ok(blocked);
+    blocked.status = 'blocked';
+
+    const detail = enrichFormulaRun(snapshot, {});
+
+    assert.equal(detail.phase, 'blocked');
+    assert.deepEqual(detail.stages, [
+      { key: 'blocked', label: 'Blocked', status: 'blocked' },
+    ]);
+  });
+
+  test('derives the complete phase ladder when every bead is closed', () => {
+    // formulaOrderGraphSnapshot's titles ('Step A/B') carry no phase
+    // keywords, so the all-closed census decides the phase rather than a
+    // title scan. gc.formula is stripped so the generic 5-stage ladder
+    // (not the formula-specific one) is exercised.
+    const snapshot = formulaOrderGraphSnapshot({ deps: [], logical_edges: [] });
+    for (const bead of snapshot.beads ?? []) {
+      bead.status = 'closed';
+      delete bead.metadata['gc.formula'];
+    }
+
+    const detail = enrichFormulaRun(snapshot, {});
+
+    assert.equal(detail.phase, 'complete');
+    assert.deepEqual(
+      detail.stages.map((stage) => stage.status),
+      ['complete', 'complete', 'complete', 'complete', 'complete'],
+    );
+    assert.deepEqual(
+      detail.stages.map((stage) => stage.key),
+      ['intake', 'implementation', 'review', 'approval', 'finalization'],
+    );
+  });
+
   test('uses Gas City gc.formula_name metadata when gc.formula is absent', () => {
     const snapshot = formulaOrderGraphSnapshot({
       deps: [],

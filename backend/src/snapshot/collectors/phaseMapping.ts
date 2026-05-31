@@ -14,7 +14,9 @@
 // text scans.
 
 import type {
+  GcBead,
   RunPhase as SharedRunPhase,
+  RunStage,
 } from 'gas-city-dashboard-shared';
 
 export interface RunIssue {
@@ -196,4 +198,319 @@ export function stringValue(value: unknown): string {
 function parsePositiveInteger(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+// ── GcBead adapter ─────────────────────────────────────────────────────────
+
+/**
+ * Adapt the supervisor wire shape to the phase classifier's input. GcBead now
+ * carries a first-class `parent` field (6bv7 F15); the metadata fallback
+ * survives because formula scaffolding still writes the older
+ * `gc.parent_bead_id` key on synthetic beads.
+ */
+export function fromGcBead(bead: GcBead): RunIssue {
+  const parent = bead.parent ?? stringValue(bead.metadata?.['gc.parent_bead_id']);
+  const issue: RunIssue = {
+    id: bead.id,
+    title: bead.title,
+    status: bead.status,
+    issue_type: bead.issue_type,
+    // 6bv7 F16: OpenAPI Bead exposes no updated_at / closed_at — created_at
+    // is the only timestamp the supervisor emits, so the fallback chain
+    // collapses to it.
+    updated_at: bead.created_at,
+  };
+  if (bead.description !== undefined) issue.description = bead.description;
+  if (bead.assignee !== undefined) issue.assignee = bead.assignee;
+  if (parent) issue.parent = parent;
+  if (bead.metadata !== undefined) issue.metadata = bead.metadata;
+  return issue;
+}
+
+// ── Stage progression ──────────────────────────────────────────────────────
+
+const runStages = [
+  ['intake', 'Intake'],
+  ['implementation', 'Implementation'],
+  ['review', 'Review'],
+  ['approval', 'Approval'],
+  ['finalization', 'Finalization'],
+] as const;
+
+export function stageProgress(
+  phase: PhaseMapping,
+  formula: string | null,
+  issues: RunIssue[],
+): RunStage[] {
+  const formulaStages = stagesForFormula(formula);
+  if (formulaStages.length > 0) {
+    return formulaStageProgress(formulaStages, issues);
+  }
+
+  if (phase.phase === 'blocked') {
+    return [{ key: 'blocked', label: 'Blocked', status: 'blocked' }];
+  }
+
+  if (phase.phase === 'complete') {
+    return runStages.map(([key, label]) => ({
+      key,
+      label,
+      status: 'complete' as const,
+    }));
+  }
+
+  const activeIndex = runStages.findIndex(([key]) => key === phase.phase);
+
+  if (activeIndex < 0) {
+    return runStages.map(([key, label]) => ({
+      key,
+      label,
+      status: (key === 'implementation' ? 'active' : 'pending') as RunStage['status'],
+    }));
+  }
+
+  return runStages.map(([key, label], idx) => ({
+    key,
+    label:
+      key === 'review' && phase.reviewRound !== null
+        ? `Review round ${phase.reviewRound}`
+        : label,
+    status: (idx < activeIndex
+      ? 'complete'
+      : idx === activeIndex
+        ? 'active'
+        : 'pending') as RunStage['status'],
+  }));
+}
+
+export function stagesForFormula(
+  formula: string | null,
+): Array<{ key: string; label: string; steps: string[] }> {
+  if (formula === 'mol-adopt-pr-v2') {
+    return [
+      { key: 'preflight', label: 'Preflight', steps: ['preflight'] },
+      { key: 'rebase', label: 'Worktree / rebase', steps: ['rebase-check'] },
+      {
+        key: 'review',
+        label: 'Review loop',
+        steps: [
+          'review-loop',
+          'review-pipeline.review-claude',
+          'review-pipeline.review-codex',
+          'review-pipeline.review-gemini',
+          'review-pipeline.synthesize',
+          'review-pipeline.quality-scorecard',
+          'apply-fixes',
+        ],
+      },
+      {
+        key: 'ci',
+        label: 'Pre-approval CI',
+        steps: ['pre-approval-ci', 'repair-ci-failures'],
+      },
+      { key: 'approval', label: 'Human approval', steps: ['human-approval'] },
+      { key: 'finalize', label: 'Merge-ready', steps: ['finalize'] },
+      { key: 'cleanup', label: 'Cleanup', steps: ['cleanup-worktree'] },
+    ];
+  }
+
+  if (formula === 'mol-design-review-v2') {
+    return [
+      { key: 'setup', label: 'Setup', steps: ['design-review.setup'] },
+      {
+        key: 'personas',
+        label: 'Personas',
+        steps: [
+          'design-review.persona-gen-claude',
+          'design-review.persona-gen-codex',
+          'design-review.persona-gen-gemini',
+          'design-review.persona-synthesis',
+        ],
+      },
+      {
+        key: 'fanout',
+        label: 'Persona fanout',
+        steps: [
+          'design-review.prepare-review-items',
+          'design-review.persona-review-fanout',
+        ],
+      },
+      {
+        key: 'synthesis',
+        label: 'Synthesis',
+        steps: ['design-review.global-synthesis'],
+      },
+      {
+        key: 'apply',
+        label: 'Apply findings',
+        steps: ['design-review.apply-design-changes'],
+      },
+      { key: 'finalize', label: 'Finalize', steps: ['finalize'] },
+    ];
+  }
+
+  if (formula === 'mol-bug-report-flow-v2') {
+    return [
+      {
+        key: 'intake',
+        label: 'Intake',
+        steps: ['bootstrap-run', 'refresh-intake'],
+      },
+      {
+        key: 'repro',
+        label: 'Reproduction',
+        steps: ['historical-baseline', 'reported-build-repro', 'main-repro'],
+      },
+      {
+        key: 'audit',
+        label: 'Audit',
+        steps: ['code-path-audit', 'coverage-audit', 'related-refs-audit'],
+      },
+      {
+        key: 'classify',
+        label: 'Classify',
+        steps: [
+          'investigation-synthesis',
+          'followup-evidence',
+          'normalize-outcome',
+        ],
+      },
+      {
+        key: 'approval',
+        label: 'Human approval',
+        steps: [
+          'approve-classification',
+          'verify-classification-approval',
+        ],
+      },
+      { key: 'publish', label: 'Publish', steps: ['publish-classification'] },
+      {
+        key: 'dispatch',
+        label: 'Dispatch fix',
+        steps: ['dispatch-implementation'],
+      },
+    ];
+  }
+
+  if (formula === 'mol-bug-report-implementation-v2') {
+    return [
+      {
+        key: 'plan',
+        label: 'Plan approval',
+        steps: [
+          'approve-fix-plan',
+          'approve-test-hardening-plan',
+          'verify-selected-plan-approval',
+        ],
+      },
+      {
+        key: 'design',
+        label: 'Design review',
+        steps: ['prepare-design-review-doc', 'design-review'],
+      },
+      {
+        key: 'implement',
+        label: 'Implement',
+        steps: ['implement-change', 'prepare-review-context'],
+      },
+      {
+        key: 'review',
+        label: 'Code review',
+        steps: ['code-review-loop', 'apply-code-fixes'],
+      },
+      {
+        key: 'pr',
+        label: 'Open PR',
+        steps: ['approve-pr-open', 'verify-pr-open-approval', 'open-or-update-pr'],
+      },
+      { key: 'ci', label: 'CI', steps: ['wait-for-ci'] },
+      {
+        key: 'merge',
+        label: 'Merge',
+        steps: ['approve-merge', 'verify-merge-approval', 'merge-and-finalize'],
+      },
+    ];
+  }
+
+  return [];
+}
+
+function formulaStageProgress(
+  stages: Array<{ key: string; label: string; steps: string[] }>,
+  issues: RunIssue[],
+): RunStage[] {
+  const primary = issues.filter(isPrimaryStepIssue);
+  const activeStepId = latestStepId(
+    primary.filter((i) => i.status === 'in_progress'),
+  );
+  const activeIndex = activeStepId
+    ? stages.findIndex((s) => s.steps.includes(activeStepId))
+    : firstOpenStageIndex(stages, primary);
+  const furthestClosedIndex = furthestClosedStageIndex(stages, primary);
+
+  const stageHasClosed = (stage: { steps: string[] }): boolean =>
+    stage.steps.some((step) =>
+      stepIssues(primary, step).some((i) => i.status === 'closed'),
+    );
+
+  return stages.map((stage, idx) => {
+    let status: RunStage['status'];
+    if (activeIndex >= 0) {
+      status =
+        idx < activeIndex ? 'complete' : idx === activeIndex ? 'active' : 'pending';
+    } else if (stageHasClosed(stage) || idx < furthestClosedIndex) {
+      status = 'complete';
+    } else {
+      status = 'pending';
+    }
+    return { key: stage.key, label: stage.label, status };
+  });
+}
+
+function firstOpenStageIndex(
+  stages: Array<{ steps: string[] }>,
+  issues: RunIssue[],
+): number {
+  return stages.findIndex((s) =>
+    s.steps.some((step) =>
+      stepIssues(issues, step).some((i) => i.status !== 'closed'),
+    ),
+  );
+}
+
+function furthestClosedStageIndex(
+  stages: Array<{ steps: string[] }>,
+  issues: RunIssue[],
+): number {
+  let furthest = -1;
+  stages.forEach((s, idx) => {
+    if (
+      s.steps.some((step) =>
+        stepIssues(issues, step).some((i) => i.status === 'closed'),
+      )
+    ) {
+      furthest = idx;
+    }
+  });
+  return furthest;
+}
+
+export function latestStepId(issues: RunIssue[]): string | null {
+  return (
+    [...issues]
+      .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+      .map((i) => stringValue(i.metadata?.['gc.step_id']))
+      .find(Boolean) ?? null
+  );
+}
+
+export function stepIssues(issues: RunIssue[], step: string): RunIssue[] {
+  return issues.filter(
+    (i) => stringValue(i.metadata?.['gc.step_id']) === step,
+  );
+}
+
+export function isPrimaryStepIssue(issue: RunIssue): boolean {
+  const kind = stringValue(issue.metadata?.['gc.kind']);
+  return kind !== 'spec' && kind !== 'scope-check' && kind !== 'workflow-finalize';
 }

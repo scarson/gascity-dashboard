@@ -92,6 +92,8 @@ export function enrichFormulaRun(
     snapshotEventSeq: formulaRun.progress.snapshotEventSeq,
     completeness: formulaRunCompleteness(partialReasons),
     progress: formulaRun.progress,
+    phase: formulaRun.phase,
+    stages: formulaRun.stages,
     nodes: formulaRun.nodes,
     edges: formulaRun.edges,
     lanes: formulaRun.lanes,

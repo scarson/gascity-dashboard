@@ -1,3 +1,5 @@
+import type { RunPhase, RunStage } from './snapshot/types.js';
+
 export type RunScopeKind = 'city' | 'rig';
 
 /**
@@ -167,6 +169,16 @@ export interface FormulaRunDetail {
   snapshotEventSeq: RunSnapshotSequence;
   completeness: FormulaRunCompleteness;
   progress: FormulaRunProgress;
+  /**
+   * gascity-dashboard-ud6j: the dashboard-derived phase ladder
+   * (intake → implementation → review → approval → finalization) — the SAME
+   * stages the snapshot lane renders, computed from this run's OWN beads via
+   * the shared fromGcBead → mapRunPhase → stageProgress pipeline (no
+   * recompute drift). Lets a single-root run with no materialized step DAG
+   * still show live phase progression instead of a dead "1 node" line.
+   */
+  phase: RunPhase;
+  stages: RunStage[];
   nodes: RunDisplayNode[];
   edges: RunDisplayEdge[];
   lanes: RunDisplayLane[];

@@ -33,6 +33,14 @@
         "formula_detail_missing_formula_metadata"
       ]
     },
+    "phase": "review",
+    "stages": [
+      { "key": "intake", "label": "Intake", "status": "complete" },
+      { "key": "implementation", "label": "Implementation", "status": "complete" },
+      { "key": "review", "label": "Review round 2", "status": "active" },
+      { "key": "approval", "label": "Approval", "status": "pending" },
+      { "key": "finalization", "label": "Finalization", "status": "pending" }
+    ],
     "progress": {
       "snapshotVersion": 11,
       "snapshotEventSeq": {

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FormulaRunDetailPage } from './FormulaRunDetail';
@@ -123,6 +123,28 @@ describe('FormulaRunDetailPage', () => {
     expect(screen.getByText(/^metadata missing$/i)).toBeTruthy();
     expect(screen.queryByText(/^Formula Detail$/i)).toBeNull();
     expect(screen.queryByText(/partial run data/i)).toBeNull();
+  });
+
+  it('renders the dashboard-derived phase ladder from the run detail stages', async () => {
+    renderPage();
+    await screen.findByRole('heading', { name: /adopt pr #42/i });
+
+    // gascity-dashboard-ud6j: the run-detail view surfaces the same phase
+    // ladder the RunMap lane shows, computed by the backend from this run's
+    // own beads. The ladder is a labelled list whose stage words read in
+    // greyscale (DESIGN.md "States have words").
+    const ladder = screen.getByRole('list', { name: /adopt pr #42 stages/i });
+    expect(ladder).toBeTruthy();
+    const stageRows = within(ladder)
+      .getAllByRole('listitem')
+      .map((item) => item.textContent?.replace(/\s+/g, ' ').trim());
+    expect(stageRows).toEqual([
+      '◆ Intake',
+      '◆ Implementation',
+      '⬣ Review round 2',
+      '· Approval',
+      '· Finalization',
+    ]);
   });
 
   it('starts with no selected node and toggles exactly one selected node', async () => {
@@ -683,6 +705,12 @@ function parseFormulaRunDetailFixture(raw: unknown): FormulaRunDetailFixture {
   }
   if (!Array.isArray(raw.detail.edges)) {
     throw new Error('run detail fixture missing detail.edges');
+  }
+  if (!Array.isArray(raw.detail.stages)) {
+    throw new Error('run detail fixture missing detail.stages');
+  }
+  if (typeof raw.detail.phase !== 'string') {
+    throw new Error('run detail fixture missing detail.phase');
   }
   if (!isRecord(raw.diff)) throw new Error('run detail fixture missing diff');
   if (!isRecord(raw.transcripts)) {

@@ -75,6 +75,8 @@ function detailWithInterleavedLaneNodes(): FormulaRunDetail {
     snapshotVersion: 1,
     snapshotEventSeq: { kind: 'known', seq: 1 },
     completeness: { kind: 'complete' },
+    phase: 'active',
+    stages: [],
     progress: progress(4, 4, { ready: 4 }),
     nodes: [
       node('root', 'Root'),
@@ -106,6 +108,8 @@ function detailWithHistoricalOnlyNode(): FormulaRunDetail {
     snapshotVersion: 1,
     snapshotEventSeq: { kind: 'known', seq: 1 },
     completeness: { kind: 'complete' },
+    phase: 'active',
+    stages: [],
     progress: progress(2, 1, { active: 1 }, { active: 1, completed: 1 }, 2),
     nodes: [
       {

@@ -11,10 +11,17 @@ import type {
   RunFormula,
   RunFormulaDetailState,
   RunNodeStatus,
+  RunPhase,
+  RunStage,
   FormulaRunProgress,
   RunScopeKind,
   RunSnapshotSequence,
 } from 'gas-city-dashboard-shared';
+import {
+  mapRunPhase,
+  stageProgress,
+  type RunIssue,
+} from '../snapshot/collectors/phaseMapping.js';
 import { meta } from './bead-fields.js';
 import { resolveRunFormulaName } from './formula-name.js';
 import { applyDisplayNodeStates } from './display-state.js';
@@ -82,6 +89,8 @@ export interface RunningFormulaRun {
   edges: RunDisplayEdge[];
   lanes: RunDisplayLane[];
   progress: FormulaRunProgress;
+  phase: RunPhase;
+  stages: RunStage[];
 }
 
 export function buildRunningFormulaRun(
@@ -130,6 +139,17 @@ export function buildRunningFormulaRun(
     input.rigRoot,
   );
 
+  // gascity-dashboard-ud6j: compute the dashboard phase ladder from this
+  // run's OWN beads through the SAME fromGcBead → mapRunPhase → stageProgress
+  // pipeline the snapshot lane uses, so the run-detail ladder cannot drift
+  // from the lane's. mapRunPhase keys off bead status + title, which run
+  // beads carry. The resolved formula name (when known) selects the
+  // formula-specific stage set; otherwise the generic 5-stage ladder applies.
+  const issues = input.beads.map(fromGcRunBead);
+  const phaseMapping = mapRunPhase(issues);
+  const formulaName = formula.kind === 'known' ? formula.name : null;
+  const stages = stageProgress(phaseMapping, formulaName, issues);
+
   const run: RunningFormulaRun = {
     raw: input.raw,
     runId: input.runId,
@@ -153,9 +173,36 @@ export function buildRunningFormulaRun(
     edges,
     lanes: buildRunDisplayLanes(nodes),
     progress,
+    phase: phaseMapping.phase,
+    stages,
   };
   if (input.root !== undefined) run.root = input.root;
   return run;
+}
+
+/**
+ * Adapt a supervisor run-snapshot bead (GcRunBead) to the phase classifier's
+ * RunIssue input. The phase pipeline's own fromGcBead adapter consumes the
+ * city-wide GcBead shape (issue_type, created_at); the run-snapshot wire row
+ * is a different shape (kind, no created_at). mapRunPhase only reads
+ * status / title / metadata / issue_type / parent, so this maps the run-bead
+ * `kind` onto `issue_type` and leaves updated_at empty (the snapshot carries
+ * no per-bead timestamp — latestStepId's ordering degrades gracefully to
+ * input order, which the phase classifier does not depend on).
+ */
+function fromGcRunBead(bead: GcRunBead): RunIssue {
+  const parent = meta(bead, 'gc.parent_bead_id');
+  const issue: RunIssue = {
+    id: bead.id,
+    title: bead.title,
+    status: bead.status,
+    issue_type: bead.kind,
+    updated_at: '',
+    metadata: bead.metadata,
+  };
+  if (bead.assignee !== undefined) issue.assignee = bead.assignee;
+  if (parent !== undefined) issue.parent = parent;
+  return issue;
 }
 
 function runFormula(root: GcRunBead): string | null {

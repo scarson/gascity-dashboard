@@ -134,6 +134,19 @@ describe('LaneCard historical-lane render', () => {
     );
   });
 
+  it('renders the run root bead id so look-alike runs are distinguishable (gascity-dashboard-7hek)', () => {
+    render(
+      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+        <LaneCard
+          lane={makeHistoricalLane({ id: 'gc-zz9q1', title: 'mol-focus-review' })}
+          now={Date.parse('2026-05-29T12:00:00Z')}
+        />
+      </MemoryRouter>,
+    );
+    // The root bead id is the only thing distinguishing same-formula runs.
+    expect(screen.getByText('gc-zz9q1')).toBeTruthy();
+  });
+
   it('does not render the health "unavailable" string for a historical lane', () => {
     render(
       <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>

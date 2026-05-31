@@ -14,6 +14,7 @@ import { RelatedEntities } from '../components/RelatedEntities';
 import { BeadDetailModal } from '../components/BeadDetailModal';
 import { FormulaRunDiagram } from '../components/run/FormulaRunDiagram';
 import { FormulaRunTabs } from '../components/run/FormulaRunTabs';
+import { StageLadder } from '../components/run/StageLadder';
 import { useGcEventRefresh } from '../hooks/useGcEvents';
 import {
   runEventIdentity,
@@ -150,6 +151,10 @@ export function FormulaRunDetailPage() {
       ) : readyRun ? (
         <>
           <RunMetadata detail={readyRun.detail} />
+          <StageLadder
+            stages={readyRun.detail.stages}
+            label={readyRun.detail.title}
+          />
           <FormulaRunPartialNotice detail={readyRun.detail} />
           <div className="mt-8 grid gap-10 lg:grid-cols-[minmax(0,0.95fr)_minmax(22rem,1.05fr)]">
             <FormulaRunDiagram

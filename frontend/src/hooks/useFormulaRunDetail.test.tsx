@@ -101,6 +101,8 @@ function detail(): FormulaRunDetail {
     snapshotVersion: 1,
     snapshotEventSeq: { kind: "known", seq: 1 },
     completeness: { kind: "complete" },
+    phase: "active",
+    stages: [],
     progress: {
       snapshotVersion: 1,
       snapshotEventSeq: { kind: "known", seq: 1 },
