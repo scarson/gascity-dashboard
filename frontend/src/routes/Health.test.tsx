@@ -5,6 +5,7 @@ import { HealthPage } from './Health';
 import { invalidate } from '../api/cache';
 import type {
   DoltNomsTrend,
+  HealthDiagnostics,
   SupervisorHealth,
   SystemHealth,
 } from 'gas-city-dashboard-shared';
@@ -109,6 +110,102 @@ describe('HealthPage', () => {
   });
 });
 
+// gascity-dashboard-1cob: Health diagnostics — Dolt/Beads versions + usage,
+// recommended-vs-loaded config comparison. Every datum sources from the
+// backend (never hardcoded); unavailable data surfaces explicitly.
+describe('HealthPage diagnostics', () => {
+  it('renders Dolt and Beads versions from the backend', async () => {
+    const { container } = renderPage();
+    await screen.findByRole('heading', { name: /diagnostics/i });
+
+    expect(valueFor(container, 'Dolt version')?.textContent).toBe('2.0.7');
+    expect(valueFor(container, 'Beads version')?.textContent).toBe('1.0.4');
+  });
+
+  it('surfaces a failed version probe explicitly rather than blank', async () => {
+    currentHealth = {
+      ...baseHealth(),
+      diagnostics: {
+        ...baseDiagnostics(),
+        doltVersion: { status: 'unavailable', reason: 'dolt not on PATH' },
+      },
+    };
+    const { container } = renderPage();
+    await screen.findByRole('heading', { name: /diagnostics/i });
+
+    const value = valueFor(container, 'Dolt version');
+    expect(value?.textContent).toMatch(/unavailable|dolt not on PATH/i);
+    expect(value?.className).toMatch(/text-warn/);
+  });
+
+  it('renders Dolt + Beads usage from the backend', async () => {
+    const { container } = renderPage();
+    await screen.findByRole('heading', { name: /diagnostics/i });
+
+    expect(valueFor(container, 'Live rows')?.textContent).toMatch(/2,?000/);
+    expect(valueFor(container, 'Open')?.textContent).toBe('10');
+    expect(valueFor(container, 'Ready')?.textContent).toBe('4');
+    expect(valueFor(container, 'In progress')?.textContent).toBe('2');
+  });
+
+  it('renders the recommended-vs-loaded comparison row, in-bounds', async () => {
+    const { container } = renderPage();
+    await screen.findByRole('heading', { name: /recommended/i });
+
+    const row = rowFor(container, 'Dolt MB-per-row ratio');
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toContain('≤ 1');
+    expect(row?.textContent).toContain('0.5');
+    // In-bounds row is not warn-toned.
+    expect(row?.className ?? '').not.toMatch(/text-warn/);
+  });
+
+  it('flags an over-threshold comparison row with a warn tone', async () => {
+    currentHealth = {
+      ...baseHealth(),
+      diagnostics: {
+        ...baseDiagnostics(),
+        configComparison: {
+          status: 'available',
+          source: 's',
+          value: [
+            {
+              label: 'Dolt MB-per-row ratio',
+              recommended: '≤ 1',
+              loaded: '2.5',
+              withinRecommendation: false,
+            },
+          ],
+        },
+      },
+    };
+    const { container } = renderPage();
+    await screen.findByRole('heading', { name: /recommended/i });
+
+    const row = rowFor(container, 'Dolt MB-per-row ratio');
+    expect(row?.className ?? '').toMatch(/text-warn/);
+  });
+
+  it('shows comparison unavailable copy when the supervisor reports no baseline', async () => {
+    currentHealth = {
+      ...baseHealth(),
+      diagnostics: {
+        ...baseDiagnostics(),
+        configComparison: {
+          status: 'unavailable',
+          reason: 'supervisor reports no recommended baseline to compare against',
+        },
+      },
+    };
+    renderPage();
+    await screen.findByRole('heading', { name: /recommended/i });
+
+    expect(
+      screen.getByText(/no recommended baseline/i),
+    ).toBeTruthy();
+  });
+});
+
 function renderPage() {
   return render(
     <MemoryRouter
@@ -133,6 +230,14 @@ function valueFor(container: HTMLElement, label: string): HTMLElement | null {
   );
   if (terms.length !== 1) return null;
   return terms[0]?.nextElementSibling as HTMLElement | null;
+}
+
+function rowFor(container: HTMLElement, label: string): HTMLElement | null {
+  // The comparison table renders one element per row carrying a
+  // data-comparison-row attribute set to the row label.
+  return container.querySelector(
+    `[data-comparison-row="${label}"]`,
+  ) as HTMLElement | null;
 }
 
 function synopsisFor(heading: HTMLElement): HTMLElement | null {
@@ -191,6 +296,44 @@ function baseHealth(): SystemHealth {
     supervisor: {
       status: 'available',
       data: presentLocator(),
+    },
+    diagnostics: baseDiagnostics(),
+  };
+}
+
+function baseDiagnostics(): HealthDiagnostics {
+  return {
+    doltVersion: { status: 'available', value: '2.0.7', source: 'local probe: dolt version' },
+    beadsVersion: { status: 'available', value: '1.0.4', source: 'local probe: bd version' },
+    doltUsage: {
+      status: 'available',
+      source: 'supervisor status.store_health',
+      value: {
+        size_bytes: 1_000_000,
+        live_rows: 2000,
+        ratio_mb_per_row: 0.5,
+        threshold_mb_per_row: 1.0,
+        warning: false,
+        last_gc_status: 'success',
+        path: '/data/store',
+      },
+    },
+    beadsUsage: {
+      status: 'available',
+      source: 'supervisor status.work',
+      value: { open: 10, ready: 4, in_progress: 2 },
+    },
+    configComparison: {
+      status: 'available',
+      source: 'supervisor status.store_health (threshold vs actual)',
+      value: [
+        {
+          label: 'Dolt MB-per-row ratio',
+          recommended: '≤ 1',
+          loaded: '0.5',
+          withinRecommendation: true,
+        },
+      ],
     },
   };
 }

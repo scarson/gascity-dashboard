@@ -1,5 +1,11 @@
 import type { ReactNode } from 'react';
-import type { DoltNomsTrend, SystemHealth } from 'gas-city-dashboard-shared';
+import type {
+  ConfigComparisonRow,
+  DiagnosticValue,
+  DoltNomsTrend,
+  HealthDiagnostics,
+  SystemHealth,
+} from 'gas-city-dashboard-shared';
 import { api } from '../api/client';
 import { Button } from '../components/Button';
 import { PageHeader } from '../components/PageHeader';
@@ -115,6 +121,21 @@ export function HealthPage() {
             </KvList>
           </Section>
 
+          <Section title="Diagnostics">
+            <div className="space-y-8">
+              <KvList>
+                <DiagnosticKv label="Dolt version" datum={health.diagnostics.doltVersion} />
+                <DiagnosticKv label="Beads version" datum={health.diagnostics.beadsVersion} />
+              </KvList>
+              <DoltUsageBlock usage={health.diagnostics.doltUsage} />
+              <BeadsUsageBlock usage={health.diagnostics.beadsUsage} />
+            </div>
+          </Section>
+
+          <Section title="Recommended vs loaded">
+            <ConfigComparison comparison={health.diagnostics.configComparison} />
+          </Section>
+
           <Section
             title="Dolt-noms · 24 h"
             meta={trend && trend.samples.length > 0 ? `${trend.samples.length} samples` : undefined}
@@ -194,6 +215,129 @@ function Kv({
       <dt className="text-body text-fg-muted">{label}</dt>
       <dd className={`text-body tnum font-medium ${valueColor}`}>{value}</dd>
     </>
+  );
+}
+
+// gascity-dashboard-1cob: a diagnostic datum renders its value when available
+// and an explicit "unavailable — <reason>" in warn tone otherwise, so a
+// missing source (failed probe, supervisor offline) reads as a state rather
+// than a blank. Pairs color with a word per DESIGN.md's Greyscale Test.
+function DiagnosticKv({
+  label,
+  datum,
+}: {
+  label: string;
+  datum: DiagnosticValue<string>;
+}) {
+  return datum.status === 'available' ? (
+    <Kv label={label} value={datum.value} />
+  ) : (
+    <Kv label={label} value={`unavailable — ${datum.reason}`} tone="warn" />
+  );
+}
+
+function DoltUsageBlock({
+  usage,
+}: {
+  usage: HealthDiagnostics['doltUsage'];
+}) {
+  if (usage.status === 'unavailable') {
+    return (
+      <UnavailableNote heading="Dolt usage" reason={usage.reason} />
+    );
+  }
+  const u = usage.value;
+  return (
+    <div className="space-y-2">
+      <h3 className="text-label uppercase tracking-wider text-fg-muted">Dolt usage</h3>
+      <KvList>
+        <Kv label="On-disk size" value={formatHumanSize(u.size_bytes)} />
+        {u.live_rows !== undefined && (
+          <Kv label="Live rows" value={u.live_rows.toLocaleString()} />
+        )}
+        {u.ratio_mb_per_row !== undefined && (
+          <Kv label="MB per row" value={u.ratio_mb_per_row.toString()} />
+        )}
+        {u.last_gc_status !== undefined && (
+          <Kv
+            label="Last maintenance"
+            value={u.last_gc_status}
+            {...(u.last_gc_status !== 'success' ? { tone: 'warn' as const } : {})}
+          />
+        )}
+        {u.path !== undefined && <Kv label="Store path" value={u.path} />}
+      </KvList>
+    </div>
+  );
+}
+
+function BeadsUsageBlock({
+  usage,
+}: {
+  usage: HealthDiagnostics['beadsUsage'];
+}) {
+  if (usage.status === 'unavailable') {
+    return <UnavailableNote heading="Beads usage" reason={usage.reason} />;
+  }
+  const u = usage.value;
+  return (
+    <div className="space-y-2">
+      <h3 className="text-label uppercase tracking-wider text-fg-muted">Beads usage</h3>
+      <KvList>
+        <Kv label="Open" value={u.open.toString()} />
+        <Kv label="Ready" value={u.ready.toString()} />
+        <Kv label="In progress" value={u.in_progress.toString()} />
+      </KvList>
+    </div>
+  );
+}
+
+function ConfigComparison({
+  comparison,
+}: {
+  comparison: DiagnosticValue<ConfigComparisonRow[]>;
+}) {
+  if (comparison.status === 'unavailable') {
+    return (
+      <p className="text-body text-fg-muted italic">
+        Comparison unavailable: {comparison.reason}.
+      </p>
+    );
+  }
+  return (
+    <div className="grid grid-cols-[1fr_max-content_max-content] gap-x-8 gap-y-3 max-w-prose">
+      <div className="text-label uppercase tracking-wider text-fg-muted">Setting</div>
+      <div className="text-label uppercase tracking-wider text-fg-muted text-right">Recommended</div>
+      <div className="text-label uppercase tracking-wider text-fg-muted text-right">Loaded</div>
+      {comparison.value.map((row) => (
+        <ComparisonRow key={row.label} row={row} />
+      ))}
+    </div>
+  );
+}
+
+function ComparisonRow({ row }: { row: ConfigComparisonRow }) {
+  const tone = row.withinRecommendation ? 'text-fg' : 'text-warn';
+  return (
+    <div className={`contents ${tone}`} data-comparison-row={row.label}>
+      <div className={`text-body ${tone}`}>
+        {row.label}
+        {!row.withinRecommendation && (
+          <span className="text-label uppercase tracking-wider text-warn"> · over</span>
+        )}
+      </div>
+      <div className="text-body tnum text-fg-muted text-right">{row.recommended}</div>
+      <div className={`text-body tnum font-medium text-right ${tone}`}>{row.loaded}</div>
+    </div>
+  );
+}
+
+function UnavailableNote({ heading, reason }: { heading: string; reason: string }) {
+  return (
+    <div className="space-y-2">
+      <h3 className="text-label uppercase tracking-wider text-fg-muted">{heading}</h3>
+      <p className="text-body text-fg-muted italic">Unavailable: {reason}.</p>
+    </div>
   );
 }
 

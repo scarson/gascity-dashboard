@@ -1,10 +1,16 @@
 import { Router } from 'express';
 import os from 'node:os';
-import type { SupervisorHealthState, SystemHealth } from 'gas-city-dashboard-shared';
+import type {
+  GcStatus,
+  SupervisorHealthState,
+  SystemHealth,
+} from 'gas-city-dashboard-shared';
 import { GcClient } from '../gc-client.js';
 import { recordAudit } from '../audit.js';
 import { HTTP_STATUS } from '../lib/http-status.js';
 import { LOG_COMPONENT, errorMessage, logWarn } from '../logging.js';
+import { buildDiagnostics, type VersionProbe } from './health-diagnostics.js';
+import { probeBeadsVersion, probeDoltVersion } from './version-probe.js';
 
 // Health uses a tighter window than the global GcClient timeout (5s default)
 // because /v0/city/{name}/health is a cheap localhost ping. 2.5s is plenty
@@ -44,6 +50,12 @@ export interface HealthRouterOptions {
    * time, not re-read per request.
    */
   supervisorTimeoutMs?: number;
+  /**
+   * Local CLI version probes. Defaults to the real `dolt version` / `bd
+   * version` exec probes; tests inject deterministic stand-ins.
+   */
+  doltProbe?: VersionProbe;
+  beadsProbe?: VersionProbe;
 }
 
 /**
@@ -56,6 +68,8 @@ export interface HealthRouterOptions {
 export function healthRouter(gc: GcClient, opts: HealthRouterOptions = {}): Router {
   const router = Router();
   const supervisorTimeoutMs = opts.supervisorTimeoutMs ?? resolveHealthTimeoutMs();
+  const doltProbe = opts.doltProbe ?? probeDoltVersion;
+  const beadsProbe = opts.beadsProbe ?? probeBeadsVersion;
 
   router.get('/system', async (_req, res) => {
     const mem = process.memoryUsage();
@@ -85,6 +99,19 @@ export function healthRouter(gc: GcClient, opts: HealthRouterOptions = {}): Rout
         error: 'supervisor health unavailable',
       };
     }
+    // Diagnostics (gascity-dashboard-1cob): supervisor status carries Dolt +
+    // Beads usage and the recommended-vs-actual threshold; the binary versions
+    // are probed locally. A status fetch failure does NOT 504 the route — the
+    // local version probes are still useful — so it degrades to null status and
+    // the builder surfaces the supervisor-sourced fields as unavailable.
+    let status: GcStatus | null;
+    try {
+      status = await gc.getStatus();
+    } catch (err) {
+      logWarn(LOG_COMPONENT.health, `supervisor status fetch failed: ${errorMessage(err)}`);
+      status = null;
+    }
+    const diagnostics = await buildDiagnostics({ status, doltProbe, beadsProbe });
     const payload: SystemHealth = {
       admin: {
         pid: process.pid,
@@ -103,6 +130,7 @@ export function healthRouter(gc: GcClient, opts: HealthRouterOptions = {}): Rout
         uptime_sec: Math.round(os.uptime()),
       },
       supervisor,
+      diagnostics,
     };
     await recordAudit({
       type: 'dashboard.fetch',

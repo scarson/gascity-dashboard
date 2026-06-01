@@ -476,11 +476,24 @@ const StatusStoreHealthSchema = z.object({
   size_bytes: z.number().finite(),
   live_rows: z.number().finite().optional(),
   ratio_mb_per_row: z.number().finite().optional(),
+  threshold_mb_per_row: z.number().finite().optional(),
+  warning: z.boolean().optional(),
   last_gc_at: z.string().optional(),
+  last_gc_status: z.string().optional(),
+  path: z.string().optional(),
+}).passthrough();
+
+// gascity-dashboard-1cob: beads usage for the Health page, from status.work.
+const StatusWorkCountsSchema = z.object({
+  open: z.number().finite(),
+  ready: z.number().finite(),
+  in_progress: z.number().finite(),
 }).passthrough();
 
 const StatusSchema = z.object({
   store_health: StatusStoreHealthSchema.optional(),
+  work: StatusWorkCountsSchema.optional(),
+  version: z.string().optional(),
 }).passthrough();
 
 // izgc F3: every ListBody* envelope in the supervisor's OpenAPI declares
