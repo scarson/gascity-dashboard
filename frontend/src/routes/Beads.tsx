@@ -3,29 +3,17 @@ import { GC_EVENT_PREFIX, type GcBead } from 'gas-city-dashboard-shared';
 import { api, formatApiError } from '../api/client';
 import { BeadBoardSection } from '../components/beads/BeadBoardSection';
 import { BeadDetailRail } from '../components/beads/BeadDetailRail';
-import { BeadDetailModal } from '../components/BeadDetailModal';
 import { Button } from '../components/Button';
 import { FilterChips } from '../components/FilterChips';
-import { GroupedTable } from '../components/GroupedTable';
 import { ListSearchBar } from '../components/ListSearchBar';
 import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
-import { SortToggle } from '../components/SortToggle';
-import { beadStatusTone, StatusBadge } from '../components/StatusBadge';
-import { type TableColumn } from '../components/Table';
+import { StatusBadge } from '../components/StatusBadge';
 import { buildBeadGraph } from '../lib/beadGraph';
 import { useCachedData } from '../hooks/useCachedData';
 import { useGcEventRefresh } from '../hooks/useGcEvents';
 import { useListFilters, type FilterChip } from '../hooks/useListFilters';
 import { beadProject } from '../hooks/projectOf';
-import { formatDate } from '../lib/format';
-
-type BeadView = 'board' | 'list';
-
-const VIEW_OPTIONS: ReadonlyArray<{ id: BeadView; label: string }> = [
-  { id: 'board', label: 'Board' },
-  { id: 'list', label: 'List' },
-];
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 
@@ -45,15 +33,11 @@ const BEAD_SEARCH_FIELDS = (b: GcBead): ReadonlyArray<string | undefined> => [
 
 export function BeadsPage() {
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
-  const [showAll, setShowAll] = useState(false);
-  const [view, setView] = useState<BeadView>('board');
-  // The board is a kanban: its in-progress / blocked / done columns are
-  // empty under the open-only default, so Board implies "show all". List
-  // keeps the manual toggle.
-  const showAllEffective = view === 'board' || showAll;
+  // The board is a kanban: its in-progress / blocked / done columns need
+  // the full status set, so it always fetches every bead.
   const { data, loading, error, refresh } = useCachedData(
-    showAllEffective ? 'beads:all' : 'beads:open',
-    () => api.listBeads(showAllEffective),
+    'beads:all',
+    () => api.listBeads(true),
   );
   const rows = useMemo(() => data?.items ?? [], [data]);
   const totalShown = data?.total ?? 0;
@@ -65,11 +49,9 @@ export function BeadsPage() {
   const [closeReason, setCloseReason] = useState('');
   const [actionInFlight, setActionInFlight] = useState<{ id: string; action: string } | null>(null);
   const [actionResult, setActionResult] = useState<string | null>(null);
-  const [viewing, setViewing] = useState<GcBead | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // Sessions back the board's bead -> live-run resolution. Only the board
-  // view reads them; the list view leaves the cache cold.
+  // Sessions back the board's bead -> live-run resolution.
   const sessions = useCachedData('sessions', () => api.listSessions());
   const sessionItems = useMemo(
     () => sessions.data?.items ?? [],
@@ -91,10 +73,10 @@ export function BeadsPage() {
 
   useGcEventRefresh([GC_EVENT_PREFIX.bead], () => void refresh());
 
-  // The board operates on the same search/chip/label-filtered set the list
-  // does, flattened across project groups. The dependency graph (columns +
-  // needs/blocks edges) is rebuilt from that set; edges pointing outside it
-  // render unresolved rather than fabricated.
+  // The board operates on the search/chip/label-filtered set, flattened
+  // across project groups. The dependency graph (columns + needs/blocks
+  // edges) is rebuilt from that set; edges pointing outside it render
+  // unresolved rather than fabricated.
   const matched = useMemo(
     () => filters.groups.flatMap((g) => g.rows),
     [filters.groups],
@@ -142,134 +124,6 @@ export function BeadsPage() {
     [filteredRows, totalShown, labelFilter],
   );
 
-  const columns = useMemo<ReadonlyArray<TableColumn<GcBead>>>(() => [
-    {
-      key: 'id',
-      label: 'ID',
-      sortable: true,
-      sortValue: (r) => r.id,
-      render: (r) => <span className="text-fg-muted tnum">{r.id}</span>,
-      className: 'w-32',
-    },
-    {
-      key: 'title',
-      label: 'Title',
-      sortable: true,
-      sortValue: (r) => r.title,
-      render: (r) => (
-        <div className="min-w-0">
-          <button
-            type="button"
-            onClick={() => setViewing(r)}
-            className="text-fg truncate hover:text-accent focus-mark text-left"
-            title={`Open ${r.id}`}
-          >
-            {r.title}
-          </button>
-          <p className="text-label uppercase tracking-wider text-fg-faint mt-1 truncate">
-            {r.issue_type}
-            {r.assignee ? ` · ${r.assignee}` : ''}
-          </p>
-          {Array.isArray(r.labels) && r.labels.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-              {r.labels.slice(0, 8).map((l) => (
-                <button
-                  key={l}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setLabelFilter((cur) => (cur === l ? null : l));
-                  }}
-                  className={`text-label uppercase tracking-wider transition-colors duration-150 ease-out-quart focus-mark rounded-sm ${labelTone(l)}`}
-                  title={`Filter to label "${l}"`}
-                >
-                  {l}
-                </button>
-              ))}
-              {r.labels.length > 8 && (
-                <span className="text-label uppercase tracking-wider text-fg-faint italic">
-                  +{r.labels.length - 8} more
-                </span>
-              )}
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: 'priority',
-      label: 'P',
-      sortable: true,
-      // Sort null priority to the bottom (sentinel > any P-value the supervisor uses).
-      sortValue: (r) => r.priority ?? Number.POSITIVE_INFINITY,
-      render: (r) => (
-        <span className={`tnum font-medium ${priorityColor(r.priority)}`}>
-          {r.priority === null ? 'P—' : `P${r.priority}`}
-        </span>
-      ),
-      align: 'right',
-      className: 'w-12',
-    },
-    {
-      key: 'status',
-      label: 'Status',
-      sortable: true,
-      sortValue: (r) => r.status,
-      render: (r) => <StatusBadge tone={beadStatusTone(r.status)} label={r.status} />,
-      className: 'w-32',
-    },
-    {
-      // 6bv7 F16: OpenAPI Bead has no updated_at; the column reflects the
-      // only timestamp the supervisor actually emits — created_at.
-      key: 'created',
-      label: 'Created',
-      sortable: true,
-      sortValue: (r) => r.created_at,
-      render: (r) => (
-        <span className="text-fg-muted tnum">{formatDate(r.created_at)}</span>
-      ),
-      className: 'w-28',
-    },
-    {
-      key: 'actions',
-      label: '',
-      render: (r) => (
-        <div className="flex items-baseline justify-end gap-4">
-          <Button
-            size="sm"
-            tone="quiet"
-            disabled={r.status === 'in_progress' || actionInFlight !== null}
-            onClick={() => void runAction(r, 'claim')}
-          >
-            Claim
-          </Button>
-          <Button
-            size="sm"
-            tone="quiet"
-            disabled={r.status === 'closed' || actionInFlight !== null}
-            onClick={() => {
-              setCloseReason('');
-              setClosing(r);
-            }}
-          >
-            Close
-          </Button>
-          <Button
-            size="sm"
-            tone="quiet"
-            disabled={!r.assignee || actionInFlight !== null}
-            onClick={() => void runAction(r, 'nudge')}
-            title={r.assignee ? `nudge ${r.assignee}` : 'no assignee'}
-          >
-            Nudge
-          </Button>
-        </div>
-      ),
-      align: 'right',
-      className: 'w-56',
-    },
-  ], [actionInFlight, runAction]);
-
   const isTruncated =
     typeof upstreamTotal === 'number' &&
     typeof upstreamFetched === 'number' &&
@@ -287,21 +141,9 @@ export function BeadsPage() {
                 {error}
               </span>
             )}
-            {view === 'board' ? (
-              <span className="text-label uppercase tracking-wider text-fg-faint">
-                All statuses
-              </span>
-            ) : (
-              <label className="flex items-baseline gap-2 text-label uppercase tracking-wider text-fg-muted cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={showAll}
-                  onChange={(e) => setShowAll(e.target.checked)}
-                  className="accent-accent translate-y-0.5"
-                />
-                Show all
-              </label>
-            )}
+            <span className="text-label uppercase tracking-wider text-fg-faint">
+              All statuses
+            </span>
             <Button size="sm" onClick={() => void refresh()} disabled={loading}>
               {loading ? 'Refreshing' : 'Refresh'}
             </Button>
@@ -342,80 +184,47 @@ export function BeadsPage() {
           totalCount={filteredRows.length}
           ariaLabel="Search beads"
         />
-        <div className="flex items-baseline justify-between gap-4">
-          <FilterChips
-            chips={BEAD_CHIPS}
-            activeIds={filters.activeChipIds}
-            onToggle={filters.toggleChip}
-            legend="Status"
-          />
-          <SortToggle<BeadView>
-            value={view}
-            options={VIEW_OPTIONS}
-            onChange={setView}
-            legend="View"
-          />
-        </div>
+        <FilterChips
+          chips={BEAD_CHIPS}
+          activeIds={filters.activeChipIds}
+          onToggle={filters.toggleChip}
+          legend="Status"
+        />
       </div>
 
-      {view === 'board' ? (
-        matched.length === 0 ? (
-          <p className="text-body text-fg-muted italic">
-            {filters.search.length > 0 || filters.activeChipIds.size > 0
-              ? 'No beads match the current search or filter.'
-              : labelFilter !== null
-                ? `No beads match label "${labelFilter}".`
-                : 'Nothing on the queue right now.'}
-          </p>
-        ) : (
-          <div className="grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-x-10 gap-y-8">
-            <div className="space-y-12">
-              {filters.groups.map((g) => (
-                <BeadBoardSection
-                  key={g.projectKey}
-                  label={g.project}
-                  count={g.totalInProject}
-                  graph={graph}
-                  ids={groupIds.get(g.projectKey) ?? EMPTY_IDS}
-                  selectedId={selectedId}
-                  onSelect={setSelectedId}
-                />
-              ))}
-            </div>
-            <div className="xl:sticky xl:top-6 xl:self-start">
-              <BeadDetailRail
-                beadId={selectedId}
-                initialBead={selectedBead}
-                sessions={sessionItems}
-                onOpenBead={setSelectedId}
-              />
-            </div>
-          </div>
-        )
+      {matched.length === 0 ? (
+        <p className="text-body text-fg-muted italic">
+          {filters.search.length > 0 || filters.activeChipIds.size > 0
+            ? 'No beads match the current search or filter.'
+            : labelFilter !== null
+              ? `No beads match label "${labelFilter}".`
+              : 'Nothing on the queue right now.'}
+        </p>
       ) : (
-        <GroupedTable
-          groups={filters.groups}
-          columns={columns}
-          rowKey={(r) => r.id}
-          onToggleProject={filters.toggleProject}
-          emptyMessage={
-            filters.search.length > 0 || filters.activeChipIds.size > 0
-              ? 'No beads match the current search or filter.'
-              : labelFilter !== null
-                ? `No beads match label "${labelFilter}".`
-                : 'Nothing on the queue right now.'
-          }
-          perProjectEmpty="No beads in this project."
-          initialSort={{ key: 'updated', dir: 'desc' }}
-        />
+        <div className="grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-x-10 gap-y-8">
+          <div className="space-y-12">
+            {filters.groups.map((g) => (
+              <BeadBoardSection
+                key={g.projectKey}
+                label={g.project}
+                count={g.totalInProject}
+                graph={graph}
+                ids={groupIds.get(g.projectKey) ?? EMPTY_IDS}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+              />
+            ))}
+          </div>
+          <div className="xl:sticky xl:top-6 xl:self-start">
+            <BeadDetailRail
+              beadId={selectedId}
+              initialBead={selectedBead}
+              sessions={sessionItems}
+              onOpenBead={setSelectedId}
+            />
+          </div>
+        </div>
       )}
-
-      <BeadDetailModal
-        open={viewing !== null}
-        onClose={() => setViewing(null)}
-        beadId={viewing?.id ?? null}
-        initialBead={viewing}
-      />
 
       <Modal
         open={closing !== null}
@@ -459,24 +268,6 @@ export function BeadsPage() {
       </Modal>
     </section>
   );
-}
-
-function labelTone(label: string): string {
-  // Pipeline-state labels carry the load. Approval = ok, needs- = warn,
-  // blocked = stuck. Scope / gc: / agent: are quiet structural prefixes.
-  if (label === 'approved' || label.endsWith('-approved')) return 'text-ok hover:opacity-80';
-  if (label === 'needs-review' || label.startsWith('needs-review-')) return 'text-warn hover:opacity-80';
-  if (label.startsWith('needs-impl:') || label.startsWith('needs-')) return 'text-warn hover:opacity-80';
-  if (label === 'blocked' || label === 'mayor-skip' || label === 'mayor-needs-human') return 'text-accent hover:opacity-80';
-  if (label.startsWith('scope:')) return 'text-fg-muted hover:text-fg';
-  if (label.startsWith('gc:') || label.startsWith('agent:')) return 'text-fg-faint hover:text-fg-muted';
-  return 'text-fg-muted hover:text-fg';
-}
-
-function priorityColor(p: number | null): string {
-  if (p === 0) return 'text-accent';
-  if (p === 1) return 'text-warn';
-  return 'text-fg-muted';
 }
 
 function buildSynopsis(filtered: ReadonlyArray<GcBead>, totalShown: number, labelFilter: string | null): string {
