@@ -1128,20 +1128,29 @@ describe('createRunsSourceCache', () => {
     const result = await cache.get();
 
     assert.equal(result.status, 'fresh');
-    assert.deepEqual(seenParams, [
-      { limit: 77 },
-      {
-        limit: RECENT_RUN_FETCH_LIMIT,
-        type: 'task',
-        rig: 'todo-app',
-        all: true,
-      },
-      {
-        limit: RECENT_RUN_FETCH_LIMIT,
-        type: 'molecule',
-        all: true,
-      },
-    ]);
+    // wbe9: the molecule query rides the first parallel wave with the city
+    // discovery query, and the rig query follows once rig names are known — so
+    // the three may be observed in any order. Assert the exact set rather than
+    // a sequence.
+    const byJson = (a: unknown, b: unknown) =>
+      JSON.stringify(a).localeCompare(JSON.stringify(b));
+    assert.deepEqual(
+      [...seenParams].sort(byJson),
+      [
+        { limit: 77 },
+        {
+          limit: RECENT_RUN_FETCH_LIMIT,
+          type: 'task',
+          rig: 'todo-app',
+          all: true,
+        },
+        {
+          limit: RECENT_RUN_FETCH_LIMIT,
+          type: 'molecule',
+          all: true,
+        },
+      ].sort(byJson),
+    );
     assert.equal(
       seenParams.some((params) => params.all === true && params.type === undefined),
       false,
@@ -1184,14 +1193,23 @@ describe('createRunsSourceCache', () => {
     const result = await cache.get();
 
     assert.equal(result.status, 'fresh');
-    assert.deepEqual(seenParams, [
-      { limit: 77 },
-      {
-        limit: RECENT_RUN_FETCH_LIMIT,
-        type: 'molecule',
-        all: true,
-      },
-    ]);
+    // wbe9: the molecule recent-run query now rides the first parallel wave
+    // alongside the city discovery query, so the two may be observed in either
+    // order — assert membership, not sequence.
+    assert.equal(seenParams.length, 2);
+    assert.deepEqual(
+      [...seenParams].sort((a, b) =>
+        JSON.stringify(a).localeCompare(JSON.stringify(b)),
+      ),
+      [
+        { limit: 77 },
+        {
+          limit: RECENT_RUN_FETCH_LIMIT,
+          type: 'molecule',
+          all: true,
+        },
+      ].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+    );
     if (result.status === 'fresh') {
       // yh5i: completed runs land in historicalLanes (toggle-visible).
       assert.equal(result.data.historicalLanes[0]?.id, 'done-root');
@@ -1747,5 +1765,57 @@ describe('createRunsSourceCache', () => {
         error: 'run scope metadata unavailable',
       });
     }
+  });
+
+  // wbe9: the city-molecule listBeads query has static city-scoped params and
+  // no data dependency on feed discovery, so it must NOT be serialized behind
+  // listFormulaRuns. Pinning this prevents a regression back to the
+  // two-sequential-phase shape that paid an extra serial supervisor round-trip
+  // on every uncached runs load. The deferred feed promise stays UNRESOLVED
+  // until after we observe the molecule query fire — if the collector awaited
+  // the feed before issuing the molecule query, the test would deadlock-time
+  // out, not pass.
+  test('wbe9: city-molecule listBeads is not serialized behind feed discovery', async () => {
+    let moleculeQueried = false;
+    let releaseFeed: (() => void) | undefined;
+    const feedGate = new Promise<void>((resolve) => {
+      releaseFeed = resolve;
+    });
+
+    const cache = createRunsSourceCache({
+      gc: {
+        listBeads: async (_signal: AbortSignal | undefined, params: ListBeadsParams) => {
+          assert.ok(params, 'collector must always pass an explicit params arg');
+          // Initial city-scoped discovery query.
+          if (params.rig === undefined && params.type === undefined && params.all !== true) {
+            return { items: [], total: 0 };
+          }
+          if (params.type === 'molecule' && params.all === true) {
+            // The molecule query fired before the feed resolved — release the
+            // feed so the load can complete instead of hanging.
+            moleculeQueried = true;
+            releaseFeed?.();
+            return { items: [], total: 0 };
+          }
+          assert.fail(`unexpected listBeads params: ${JSON.stringify(params)}`);
+        },
+        listFormulaRuns: async () => {
+          // Block feed discovery until the molecule query is observed. If the
+          // collector serialized the molecule query after the feed, this never
+          // releases and the test times out (a failing RED signal).
+          await feedGate;
+          return { items: [], partial: false };
+        },
+        cityName: 'test',
+      } satisfies GcClientMock as unknown as GcClient,
+      limit: 1000,
+    });
+
+    const result = await cache.get();
+    assert.equal(result.status, 'fresh');
+    assert.ok(
+      moleculeQueried,
+      'city-molecule listBeads must be issued concurrently with feed discovery, not after it',
+    );
   });
 });

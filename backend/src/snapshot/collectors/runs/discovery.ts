@@ -22,31 +22,29 @@ export async function loadRunBeads(
   gc: GcClient,
   limit: number,
 ): Promise<LoadedRunBeads> {
+  // The city-molecule query has static city-scoped params and no dependency on
+  // feed discovery, so it rides the first parallel wave alongside the city
+  // listBeads and the feed fetch — never serialized behind them (wbe9). Only
+  // the per-rig queries depend on the discovered rig set, so they form a second
+  // wave once rig names are known.
+  const moleculeFetch = settledRecentFetch(gc, {
+    label: 'city molecule list',
+    params: { limit: RECENT_RUN_FETCH_LIMIT, type: 'molecule', all: true },
+  });
   const [active, feedDiscovery] = await Promise.all([
     gc.listBeads(undefined, { limit }),
     discoverFromFeed(gc),
   ]);
   const rigNames = unionRigNames(runRigNames(active.items), feedDiscovery.rigNames);
-  const sources: Array<{ label: string; params: Parameters<GcClient['listBeads']>[1] }> = [
-    ...rigNames.map((rig) => ({
-      label: `rig '${rig}'`,
-      params: { limit: RECENT_RUN_FETCH_LIMIT, type: 'task' as const, rig, all: true },
-    })),
-    {
-      label: 'city molecule list',
-      params: { limit: RECENT_RUN_FETCH_LIMIT, type: 'molecule' as const, all: true },
-    },
-  ];
 
-  const settled = await Promise.all(
-    sources.map(async ({ label, params }) => {
-      try {
-        return { ok: true as const, items: (await gc.listBeads(undefined, params)).items };
-      } catch (error) {
-        return { ok: false as const, label, error };
-      }
+  const rigFetches = rigNames.map((rig) =>
+    settledRecentFetch(gc, {
+      label: `rig '${rig}'`,
+      params: { limit: RECENT_RUN_FETCH_LIMIT, type: 'task', rig, all: true },
     }),
   );
+
+  const settled = await Promise.all([moleculeFetch, ...rigFetches]);
 
   const recentItems: GcBead[] = [];
   let partial = false;
@@ -67,6 +65,21 @@ export async function loadRunBeads(
     feedScopes: feedDiscovery.scopes,
     partial,
   };
+}
+
+type RecentFetchOutcome =
+  | { ok: true; items: GcBead[] }
+  | { ok: false; label: string; error: unknown };
+
+async function settledRecentFetch(
+  gc: GcClient,
+  source: { label: string; params: Parameters<GcClient['listBeads']>[1] },
+): Promise<RecentFetchOutcome> {
+  try {
+    return { ok: true, items: (await gc.listBeads(undefined, source.params)).items };
+  } catch (error) {
+    return { ok: false, label: source.label, error };
+  }
 }
 
 interface FeedDiscovery {
