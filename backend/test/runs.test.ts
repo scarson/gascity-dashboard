@@ -934,4 +934,57 @@ describe('runs detail route', () => {
     }
   });
 
+  test('caches the assembled detail so repeat loads hit the supervisor once', async () => {
+    fake.setHandler((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      if (respondFormulaDetail(req, res)) return;
+      if (req.url === '/v0/city/racoon-city/sessions') {
+        res.end(JSON.stringify({ items: [], total: 0 }));
+        return;
+      }
+      res.end(JSON.stringify(supervisorWireBody(graphV2Snapshot())));
+    });
+    const { url, close } = await startApp(buildApp(fake.baseUrl));
+    const workflowReqs = () =>
+      fake.requests.filter((u) => u.startsWith('/v0/city/racoon-city/workflow/gc-root')).length;
+    try {
+      const first = await fetch(`${url}/api/runs/gc-root?scope_kind=city&scope_ref=racoon-city`);
+      assert.equal(first.status, 200);
+      assert.equal(workflowReqs(), 1);
+      const second = await fetch(`${url}/api/runs/gc-root?scope_kind=city&scope_ref=racoon-city`);
+      assert.equal(second.status, 200);
+      assert.equal((await second.json()).runId, 'gc-root');
+      // Within TTL the second load is served from cache — no extra scan.
+      assert.equal(workflowReqs(), 1, `unexpected upstream requests: ${fake.requests.join(', ')}`);
+    } finally {
+      await close();
+    }
+  });
+
+  test('?refresh=1 bypasses the cache and re-fetches from the supervisor', async () => {
+    fake.setHandler((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      if (respondFormulaDetail(req, res)) return;
+      if (req.url === '/v0/city/racoon-city/sessions') {
+        res.end(JSON.stringify({ items: [], total: 0 }));
+        return;
+      }
+      res.end(JSON.stringify(supervisorWireBody(graphV2Snapshot())));
+    });
+    const { url, close } = await startApp(buildApp(fake.baseUrl));
+    const workflowReqs = () =>
+      fake.requests.filter((u) => u.startsWith('/v0/city/racoon-city/workflow/gc-root')).length;
+    try {
+      await fetch(`${url}/api/runs/gc-root?scope_kind=city&scope_ref=racoon-city`);
+      assert.equal(workflowReqs(), 1);
+      const forced = await fetch(
+        `${url}/api/runs/gc-root?scope_kind=city&scope_ref=racoon-city&refresh=1`,
+      );
+      assert.equal(forced.status, 200);
+      assert.equal(workflowReqs(), 2);
+    } finally {
+      await close();
+    }
+  });
+
 });

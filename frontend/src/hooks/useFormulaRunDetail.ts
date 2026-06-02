@@ -44,6 +44,10 @@ export function useFormulaRunDetail(
     key,
     () => loadFormulaRunDetail(runId, scopeKind, scopeRef),
     {
+      // Explicit refresh (manual button + SSE bead events) forces the backend
+      // run-detail cache to re-fetch from the supervisor rather than serving a
+      // cached assemble (gascity-dashboard-wqsk).
+      refreshFetcher: () => loadFormulaRunDetail(runId, scopeKind, scopeRef, true),
       onError: (err) => {
         if (runId !== undefined) reportRunDetailError('load detail', runId, err);
       },
@@ -67,11 +71,13 @@ async function loadFormulaRunDetail(
   runId: string | undefined,
   scopeKind?: RunScopeKind,
   scopeRef?: string,
+  refresh?: boolean,
 ): Promise<FormulaRunDetailPayload> {
   if (!runId) return { kind: 'unrequested' };
-  const params: { scopeKind?: RunScopeKind; scopeRef?: string } = {};
+  const params: { scopeKind?: RunScopeKind; scopeRef?: string; refresh?: boolean } = {};
   if (scopeKind !== undefined) params.scopeKind = scopeKind;
   if (scopeRef !== undefined) params.scopeRef = scopeRef;
+  if (refresh) params.refresh = true;
   const detail = await api.formulaRun(runId, params);
   return { kind: 'loaded', detail };
 }

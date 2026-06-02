@@ -480,7 +480,7 @@ export const api = {
   },
   formulaRun(
     runId: string,
-    params?: { scopeKind?: RunScopeKind; scopeRef?: string },
+    params?: { scopeKind?: RunScopeKind; scopeRef?: string; refresh?: boolean },
   ): Promise<FormulaRunDetail> {
     const qs = runQuery(params);
     return request('GET', cityPath(`/runs/${encodeURIComponent(runId)}${qs}`), decodeFormulaRun);
@@ -525,12 +525,20 @@ export const api = {
   },
 };
 
-function runQuery(params?: { scopeKind?: RunScopeKind; scopeRef?: string }): string {
+function runQuery(params?: {
+  scopeKind?: RunScopeKind;
+  scopeRef?: string;
+  refresh?: boolean;
+}): string {
   const search = new URLSearchParams();
   if (params?.scopeKind && params.scopeRef) {
     search.set('scope_kind', params.scopeKind);
     search.set('scope_ref', params.scopeRef);
   }
+  // `refresh=1` forces the backend run-detail cache to re-fetch from the
+  // supervisor (gascity-dashboard-wqsk) — used by the detail page's explicit
+  // Refresh + SSE-driven refresh so a deliberate refresh never serves stale.
+  if (params?.refresh) search.set('refresh', '1');
   const qs = search.toString();
   return qs.length > 0 ? `?${qs}` : '';
 }

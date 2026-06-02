@@ -5,6 +5,7 @@ import type {
   GcFormulaDetail,
   GcRunSnapshot,
   GcSession,
+  FormulaRunDetail,
   RunFormulaDetailFetchFailure,
   RunFormulaDetailState,
   FormulaRunPartialReason,
@@ -30,9 +31,24 @@ import {
   UnsupportedRunError,
 } from '../runs/enrich.js';
 import { mergeRunRuntimeState } from '../runs/runtime-state.js';
+import { KeyedSwrCache } from '../runs/run-detail-cache.js';
+
+// Run-detail reads are cached with stale-while-revalidate because the
+// supervisor's single-run endpoint scans every store in the city to assemble
+// one run (gascity-dashboard-wqsk). 30s mirrors the ambient-glance cadence of
+// the snapshot list (60s) while keeping the focused detail view fresher; SSE
+// bead events and the manual Refresh button bypass it via `?refresh=1`.
+const RUN_DETAIL_CACHE_TTL_MS = 30_000;
 
 export interface RunsRouterOptions {
   rigRoot?: string;
+  /**
+   * Stale-while-revalidate TTL for the run-detail cache, in ms. Defaults to
+   * RUN_DETAIL_CACHE_TTL_MS. Exposed for tests that exercise the stale path.
+   */
+  runDetailCacheTtlMs?: number;
+  /** Injectable clock for the run-detail cache (tests only). */
+  now?: () => number;
   /**
    * Opt-in path-prefix allowlist for run-detail git reads
    * (gascity-dashboard-k2b8). Threaded into readRunGitDiff so the cwd fed to
@@ -47,6 +63,10 @@ export function runsRouter(
   opts: RunsRouterOptions = {},
 ): Router {
   const router = Router();
+  const detailCache = new KeyedSwrCache<FormulaRunDetail>({
+    ttlMs: opts.runDetailCacheTtlMs ?? RUN_DETAIL_CACHE_TTL_MS,
+    ...(opts.now ? { now: opts.now } : {}),
+  });
 
   router.get('/:runId/diff', async (req, res) => {
     const parsed = parseRunRequest(req.params.runId, req.query);
@@ -76,35 +96,65 @@ export function runsRouter(
     }
     try {
       const scope = parsed.scope ?? defaultRunScope(gc.cityName);
-      // getRunSessions is a city-wide listSessions independent of this run, so
-      // overlap it with the run+runtime-state fetch instead of serializing it
-      // after (gascity-dashboard-ey8i). getRunFormulaDetail genuinely depends
-      // on the run's raw root bead, so it stays sequential after the run fetch.
-      const [{ raw, partial: runtimePartial }, sessionsLookup] = await Promise.all([
-        getRunWithRuntimeState(gc, parsed.runId, scope),
-        getRunSessions(gc),
-      ]);
-      const formulaDetailLookup = await getRunFormulaDetail(gc, raw, scope);
-      const detail = enrichFormulaRun(raw, enrichOptions(
-        opts,
-        sessionsLookup,
-        formulaDetailLookup,
-      ));
-      const completeness = formulaRunCompleteness([
-        ...runPartialReasons(detail.completeness),
-        ...(runtimePartial ? ['runtime_bead_read_failed' as const] : []),
-        ...(sessionsLookup.kind === 'unavailable' ? ['session_list_failed' as const] : []),
-        ...(formulaDetailLookup.kind === 'unavailable'
-          ? [formulaDetailPartialReason(formulaDetailLookup.state.reason)]
-          : []),
-      ]);
-      res.json({ ...detail, completeness });
+      // Cache the assembled detail keyed by run + scope: the supervisor scans
+      // every store to build one run (~seconds), so repeat navigations and
+      // concurrent clients would each re-pay it. `?refresh=1` (the manual
+      // Refresh button + SSE-driven refresh) forces a fresh assemble
+      // (gascity-dashboard-wqsk).
+      const force = req.query.refresh === '1';
+      const cacheKey = runDetailCacheKey(parsed.runId, scope);
+      const detail = await detailCache.get(
+        cacheKey,
+        () => assembleRunDetail(gc, parsed.runId, scope, opts),
+        { force },
+      );
+      res.json(detail);
     } catch (err) {
       writeRunError(res, err, 'failed to fetch run');
     }
   });
 
   return router;
+}
+
+// Cache key for one run's assembled detail. Scope is part of the identity:
+// the same runId resolves to different snapshots under different scopes. The
+// components are all identifiers (bead id, 'city'|'rig', scope name) with no
+// embedded spaces, so a space delimiter cannot collide.
+function runDetailCacheKey(
+  runId: string,
+  scope: { scopeKind: RunScopeKind; scopeRef: string },
+): string {
+  return [runId, scope.scopeKind, scope.scopeRef].join(' ');
+}
+
+// Assemble the full run-detail response from the supervisor. Extracted from
+// the route handler so it can be the cache's load() closure
+// (gascity-dashboard-wqsk). getRunSessions is a city-wide listSessions
+// independent of this run, so it overlaps the run+runtime-state fetch instead
+// of serializing after (gascity-dashboard-ey8i). getRunFormulaDetail genuinely
+// depends on the run's raw root bead, so it stays sequential after the run fetch.
+async function assembleRunDetail(
+  gc: GcClient,
+  runId: string,
+  scope: { scopeKind: RunScopeKind; scopeRef: string },
+  opts: RunsRouterOptions,
+): Promise<FormulaRunDetail> {
+  const [{ raw, partial: runtimePartial }, sessionsLookup] = await Promise.all([
+    getRunWithRuntimeState(gc, runId, scope),
+    getRunSessions(gc),
+  ]);
+  const formulaDetailLookup = await getRunFormulaDetail(gc, raw, scope);
+  const detail = enrichFormulaRun(raw, enrichOptions(opts, sessionsLookup, formulaDetailLookup));
+  const completeness = formulaRunCompleteness([
+    ...runPartialReasons(detail.completeness),
+    ...(runtimePartial ? ['runtime_bead_read_failed' as const] : []),
+    ...(sessionsLookup.kind === 'unavailable' ? ['session_list_failed' as const] : []),
+    ...(formulaDetailLookup.kind === 'unavailable'
+      ? [formulaDetailPartialReason(formulaDetailLookup.state.reason)]
+      : []),
+  ]);
+  return { ...detail, completeness };
 }
 
 async function getRunFormulaDetail(
