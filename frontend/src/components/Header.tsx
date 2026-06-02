@@ -30,7 +30,6 @@ const EXPLICIT_ROUTES: ReadonlyArray<NavRoute> = [
   { to: '/beads', label: 'Beads', order: 30 },
   { to: '/runs', label: 'Runs', order: 40 },
   { to: '/mail', label: 'Mail', order: 50 },
-  { to: '/activity', label: 'Activity', order: 55 },
 ];
 
 // The header is page furniture, not chrome. A small wordmark, the

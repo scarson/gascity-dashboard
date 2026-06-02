@@ -35,9 +35,8 @@ Current flow:
 - Agents, Beads, and Runs subscribe to matching event prefixes and refresh their cached data. Runs route event-driven refreshes through `/api/snapshot/refresh` so it bypasses the snapshot TTL.
 - Belt-and-braces still applies: every panel has a manual Refresh button for the tab-sleep / laptop-close case.
 
-## Activity + Health (Phase C — ✅ shipped)
+## Health (Phase C — ✅ shipped)
 
-- **Activity** (`/activity`): hardcoded git-log "view" enum (`recent-main`, `recent-all`, `today`, `this-week`) on `/api/git/commits?view=<enum>`. The args list lives entirely in `exec.ts::GIT_LOG_VIEWS` — the user picks a view name, not git args. `git log` runs against `$HOME` (overridable via `ADMIN_GIT_REPO`). `/api/builds` parses `$HOME/.dev-deploy-log` line-by-line, classifying each entry into `ok`/`failed`/`in-progress`/`unknown` and surfacing the `.dev-deploy-FAILED` marker as a banner pill.
 - **Health** (`/health`): three cards — admin process state (pid/uptime/rss/heap/node version), host state (cpus, 1/5/15 load, mem free, host uptime), gc supervisor's own `/v0/city/{name}/health` response (status/version/uptime). 30 s auto-refresh while tab is visible. Below the cards: a dolt-noms 24 h trend sparkline pulled from `/api/dolt-noms/trend`.
 
 ## Dolt-noms ring buffer
@@ -128,13 +127,13 @@ and stop with the process wrapper instead of hidden module startup.
 
 ## Phasing
 
-Five views ship in three milestones. Each milestone has an acceptance gate:
+The first-party views ship in three milestones. Each milestone has an acceptance gate:
 
 - **Phase A (this commit)** — skeleton + Agents view + Beads view. _Gate_: the operator can identify any session's state + peek tmux content without a shell; can see filtered beads + claim/close from the browser.
 - **Phase B** — Mail with identity-switching (view-as-X, sends-as-operator via separate router). _Gate_: the operator can read any agent's thread cross-agent; verify every send logs `actor=stephanie`.
-- **Phase C** — Activity (commits + builds) + Health (process + dolt-noms 24 h trend) + SSE wiring. _Gate_: the operator can spot the refinery's last merge + memory pressure trend without terminal.
+- **Phase C** — Health (process + dolt-noms 24 h trend) + SSE wiring. _Gate_: the operator can spot the refinery's memory pressure trend without terminal.
 
-Internal tool — the "anti-scope-reduction reflex" doesn't apply here. The five views are loosely coupled; phasing is logical build order, not feature cuts.
+Internal tool — the "anti-scope-reduction reflex" doesn't apply here. The views are loosely coupled; phasing is logical build order, not feature cuts.
 
 ## Reversibility
 

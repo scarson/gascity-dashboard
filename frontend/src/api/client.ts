@@ -6,9 +6,6 @@ import type {
   TranscriptResult,
   MailComposeRequest,
   MailSendResult,
-  GitCommitList,
-  GitView,
-  DeployList,
   SystemHealth,
   DoltNomsTrend,
   MaintainerTriage,
@@ -266,13 +263,6 @@ const decodeHealth = objectDecoder<{ ok: boolean; ts: string }>('health', (recor
 });
 
 const decodeCityList = countedItemsDecoder<CityList>('cities');
-const decodeCommitList = itemsDecoder<GitCommitList>('commits', (record, url) => {
-  requireStringField(record, url, 'commits', 'view');
-});
-const decodeBuildList = itemsDecoder<DeployList>('builds', (record, url) => {
-  requireNullableStringField(record, url, 'builds', 'source');
-  requireBooleanField(record, url, 'builds', 'failed_marker');
-});
 const decodeSessionList = itemsDecoder<{ items: GcSession[] }>('sessions');
 const decodeAgentList = itemsDecoder<GcAgentList>('agents');
 const decodeTranscript = objectDecoder<TranscriptResult>('transcript', (record, url) => {
@@ -407,12 +397,6 @@ export const api = {
   // server-side). Not city-scoped — it is the registry the switcher reads.
   listCities(): Promise<CityList> {
     return request('GET', '/api/cities', decodeCityList);
-  },
-  listCommits(view: GitView): Promise<GitCommitList> {
-    return request('GET', `/api/git/commits?view=${encodeURIComponent(view)}`, decodeCommitList);
-  },
-  listBuilds(): Promise<DeployList> {
-    return request('GET', '/api/builds', decodeBuildList);
   },
 
   // ── City-scoped endpoints (ride /api/city/:cityName/*) ─────────────────

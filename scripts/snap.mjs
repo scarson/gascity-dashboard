@@ -19,7 +19,7 @@ import { argv, env, exit } from 'node:process';
 const BASE = 'http://127.0.0.1:5174';
 const OUT  = '/tmp/cp-snaps';
 
-const ROUTES = ['agents', 'beads', 'runs', 'mail', 'activity', 'health', 'maintainer'];
+const ROUTES = ['agents', 'beads', 'runs', 'mail', 'health', 'maintainer'];
 const THEMES = ['light', 'dark'];
 
 // Routes that subscribe to /api/events/stream via useGcEventRefresh and render

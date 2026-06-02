@@ -70,7 +70,6 @@ import './gc-agents.js';
 import './gc-rigs.js';
 import './gc-beads.js';
 import './gc-mail.js';
-import './activity.js';
 import './gc-health.js';
 import './gc-events.js';
 import './transcript.js';

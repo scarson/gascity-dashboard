@@ -12,8 +12,6 @@ import {
 import { csrfIssueCookie, csrfValidate, getCsrfToken } from './middleware/csrf.js';
 import { apiErrorHandler } from './middleware/api-error-handler.js';
 import { GcClient } from './gc-client.js';
-import { gitRouter } from './routes/git.js';
-import { buildsRouter } from './routes/builds.js';
 import { clientErrorsRouter } from './routes/client-errors.js';
 import {
   createCityRegistry,
@@ -93,14 +91,11 @@ export function createDashboardApp(config: AdminConfig): DashboardApp {
     }
   });
 
-  // Host-global write routes (git/builds/client-errors) are NOT city-scoped:
-  // git reads the dashboard host cwd, builds reads a host deploy log, and
+  // Host-global write routes (client-errors) are NOT city-scoped:
   // client-error reports are infrastructure telemetry. They stay top-level
   // behind csrfValidate (client-errors is a POST).
   const globalRouter = express.Router();
   globalRouter.use(csrfValidate);
-  globalRouter.use('/git', gitRouter());
-  globalRouter.use('/builds', buildsRouter());
   globalRouter.use('/client-errors', clientErrorsRouter());
   app.use('/api', globalRouter);
 

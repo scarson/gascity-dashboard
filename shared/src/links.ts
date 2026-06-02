@@ -96,7 +96,7 @@ export interface LinkEdge {
 
 /**
  * The per-edge-type resolution outcome rollup (R11). Has a named consumer:
- * the Health/Activity register surfaces these rates so candidate link
+ * the Health register surfaces these rates so candidate link
  * directions are evaluated on measured hit-rate, not speculation (RK4).
  * Arithmetic aggregation only — no semantic judgement.
  */

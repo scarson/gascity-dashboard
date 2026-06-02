@@ -20,7 +20,6 @@ export type * from './gc-agents.js';
 export type * from './gc-rigs.js';
 export type * from './gc-beads.js';
 export type * from './gc-mail.js';
-export type * from './activity.js';
 export type * from './gc-health.js';
 export type * from './gc-events.js';
 export type * from './formula-runs.js';

@@ -61,10 +61,8 @@ const CTRL_RE = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
 // listed all 12 and a comprehensive strip costs nothing.
 const BIDI_RE = /[؜‎‏‪-‮⁦-⁩]/g;
 const MAX_CLOSE_REASON_LENGTH = 1024;
-const GIT_LOG_RECENT_LIMIT = '200';
 const BEAD_ACTION_TIMEOUT_MS = 15_000;
 const AGENT_PRIME_TIMEOUT_MS = 10_000;
-const GIT_LOG_TIMEOUT_MS = 10_000;
 const RUN_GIT_TIMEOUT_MS = 5_000;
 const GH_LIST_TIMEOUT_MS = 30_000;
 const GH_HISTORY_LIST_TIMEOUT_MS = 60_000;
@@ -168,54 +166,6 @@ export async function execAgentPrime(
 // Mail send uses supervisor HTTP with from:'human' pinned server-side.
 // The browser-facing MailComposeRequest carries no `from` or `as` slot,
 // preserving the impersonation boundary in the route contract.
-
-// Hardcoded enum of `git log` invocations. Each view's args live entirely
-// in this file — the operator cannot pass arbitrary git arguments to the
-// server. The caller can only pick a view *name* (validated upstream).
-// Recent views use an explicit count cap sized for roughly two weeks of
-// active main-branch commits. The since= variants are time-windowed, not
-// count-windowed, so git's default result count is the correct limit there.
-const GIT_LOG_VIEWS: Record<string, string[]> = {
-  'recent-main': [
-    'log',
-    '--pretty=format:%H%x09%h%x09%an%x09%aI%x09%D%x09%s',
-    '-n',
-    GIT_LOG_RECENT_LIMIT,
-    'origin/main',
-  ],
-  'recent-all': [
-    'log',
-    '--pretty=format:%H%x09%h%x09%an%x09%aI%x09%D%x09%s',
-    '-n',
-    GIT_LOG_RECENT_LIMIT,
-    '--branches',
-    '--remotes',
-  ],
-  today: [
-    'log',
-    '--pretty=format:%H%x09%h%x09%an%x09%aI%x09%D%x09%s',
-    '--since=24.hours.ago',
-    '--branches',
-    '--remotes',
-  ],
-  'this-week': [
-    'log',
-    '--pretty=format:%H%x09%h%x09%an%x09%aI%x09%D%x09%s',
-    '--since=7.days.ago',
-    '--branches',
-    '--remotes',
-  ],
-};
-
-const GIT_REPO_PATH = process.env.ADMIN_GIT_REPO ?? process.env.HOME ?? '';
-
-export async function execGitLog(view: string): Promise<ExecResult> {
-  const args = GIT_LOG_VIEWS[view];
-  if (!args) {
-    throw new ExecError('unknown git view', 'validation');
-  }
-  return runExec('git', ['-C', GIT_REPO_PATH, ...args], GIT_LOG_TIMEOUT_MS);
-}
 
 type RunGitView =
   | 'root'

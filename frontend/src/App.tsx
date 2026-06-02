@@ -7,7 +7,6 @@ import { AgentDetailPage } from './routes/AgentDetail';
 import { AmbientHomePage } from './routes/AmbientHome';
 import { BeadsPage } from './routes/Beads';
 import { MailPage } from './routes/Mail';
-import { ActivityPage } from './routes/Activity';
 import { FormulaRunDetailPage } from './routes/FormulaRunDetail';
 import { RunsPage } from './routes/Runs';
 import { NowProvider } from './contexts/NowContext';
@@ -78,7 +77,6 @@ export function App() {
               <Route path="/runs" element={<RunsPage />} />
               <Route path="/runs/:runId" element={<FormulaRunDetailPage />} />
               <Route path="/mail" element={<MailPage />} />
-              <Route path="/activity" element={<ActivityPage />} />
               {/* Modular-dashboard registry routes, filtered by the
                   backend's enabledModules set. A disabled module's path
                   is absent (not 404'd by React Router) so deep-link bookmarks

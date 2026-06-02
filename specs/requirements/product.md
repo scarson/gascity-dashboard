@@ -24,14 +24,14 @@ for attention.
 ## Product Purpose
 
 A calm, opinionated cockpit for a single Gas City operator. Surfaces
-the five things she actually checks — Agents, Beads, Mail, Activity,
-Health — in a way that prioritises *what's interesting right now*
+the things she actually checks — Agents, Beads, Mail, Health — in a
+way that prioritises *what's interesting right now*
 over *all available information*.
 
 Success: she can answer "is anything off?" in under a second from
 peripheral vision, and "what's happening with X?" in two clicks.
 
-Agents and Health are the top-tier views; Beads, Mail, and Activity
+Agents and Health are the top-tier views; Beads and Mail
 are secondary surfaces visited deliberately.
 
 ## Brand Personality

@@ -1,6 +1,6 @@
 # gas-city-dashboard
 
-An editorial-typographic ambient dashboard for a single [Gas City](https://github.com/gastownhall/gascity) (`gc`) operator. Six views — Agents, Beads, Runs, Mail, Activity, Health — laid out as a thoughtfully-set page rather than a wall of cards. The room is calm by default; the only thing that earns the eye is something going wrong.
+An editorial-typographic ambient dashboard for a single [Gas City](https://github.com/gastownhall/gascity) (`gc`) operator. Five views — Agents, Beads, Runs, Mail, Health — laid out as a thoughtfully-set page rather than a wall of cards. The room is calm by default; the only thing that earns the eye is something going wrong.
 
 The shape is forked from [Wldc4rd/citadel](https://github.com/Wldc4rd/citadel) (MIT, Charlie Coutts) which solved the orchestrator-tab problem first. The visual register is a full redesign, driven through [impeccable](https://impeccable.style/) with the design context captured in [`specs/requirements/product.md`](specs/requirements/product.md) and [`DESIGN.md`](DESIGN.md).
 
@@ -16,7 +16,6 @@ Until then, this repo exists so the dashboard can move quickly as a standalone N
 - **Beads** — engineering work in `gc bd` (system noise filtered by default), with inline claim / close / nudge and click-to-filter label chips.
 - **Runs** — active formula runs, with graph.v2 run details, node session transcripts, and current execution-folder git diffs.
 - **Mail** — read any agent's inbox via a persistent "Reading as" strip. Sends always go from the operator; impersonation is read-only.
-- **Activity** — recent commits and the dev-deploy log, with view tabs (recent · main / recent · all / 24h / 7d). Live updates via SSE from the supervisor.
 - **Health** — supervisor state, host memory + load, admin process stats, plus a 24-hour dolt-noms trend sparkline.
 
 ## Quick start (dev)
@@ -70,7 +69,6 @@ All knobs are environment variables. See [`backend/src/config.ts`](backend/src/c
 | `GC_CITY_NAME`              | `racoon-city`            | Name of the city this dashboard manages. One dashboard per city.                                                                         |
 | `ADMIN_AUDIT_LOG_PATH`      | `$HOME/.gc/events.jsonl` | Where state-changing actions append audit entries.                                                                                       |
 | `ADMIN_FRONTEND_DIST`       | `../frontend/dist`       | Path to built frontend assets.                                                                                                           |
-| `ADMIN_GIT_REPO`            | `$HOME`                  | Repo for the Activity view's `git log` queries.                                                                                          |
 | `ADMIN_DASHBOARD_DISABLED`  | `0`                      | Kill switch. Set to `1` to refuse to start.                                                                                              |
 
 For local dev a `.env.local` is convenient (not auto-loaded; source it explicitly):
