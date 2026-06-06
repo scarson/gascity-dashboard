@@ -87,12 +87,12 @@ describe('loadSupervisorRunSummaryPreviewSource', () => {
     expect(listBeads).toHaveBeenCalledTimes(3);
     expect(listBeads).toHaveBeenCalledWith('test-city', { limit: 1_000 });
     expect(listBeads).toHaveBeenCalledWith('test-city', {
-      limit: 80,
+      limit: 500,
       type: 'molecule',
       all: true,
     });
     expect(listBeads).toHaveBeenCalledWith('test-city', {
-      limit: 80,
+      limit: 500,
       type: 'task',
       rig: 'rig-a',
       all: true,
@@ -174,12 +174,12 @@ describe('loadSupervisorRunSummarySource', () => {
     expect(source.data.census.status).toBe('available');
     expect(listBeads).toHaveBeenCalledWith('test-city', { limit: 1_000 });
     expect(listBeads).toHaveBeenCalledWith('test-city', {
-      limit: 80,
+      limit: 500,
       type: 'molecule',
       all: true,
     });
     expect(listBeads).toHaveBeenCalledWith('test-city', {
-      limit: 80,
+      limit: 500,
       type: 'task',
       rig: 'rig-a',
       all: true,
@@ -192,11 +192,76 @@ describe('loadSupervisorRunSummarySource', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('enriches blocked lanes with health and keeps them out of the active set (gascity-dashboard-4xcv)', async () => {
+    // gc-1920 repro: a stale blocked formula latch must land in
+    // blockedLanes (with derived health, so attention still sees it),
+    // never in lanes/totalActive.
+    const listBeads = vi.fn(async (_cityName: string, query?: Record<string, unknown>) => {
+      if (query?.type === 'molecule') return beadList([]);
+      if (query?.rig === 'rig-a') return beadList([]);
+      return beadList([
+        runRoot(),
+        runRoot({
+          id: 'gc-1920',
+          title: 'mol-focus-review',
+          status: 'blocked',
+          metadata: {
+            'gc.kind': 'workflow',
+            'gc.formula_contract': 'graph.v2',
+            'gc.scope_kind': 'city',
+            'gc.scope_ref': 'test-city',
+            'gc.root_store_ref': 'city:test-city',
+          },
+        }),
+      ]);
+    });
+    setSupervisorApiForTests({
+      ...baseApi,
+      listBeads,
+      formulaFeed: vi.fn(async () => feed([feedRun()])),
+      listSessions: vi.fn(async () => sessionList()),
+    });
+
+    const source = await loadSupervisorRunSummarySource();
+
+    expect(source.status).toBe('fresh');
+    if (source.status === 'error') throw new Error(source.error);
+    expect(source.data.totalActive).toBe(1);
+    expect(source.data.lanes.map((lane) => lane.id)).toEqual(['run-1']);
+    expect(source.data.blockedLanes.map((lane) => lane.id)).toEqual(['gc-1920']);
+    expect(source.data.blockedLanes[0]?.health.status).toBe('available');
+    expect(source.data.runCounts.blocked).toBe(1);
+  });
+
   it('keeps available lanes while marking the summary partial when a recent rig read fails', async () => {
     const listBeads = vi.fn(async (_cityName: string, query?: Record<string, unknown>) => {
       if (query?.type === 'molecule') return beadList([]);
       if (query?.rig === 'rig-a') throw new Error('rig unavailable');
       return beadList([runRoot()]);
+    });
+    setSupervisorApiForTests({
+      ...baseApi,
+      listBeads,
+      formulaFeed: vi.fn(async () => feed([feedRun()])),
+      listSessions: vi.fn(async () => sessionList()),
+    });
+
+    const source = await loadSupervisorRunSummarySource();
+
+    expect(source.status).toBe('fresh');
+    if (source.status === 'error') throw new Error(source.error);
+    expect(source.data.totalActive).toBe(1);
+    expect(source.data.lanesPartial).toBe(true);
+  });
+
+  it('marks the summary partial when the active bead list is cursor-truncated', async () => {
+    // gascity-dashboard-4xcv: the supervisor truncates at the fetch limit and
+    // reports the rest via next_cursor WITHOUT setting partial. Treat a present
+    // cursor as partial so saturation surfaces the notice + retry instead of
+    // silently dropping lanes at 501+ beads.
+    const listBeads = vi.fn(async (_cityName: string, query?: Record<string, unknown>) => {
+      if (query?.type === 'molecule') return beadList([]);
+      return beadList([runRoot()], false, 'next-page-token');
     });
     setSupervisorApiForTests({
       ...baseApi,
@@ -286,11 +351,12 @@ function bead(overrides: Partial<Bead> = {}): Bead {
   };
 }
 
-function beadList(items: Bead[], partial = false): ListBodyBead {
+function beadList(items: Bead[], partial = false, nextCursor?: string): ListBodyBead {
   return {
     items,
     partial,
     total: items.length,
+    ...(nextCursor !== undefined ? { next_cursor: nextCursor } : {}),
   };
 }
 
