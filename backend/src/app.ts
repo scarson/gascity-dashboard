@@ -55,7 +55,14 @@ export function createDashboardApp(config: AdminConfig): DashboardApp {
     listCities: supervisorCityLister(supervisorGc),
   });
 
-  app.use('/gc-supervisor', supervisorTransportProxy(config.gcSupervisorUrl));
+  app.use('/gc-supervisor', supervisorTransportProxy(config.gcSupervisorUrl, config.readOnly));
+  if (config.readOnly) {
+    logInfo(
+      LOG_COMPONENT.admin,
+      'DASHBOARD_READONLY=1 — /gc-supervisor proxy is read-only: non-GET/HEAD → 405, ' +
+        'default-deny read allowlist, x-gc-request stripped',
+    );
+  }
   app.use(express.json({ limit: '64kb' }));
 
   // ── Top-level (non-city) routes ─────────────────────────────────────────

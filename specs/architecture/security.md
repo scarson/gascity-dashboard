@@ -31,8 +31,53 @@ rename supervisor payloads.
 ### Invariants
 
 ```
-curl -sH 'Host: evil.com' http://127.0.0.1:8081/api/health    # → 421
-curl -sX POST -H 'Origin: http://evil.com' http://127.0.0.1:8081/api/client-errors  # → 403
+curl -sH 'Host: evil.com' http://127.0.0.1:8082/api/health    # → 421
+curl -sX POST -H 'Origin: http://evil.com' http://127.0.0.1:8082/api/client-errors  # → 403
+```
+
+## Read-only transport-proxy mode
+
+Opt-in via `DASHBOARD_READONLY=1` (default off). Hardens the `/gc-supervisor`
+transport proxy for an instance fronted by an external auth proxy, so a request
+that reaches the dashboard cannot mutate the city. Enforced server-side in
+`backend/src/routes/supervisor-transport-proxy.ts` against the explicit
+allowlist in `backend/src/routes/supervisor-read-allowlist.ts`. When enabled the
+proxy:
+
+- **Rejects any non-`GET`/`HEAD`** with `405` — the method gate is checked
+  _before_ the path gate, so a write like `POST .../sling` is `405`, never
+  forwarded.
+- **Default-denies reads** to the explicit read allowlist (the minimal set of
+  supervisor reads the SPA performs, plus both SSE streams). Anything else —
+  including the side-effecting agent `prime` GET flagged by the exposure
+  premortem — is `404`. A new read view fails closed until it is added to the
+  allowlist.
+- **Strips the write-authorizing `x-gc-request` header** (and `content-type`)
+  unconditionally before forwarding — it never depends on the header's absence.
+- **Gates the resolved upstream path, not the raw `req.path`.** The allowlist
+  runs on `new URL(req.url, base).pathname` — the exact string forwarded — so a
+  traversal that would resolve to a different (e.g. cross-city GLOBAL) upstream
+  cannot pass the per-city `[^/]+` template, whether spelled literally (`..`),
+  percent-encoded (`%2e%2e`, `%2E%2E`, mixed), or via a backslash. An authority
+  in the request target (`//host/…`) is pinned to the supervisor origin.
+- **Logs every gate rejection** (`logWarn` with method + path) so an
+  externally-fronted instance leaves an audit trail of refused method/traversal
+  probes.
+
+This is the single load-bearing exposure control: it sits upstream of the
+unauth supervisor and survives a blown-open network layer. The default
+(read/write) mode is unchanged, preserving the zero-friction local operator
+experience. The deployment side of this — when and how to expose at all — is
+the operator runbook in [`exposure.md`](./exposure.md).
+
+### Invariants
+
+```
+DASHBOARD_READONLY=1
+curl -sX POST -H 'x-gc-request: dashboard' http://127.0.0.1:8082/gc-supervisor/v0/city/$CITY/sling   # → 405, never forwarded
+curl -s  http://127.0.0.1:8082/gc-supervisor/v0/city/$CITY/agent/$AGENT/prime                        # → 404 (side-effecting GET, not allowlisted)
+curl -s  http://127.0.0.1:8082/gc-supervisor/v0/city/$CITY/beads                                     # → 200, x-gc-request stripped before forwarding
+curl -s --path-as-is http://127.0.0.1:8082/gc-supervisor/v0/city/%2e%2e/events/stream                # → 404 (encoded `..` resolves to GLOBAL stream, gated on the resolved path)
 ```
 
 ## Frame / content type
@@ -60,7 +105,7 @@ Why not `csurf`: the canonical package is deprecated; rolling a minimal double-s
 ### Invariant
 
 ```
-curl -sX POST http://127.0.0.1:8081/api/client-errors -H 'Host: 127.0.0.1' -H 'Origin: http://127.0.0.1:8081'
+curl -sX POST http://127.0.0.1:8082/api/client-errors -H 'Host: 127.0.0.1' -H 'Origin: http://127.0.0.1:8082'
 # → 403 {"error":"Missing CSRF token","kind":"csrf"}
 ```
 
@@ -93,7 +138,7 @@ Every privileged invocation routes through `backend/src/exec.ts`. **No general-p
 ### Invariant
 
 ```
-curl -s http://127.0.0.1:8081/gc-supervisor/v0/city/test-city/session/$(printf "'; rm -rf /")/stream …
+curl -s http://127.0.0.1:8082/gc-supervisor/v0/city/test-city/session/$(printf "'; rm -rf /")/stream …
 # → 400 {"error":"invalid session id","kind":"validation"}
 ```
 
