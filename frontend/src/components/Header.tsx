@@ -138,7 +138,7 @@ export function Header() {
                   <NavLink
                     to={r.to}
                     end={r.end ?? false}
-                    className={({ isActive }) =>
+                    className={({ isActive }: { isActive: boolean }) =>
                       [
                         'text-title transition-colors duration-150 ease-out-quart focus-mark',
                         isActive

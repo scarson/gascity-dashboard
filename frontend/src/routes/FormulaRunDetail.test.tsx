@@ -626,7 +626,7 @@ describe('FormulaRunDetailPage', () => {
   it('renders the current execution-folder diff as grouped files', async () => {
     const { container } = renderPage();
     await screen.findByRole('heading', { name: /adopt pr #42/i });
-    expect(screen.getByRole('heading', { name: /local changes/i })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /local changes/i })).toBeTruthy();
     expect(screen.getByText('shared/src/runs/enrich.ts')).toBeTruthy();
     expect(screen.getByText('docs/plan.md')).toBeTruthy();
     await screen.findByText('preserve failed attempt transcript links');

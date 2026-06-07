@@ -61,6 +61,19 @@ beforeEach(() => {
       }
       if (
         url.pathname === '/gc-supervisor/v0/city/test-city/bead/gascity-0001' &&
+        method === 'GET'
+      ) {
+        // The detail surface fetches the bead by id whenever the cached board
+        // row lacks a description (see useBeadDetail). The board row from the
+        // list query carries no description, so opening the detail always reads
+        // through here; stub it so the deep-link render is deterministic.
+        return jsonResponse({
+          ...sampleBead(),
+          description: 'Please investigate the failed deployment.',
+        });
+      }
+      if (
+        url.pathname === '/gc-supervisor/v0/city/test-city/bead/gascity-0001' &&
         method === 'PATCH'
       ) {
         supervisorWrites.push({
