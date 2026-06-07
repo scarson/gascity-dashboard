@@ -205,6 +205,17 @@ describe('LiveSessionPeek (streaming)', () => {
     expect(screen.getByText('snapshot')).toBeTruthy();
     expect(eventSources).toHaveLength(0);
   });
+
+  it('forwards the caption (turn count + captured age) into the TranscriptBox header', async () => {
+    // Guards the one-line caption spread in SessionPeekContent: showCaption must
+    // surface the turn-count / captured-age string in the transcript header, not
+    // drop it silently.
+    render(<LiveSessionPeek sessionId="s1" stream={false} showBadge showCaption />);
+    await screen.findByText('snapshot turn body');
+    const caption = screen.getByText(/turn\(s\)/);
+    expect(caption.textContent).toMatch(/1 turn\(s\)/);
+    expect(caption.textContent).toMatch(/captured/);
+  });
 });
 
 function requestUrl(input: RequestInfo | URL): string {

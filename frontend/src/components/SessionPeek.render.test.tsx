@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SessionPeekContent } from './SessionPeek';
 import type { SessionTranscriptView } from '../supervisor/sessionReads';
@@ -42,6 +42,16 @@ describe('SessionPeekContent — terminal control stripping', () => {
     // SGR parameter text must not leak as visible characters.
     expect(rendered).not.toContain('[31m');
     expect(rendered).not.toContain('[0m');
+  });
+
+  it('shows an expand button for a non-empty transcript', () => {
+    render(<SessionPeekContent loading={false} error={null} result={viewWithTurn('hello')} />);
+    expect(screen.getByRole('button', { name: /expand/i })).toBeTruthy();
+  });
+
+  it('does not show an expand button while loading', () => {
+    render(<SessionPeekContent loading={true} error={null} result={null} />);
+    expect(screen.queryByRole('button', { name: /expand/i })).toBeNull();
   });
 
   it('colorizes the surviving SGR sequence via ansi_up classes', () => {

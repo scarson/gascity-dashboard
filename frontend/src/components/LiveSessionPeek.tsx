@@ -66,12 +66,12 @@ export function LiveSessionPeek({
           />
         </div>
       )}
-      {captionParts.length > 0 && (
-        <p className="text-label uppercase tracking-wider text-fg-faint tnum">
-          {captionParts.join(' · ')}
-        </p>
-      )}
-      <SessionPeekContent loading={loading} error={error} result={result} />
+      <SessionPeekContent
+        loading={loading}
+        error={error}
+        result={result}
+        {...(captionParts.length > 0 ? { caption: captionParts.join(' · ') } : {})}
+      />
     </div>
   );
 }

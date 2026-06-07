@@ -5,6 +5,7 @@ import { formatClockTime, formatRelative, formatShortDate } from '../hooks/time'
 import { PROMPT_INJECTION_NOTICE } from '../lib/constants';
 import { stripTerminalControls } from '../lib/stripTerminalControls';
 import type { SessionTranscriptView } from '../supervisor/sessionReads';
+import { TranscriptBox } from './TranscriptBox';
 
 // Render layer for a session's transcript snapshot. Used by:
 //   - Agents page peek modal (one-shot fetch)
@@ -53,9 +54,11 @@ interface SessionPeekContentProps {
   loading: boolean;
   error: string | null;
   result: SessionTranscriptView | null;
+  /** Caption text shown on the same row as the expand button. */
+  caption?: string;
 }
 
-export function SessionPeekContent({ loading, error, result }: SessionPeekContentProps) {
+export function SessionPeekContent({ loading, error, result, caption }: SessionPeekContentProps) {
   if (loading && result === null) {
     return <p className="text-fg-muted italic">Fetching transcript.</p>;
   }
@@ -77,27 +80,34 @@ export function SessionPeekContent({ loading, error, result }: SessionPeekConten
   const now = Date.now();
 
   return (
-    <div className="space-y-6">
-      <p
-        className="text-label uppercase tracking-wider text-fg-faint tnum"
-        title={result.captured_at}
-      >
-        {formatShortDate(result.captured_at)}
-      </p>
-      <p className="text-label uppercase tracking-wider text-warn">▲ {PROMPT_INJECTION_NOTICE}</p>
-      <ol className="space-y-5">
-        {result.turns.map((turn, idx) => (
-          <TurnBlock key={idx} turn={turn} index={idx} now={now} />
-        ))}
-      </ol>
-      {result.truncated && (
-        <p className="text-label uppercase tracking-wider text-fg-faint italic">
-          Some turns truncated at the per-turn or total cap. Run{' '}
-          <code className="text-fg-muted">gc session peek</code> in a terminal for the full
-          transcript.
-        </p>
-      )}
-    </div>
+    <TranscriptBox {...(caption !== undefined ? { caption } : {})}>
+      <div className="space-y-6">
+        {/* When a caption is shown it already carries "captured X ago", so the
+            standalone captured-date line would be a duplicate timestamp; render
+            it only when there is no caption (e.g. the run-node panel). */}
+        {caption === undefined && (
+          <p
+            className="text-label uppercase tracking-wider text-fg-faint tnum"
+            title={result.captured_at}
+          >
+            {formatShortDate(result.captured_at)}
+          </p>
+        )}
+        <p className="text-label uppercase tracking-wider text-warn">▲ {PROMPT_INJECTION_NOTICE}</p>
+        <ol className="space-y-5">
+          {result.turns.map((turn, idx) => (
+            <TurnBlock key={idx} turn={turn} index={idx} now={now} />
+          ))}
+        </ol>
+        {result.truncated && (
+          <p className="text-label uppercase tracking-wider text-fg-faint italic">
+            Some turns truncated at the per-turn or total cap. Run{' '}
+            <code className="text-fg-muted">gc session peek</code> in a terminal for the full
+            transcript.
+          </p>
+        )}
+      </div>
+    </TranscriptBox>
   );
 }
 
